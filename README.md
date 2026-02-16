@@ -1,56 +1,45 @@
-# ZMK driver for Azoteq IQS5XX trackpads
+# ZMK driver for Azoteq IQS9150/IQS9151 trackpads
 
 ## Compatibility
 
-This driver should work with any IQS5XX based trackpad. However, it has only been tested and known to work with the following models:
+This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It has been developed based on the IQS9150/IQS9151 datasheet (Revision v1.1) and is intended for use with the following modules:
 
-- TPS43 (Reached EOL)
-- TPS65 (Reached EOL) per @Mac10goesBRRRT
-
-Feel free to send a pull request if you test with any of the following models:
-
-- TPR40
-- TPR48
-- TPR54
-- TPE60
-- TPE48
-- TPS48
+- PXM0091 (IQS9150 module)
 
 ## Supported features
 
-- Trackpad movement.
+- Trackpad movement (relative coordinates).
 - Single finger tap: Reported as a left click.
 - Two finger tap: Reported as a right click.
-- Press and hold: Reported as a continuos left click (allows click and drag).
+- Press and hold: Reported as a continuous left click (allows click and drag).
 - Vertical scroll.
 - Horizontal scroll.
 
 ## Usage
 
-- Specify a node with the "azoteq,iqs5xx" compatible inside an i2c node in your keyboard overlay.
+- Specify a node with the "azoteq,iqs915x" compatible inside an i2c node in your keyboard overlay.
 - Reference it from an input listener:
 
 ```
 / {
-    tps43_input: tps43_input {
+    trackpad_input: trackpad_input {
         compatible = "zmk,input-listener";
-        device = <&tps43>;
+        device = <&trackpad>;
     };
 };
 
-&arduino_i2c {
+&i2c0 {
     status = "okay";
-    tps43: iqs5xx@74 {
+    trackpad: iqs915x@56 {
         status = "okay";
-        compatible = "azoteq,iqs5xx";
-        reg = <0x74>;
+        compatible = "azoteq,iqs915x";
+        reg = <0x56>;
 
-        reset-gpios = <&arduino_header 14 GPIO_ACTIVE_LOW>;
-        rdy-gpios = <&arduino_header 15 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+        rdy-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
 
         /*
-         * Potentially non-exhaustive list of configuration options.
-         * See: dts/bindings/input/azoteq,iqs5xx-common.yaml for a full list.
+         * See: dts/bindings/input/azoteq,iqs915x-common.yaml for a full list.
          */
         one-finger-tap;
         press-and-hold;
@@ -61,11 +50,18 @@ Feel free to send a pull request if you test with any of the following models:
         natural-scroll-y;
         natural-scroll-x;
 
-        bottom-beta = <5>;
-        stationary-threshold = <5>;
-
         switch-xy;
     };
 };
 ```
 
+## Key differences from IQS5xx driver
+
+This driver is forked from the [zmk-driver-azoteq-iqs5xx](https://github.com/user/zmk-driver-azoteq-iqs5xx) driver with the following major changes:
+
+- **Byte order**: IQS9150 uses little-endian (IQS5xx uses big-endian).
+- **Register addresses**: Completely new register map starting from `0x1000`.
+- **I2C address**: Default `0x56` (IQS5xx uses `0x74`).
+- **RDY line**: Active-low by default (IQS5xx is active-high).
+- **Gesture support**: Extended with double tap, triple tap, swipe-and-hold, and more.
+- **Max touches**: Up to 7 fingers (IQS5xx supports up to 5).

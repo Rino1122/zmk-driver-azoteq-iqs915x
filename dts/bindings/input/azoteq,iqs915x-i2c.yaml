@@ -1,0 +1,6 @@
+description: |
+  Sensor driver for Azoteq IQS9150/IQS9151 trackpads, using the I2C interface
+
+compatible: "azoteq,iqs915x"
+
+include: ["i2c-device.yaml", "azoteq,iqs915x-common.yaml"]

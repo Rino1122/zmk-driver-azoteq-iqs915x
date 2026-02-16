@@ -1,20 +1,20 @@
-menuconfig INPUT_AZOTEQ_IQS5XX
-    bool "Azoteq IQS5xx trackpads"
+menuconfig INPUT_AZOTEQ_IQS915X
+    bool "Azoteq IQS9150/IQS9151 trackpads"
     default y
     depends on GPIO
     depends on I2C
     depends on INPUT
-    depends on DT_HAS_AZOTEQ_IQS5XX_ENABLED
+    depends on DT_HAS_AZOTEQ_IQS915X_ENABLED
     help
-      Enable driver for Azoteq IQS5xx trackpads.
+      Enable driver for Azoteq IQS9150/IQS9151 trackpads.
 
-if INPUT_AZOTEQ_IQS5XX
+if INPUT_AZOTEQ_IQS915X
 
-config INPUT_AZOTEQ_IQS5XX_INIT_PRIORITY
-    int "Azoteq IQS5xx initialization priority"
+config INPUT_AZOTEQ_IQS915X_INIT_PRIORITY
+    int "Azoteq IQS915x initialization priority"
     default INPUT_INIT_PRIORITY
     help
-      Driver initialization priority for the IQS5xx driver.
+      Driver initialization priority for the IQS915x driver.
       Lower values initialize earlier.
 
-endif # INPUT_AZOTEQ_IQS5XX
+endif # INPUT_AZOTEQ_IQS915X
