@@ -135,8 +135,18 @@ static void iqs915x_work_handler(struct k_work *work) {
   // リセット検知の処理
   if (info_flags & IQS915X_SHOW_RESET) {
     LOG_INF("Device reset detected");
-    // リセットフラグをクリア
-    iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, IQS915X_ACK_RESET);
+    // リセットフラグをクリア（Read-Modify-Write で他のビットを保持）
+    uint16_t sys_ctrl;
+    ret = iqs915x_read_reg16(dev, IQS915X_SYSTEM_CONTROL, &sys_ctrl);
+    if (ret < 0) {
+      LOG_ERR("Failed to read system control: %d", ret);
+      goto end_comm;
+    }
+    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
+                              sys_ctrl | IQS915X_ACK_RESET);
+    if (ret < 0) {
+      LOG_ERR("Failed to write ACK reset: %d", ret);
+    }
     goto end_comm;
   }
 
@@ -287,6 +297,20 @@ static void iqs915x_rdy_handler(const struct device *port,
 static int iqs915x_setup_device(const struct device *dev) {
   const struct iqs915x_config *config = dev->config;
   int ret;
+
+  // 電源投入後のリセットフラグをACK（Read-Modify-Write）
+  uint16_t sys_ctrl;
+  ret = iqs915x_read_reg16(dev, IQS915X_SYSTEM_CONTROL, &sys_ctrl);
+  if (ret < 0) {
+    LOG_ERR("Failed to read system control during init: %d", ret);
+    return ret;
+  }
+  ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
+                            sys_ctrl | IQS915X_ACK_RESET);
+  if (ret < 0) {
+    LOG_ERR("Failed to ACK reset during init: %d", ret);
+    return ret;
+  }
 
   // イベントモードを有効化し、ジェスチャーイベントも有効化する。
   // 通信ウィンドウの手動終了も有効化（0xEEEE書き込みで終了）。

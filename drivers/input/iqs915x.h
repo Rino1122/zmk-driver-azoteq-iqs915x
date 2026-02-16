@@ -141,9 +141,7 @@
  * 設定レジスタ (Read-Write)
  * ============================================================ */
 
-// ACK Reset レジスタ (1 byte)
-// リセットフラグをクリアするための専用レジスタ
-#define IQS915X_ACK_RESET_REG 0x11B8
+// 注意: ACK Resetは SYSTEM_CONTROL (0x11BC) の Bit 7 で行う
 
 // System Control (2 bytes)
 #define IQS915X_SYSTEM_CONTROL 0x11BC
