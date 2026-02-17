@@ -185,15 +185,19 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     break;
 
   case INIT_CONFIG_SETTINGS:
-    // イベントモード・ジェスチャーイベント有効化
+    // ジェスチャーエンジン有効化（ストリーミングモード）
+    // ストリーミングモードを使用する理由:
+    // - EVENT_MODEを設定すると、初期化完了前にRDYが止まり
+    //   残りのステップが実行できなくなる
+    // - ストリーミングモードではRDYが継続的に発火する
     // TERMINATE_COMMSは設定しない（I2C STOP自動終了を使用）
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                              IQS915X_EVENT_MODE | IQS915X_GESTURE_EVENT);
+                              IQS915X_GESTURE_EVENT);
     if (ret < 0) {
-      LOG_ERR("Failed to configure event mode: %d", ret);
+      LOG_ERR("Failed to configure settings: %d", ret);
       return;
     }
-    LOG_INF("Init: Config settings written");
+    LOG_INF("Init: Config settings written (streaming mode)");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
 
