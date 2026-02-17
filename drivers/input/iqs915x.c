@@ -339,6 +339,16 @@ static void iqs915x_work_handler(struct k_work *work) {
       return;
     }
 
+    // 診断ログ: バルク読み取りの結果を表示
+    // info_flagsまたはtrackpad_flagsが非ゼロの場合に出力
+    if (bulk.info_flags || bulk.trackpad_flags || bulk.gesture_sf ||
+        bulk.gesture_tf) {
+      LOG_INF("bulk: info=0x%04x tp=0x%04x sf=0x%04x tf=0x%04x "
+              "rx=%d ry=%d",
+              bulk.info_flags, bulk.trackpad_flags, bulk.gesture_sf,
+              bulk.gesture_tf, bulk.rel_x, bulk.rel_y);
+    }
+
     // --- 以下、通常のトラックパッド処理 ---
 
     bool tp_movement = (bulk.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
