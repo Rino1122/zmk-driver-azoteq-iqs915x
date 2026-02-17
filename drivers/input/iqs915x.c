@@ -331,60 +331,40 @@ static void iqs915x_work_handler(struct k_work *work) {
   }
 
   case WORK_READ_DATA: {
-    // === 診断: 複数のI2C読み取り方式をテスト ===
+    // === 診断: raw読み取りでストリーミングデータを確認 ===
     const struct iqs915x_config *cfg = dev->config;
 
-    if (work_call_count <= 2) {
-      // テスト1: レジスタアドレスなしのraw読み取り (i2c_read_dt)
-      // IQS9150がストリーミングモードでデータを自動出力するか確認
-      uint8_t raw_buf[4] = {0};
-      ret = i2c_read_dt(&cfg->i2c, raw_buf, sizeof(raw_buf));
-      if (ret < 0) {
-        LOG_ERR("raw read failed: %d", ret);
-      } else {
-        LOG_INF("raw read (no addr): %02x %02x %02x %02x", raw_buf[0],
-                raw_buf[1], raw_buf[2], raw_buf[3]);
-      }
-    } else if (work_call_count <= 4) {
-      // テスト2: STOP+START方式 (2回に分けてアドレス設定→読み取り)
-      // i2c_transferでI2C_MSG_STOPを明示的に使用
-      uint8_t reg_buf[2] = {0x10, 0x00}; // PRODUCT_NUMBER
-      uint8_t data_buf[2] = {0};
-      struct i2c_msg msgs[2] = {
-          {
-              // メッセージ1: レジスタアドレス書き込み（STOPなし）
-              .buf = reg_buf,
-              .len = sizeof(reg_buf),
-              .flags = I2C_MSG_WRITE,
-          },
-          {
-              // メッセージ2: データ読み取り（RESTART + STOP）
-              .buf = data_buf,
-              .len = sizeof(data_buf),
-              .flags = I2C_MSG_RESTART | I2C_MSG_READ | I2C_MSG_STOP,
-          },
-      };
-      ret = i2c_transfer_dt(&cfg->i2c, msgs, 2);
-      if (ret < 0) {
-        LOG_ERR("transfer read failed: %d", ret);
-      } else {
-        uint16_t val = (data_buf[1] << 8) | data_buf[0];
-        LOG_INF("transfer read PRODUCT_NUM: %02x %02x (=0x%04x)", data_buf[0],
-                data_buf[1], val);
-      }
-    } else {
-      // テスト3: 通常のi2c_write_read_dt（参考）
-      uint16_t val = 0;
-      ret = iqs915x_read_reg16(dev, IQS915X_PRODUCT_NUMBER, &val);
-      if (ret < 0) {
-        LOG_ERR("write_read failed: %d", ret);
-      } else {
-        LOG_INF("write_read PRODUCT_NUM = 0x%04x", val);
+    // 16バイトのraw読み取り（レジスタアドレスなし）
+    // IQS9150のデフォルトストリーミング出力を確認
+    // 指を触れて非ゼロデータが出るか確認
+    uint8_t raw_buf[16] = {0};
+    ret = i2c_read_dt(&cfg->i2c, raw_buf, sizeof(raw_buf));
+    if (ret < 0) {
+      LOG_ERR("raw read 16B failed: %d", ret);
+      break;
+    }
+
+    // 最初の10回は無条件出力
+    // その後はデータが非ゼロの場合のみ
+    bool has_data = false;
+    for (int i = 0; i < 16; i++) {
+      if (raw_buf[i] != 0) {
+        has_data = true;
+        break;
       }
     }
 
+    if (work_call_count <= 10 || has_data) {
+      LOG_INF("raw16: %02x%02x %02x%02x %02x%02x %02x%02x "
+              "%02x%02x %02x%02x %02x%02x %02x%02x",
+              raw_buf[0], raw_buf[1], raw_buf[2], raw_buf[3], raw_buf[4],
+              raw_buf[5], raw_buf[6], raw_buf[7], raw_buf[8], raw_buf[9],
+              raw_buf[10], raw_buf[11], raw_buf[12], raw_buf[13], raw_buf[14],
+              raw_buf[15]);
+    }
+
     // リセットループ防止: テスト中はリセット検知をスキップ
-    if (work_call_count <= 10) {
+    if (work_call_count <= 20) {
       break;
     }
 
