@@ -4,15 +4,14 @@
  *
  * Azoteq IQS9150/IQS9151 トラックパッドドライバ
  *
- * IQS5xxドライバをベースに、IQS915xシリーズのレジスタマップに対応。
- * 主な変更点:
+ * IQS915xのI2C特性:
  *   - リトルエンディアンのバイトオーダー
- *   - 異なるレジスタアドレス体系 (0x1000〜)
- *   - 16bitレジスタによるジェスチャーイベント読み取り
- *   - RDYラインの立ち下がりエッジ対応（DTS設定で極性変更可能）
- *   - デフォルトではI2C STOPで通信ウィンドウが閉じるため、
- *     1回のRDY期間中に1つのI2Cトランザクションのみ実行する
- *     ステートマシン方式で動作する。
+ *   - デフォルトではI2C STOPで通信ウィンドウが閉じる
+ *   - RESTART方式の読み取り（i2c_write_read）は非対応
+ *     → レジスタアドレスなしのraw読み取り（i2c_read）を使用
+ *   - ストリーミング出力はREL_X (0x1014) から開始、16バイト
+ *   - 書き込みは通常のi2c_write（アドレス+データ）で動作
+ *   - 1回のRDY期間中に1つのI2Cトランザクションのみ実行可能
  */
 
 #define DT_DRV_COMPAT azoteq_iqs915x
@@ -33,33 +32,13 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_LOG_LEVEL);
 /* ============================================================
  * I2C通信関数
  *
- * IQS9150はリトルエンディアン（IQS5xxはビッグエンディアン）。
- * レジスタアドレスは16bit幅で、アドレス自体はビッグエンディアンで送信される。
- * データ部分がリトルエンディアン（LSB first）。
+ * 書き込み: 通常のi2c_write（レジスタアドレス+データ）
+ * 読み取り: i2c_read（レジスタアドレスなし、ストリーミング出力）
  *
- * 重要: IQS9150のデフォルト設定ではI2C STOPで通信ウィンドウが閉じる。
- * そのため、1回のRDYサイクル中に実行できるI2Cトランザクションは1つのみ。
+ * IQS9150はRESTART方式の読み取り（i2c_write_read）に非対応。
+ * 代わりにRDYごとにストリーミングデータをraw読み取りする。
+ * ストリーミング出力: REL_X(0x1014)〜TRACKPAD_FLAGS(0x1022) の16バイト
  * ============================================================ */
-
-// 16bitレジスタを読み取る（リトルエンディアン: LSB first）
-static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
-                              uint16_t *val) {
-  const struct iqs915x_config *config = dev->config;
-  uint8_t buf[2];
-  // レジスタアドレスはビッグエンディアンで送信
-  uint8_t reg_buf[2] = {reg >> 8, reg & 0xFF};
-  int ret;
-
-  ret = i2c_write_read_dt(&config->i2c, reg_buf, sizeof(reg_buf), buf,
-                          sizeof(buf));
-  if (ret < 0) {
-    return ret;
-  }
-
-  // データはリトルエンディアン: buf[0]=LSB, buf[1]=MSB
-  *val = (buf[1] << 8) | buf[0];
-  return 0;
-}
 
 // 16bitレジスタに書き込む（リトルエンディアン: LSB first）
 static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
@@ -81,46 +60,43 @@ static int iqs915x_write_reg8(const struct device *dev, uint16_t reg,
 }
 
 /* ============================================================
- * トラックパッドデータの一括読み取り
+ * ストリーミングデータの読み取り
  *
- * REL_X(0x1014)〜TRACKPAD_FLAGS(0x1022)の16バイトを1回の
- * I2Cトランザクションで読み取る。これにより通信ウィンドウの
- * 制約を守りつつ、必要なデータをすべて取得できる。
+ * IQS9150はRDY信号後にレジスタアドレスなしでI2C読み取りを行うと、
+ * REL_X(0x1014)から16バイトのストリーミングデータを返す。
  *
- * メモリレイアウト (16 bytes):
- *   0x1014: REL_X (2 bytes, signed)
- *   0x1016: REL_Y (2 bytes, signed)
- *   0x1018: GESTURE_X (2 bytes) - 未使用
- *   0x101A: GESTURE_Y (2 bytes) - 未使用
- *   0x101C: SINGLE_FINGER_GESTURES (2 bytes)
- *   0x101E: TWO_FINGER_GESTURES (2 bytes)
- *   0x1020: INFO_FLAGS (2 bytes)
- *   0x1022: TRACKPAD_FLAGS (2 bytes)
+ * メモリレイアウト (16 bytes, リトルエンディアン):
+ *   [0-1]:   REL_X (signed int16)
+ *   [2-3]:   REL_Y (signed int16)
+ *   [4-5]:   GESTURE_X (uint16)
+ *   [6-7]:   GESTURE_Y (uint16)
+ *   [8-9]:   SINGLE_FINGER_GESTURES (uint16)
+ *   [10-11]: TWO_FINGER_GESTURES (uint16)
+ *   [12-13]: INFO_FLAGS (uint16)
+ *   [14-15]: TRACKPAD_FLAGS (uint16)
  * ============================================================ */
 
-// 一括読み取りデータ構造体
-struct iqs915x_bulk_data {
+// ストリーミングデータ構造体
+struct iqs915x_stream_data {
   int16_t rel_x;
   int16_t rel_y;
-  uint16_t gesture_x;  // 未使用だがメモリレイアウトに含まれる
-  uint16_t gesture_y;  // 未使用だがメモリレイアウトに含まれる
+  uint16_t gesture_x;
+  uint16_t gesture_y;
   uint16_t gesture_sf; // Single Finger Gestures
   uint16_t gesture_tf; // Two Finger Gestures
   uint16_t info_flags;
   uint16_t trackpad_flags;
 };
 
-// REL_X(0x1014)からTRACKPAD_FLAGS(0x1022)まで16バイトを一括読み取り
-static int iqs915x_read_bulk(const struct device *dev,
-                             struct iqs915x_bulk_data *data) {
+// ストリーミングデータを読み取る（レジスタアドレスなし）
+static int iqs915x_read_stream(const struct device *dev,
+                               struct iqs915x_stream_data *data) {
   const struct iqs915x_config *config = dev->config;
-  // 読み取り開始アドレス: 0x1014 (REL_X)
-  uint8_t reg_buf[2] = {0x10, 0x14};
   uint8_t buf[16];
   int ret;
 
-  ret = i2c_write_read_dt(&config->i2c, reg_buf, sizeof(reg_buf), buf,
-                          sizeof(buf));
+  // レジスタアドレスなしでraw読み取り
+  ret = i2c_read_dt(&config->i2c, buf, sizeof(buf));
   if (ret < 0) {
     return ret;
   }
@@ -140,8 +116,6 @@ static int iqs915x_read_bulk(const struct device *dev,
 
 /* ============================================================
  * ボタンリリース遅延処理
- * タップジェスチャーはボタンの押下と解放を短時間で報告する必要がある。
- * 100msのディレイ後に自動的にボタンを解放する。
  * ============================================================ */
 static void iqs915x_button_release_work_handler(struct k_work *work) {
   struct k_work_delayable *dwork = k_work_delayable_from_work(work);
@@ -150,10 +124,7 @@ static void iqs915x_button_release_work_handler(struct k_work *work) {
 
   for (int i = 0; i < 3; i++) {
     if (data->buttons_pressed & BIT(i)) {
-      LOG_INF("Releasing synthetic button %d", i);
       input_report_key(data->dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
-      // ビットをクリア
-      // 注意: 潜在的な競合状態の可能性あり
       data->buttons_pressed &= ~BIT(i);
     }
   }
@@ -161,10 +132,6 @@ static void iqs915x_button_release_work_handler(struct k_work *work) {
 
 /* ============================================================
  * 初期化ステートマシン
- *
- * IQS9150はI2C STOPで通信ウィンドウが閉じるため、
- * 1回のRDYサイクルで1つのレジスタ書き込みのみ実行する。
- * RDYが発火するたびに1ステップずつ初期化を進める。
  * ============================================================ */
 static void iqs915x_init_step_handler(const struct device *dev) {
   struct iqs915x_data *data = dev->data;
@@ -178,7 +145,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
                               IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
     if (ret < 0) {
       LOG_ERR("Failed to ACK reset: %d", ret);
-      return;
+      return; // 次のRDYでリトライ
     }
     LOG_INF("Init: ACK reset sent");
     data->init_step = INIT_CONFIG_SETTINGS;
@@ -186,11 +153,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_CONFIG_SETTINGS:
     // ジェスチャーエンジン有効化（ストリーミングモード）
-    // ストリーミングモードを使用する理由:
-    // - EVENT_MODEを設定すると、初期化完了前にRDYが止まり
-    //   残りのステップが実行できなくなる
-    // - ストリーミングモードではRDYが継続的に発火する
-    // TERMINATE_COMMSは設定しない（I2C STOP自動終了を使用）
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
                               IQS915X_GESTURE_EVENT);
     if (ret < 0) {
@@ -202,7 +164,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     break;
 
   case INIT_SINGLE_FINGER_GESTURES: {
-    // 1本指ジェスチャーの有効化設定
     uint16_t gestures = 0;
     gestures |= config->one_finger_tap ? IQS915X_SINGLE_TAP : 0;
     gestures |= config->press_and_hold ? IQS915X_PRESS_AND_HOLD : 0;
@@ -218,7 +179,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_HOLD_TIME:
-    // プレス＆ホールドの判定時間
     ret = iqs915x_write_reg16(dev, IQS915X_HOLD_TIME,
                               config->press_and_hold_time);
     if (ret < 0) {
@@ -230,7 +190,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     break;
 
   case INIT_TWO_FINGER_GESTURES: {
-    // 2本指ジェスチャーの有効化設定
     uint16_t gestures = 0;
     gestures |= config->two_finger_tap ? IQS915X_TWO_FINGER_TAP : 0;
     gestures |= config->scroll ? IQS915X_SCROLL : 0;
@@ -246,7 +205,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_TRACKPAD_SETTINGS: {
-    // 軸設定（FlipX/Y, SwitchXY）
     uint8_t settings = 0;
     settings |= config->flip_x ? IQS915X_FLIP_X : 0;
     settings |= config->flip_y ? IQS915X_FLIP_Y : 0;
@@ -265,26 +223,16 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_COMPLETE:
-    // ここには到達しないはず
     break;
   }
 }
 
 /* ============================================================
- * メインワークハンドラ（ステートマシン方式）
+ * メインワークハンドラ
  *
- * RDY割り込みで呼び出される。
- * IQS9150はI2C STOPで通信ウィンドウが閉じるため、
- * 1回のRDYにつき1つのI2Cトランザクションのみ実行する。
- *
- * 初期化中:
- *   iqs915x_init_step_handler() に処理を委譲し、
- *   1ステップずつレジスタを設定する。
- *
- * 通常動作:
- *   WORK_READ_DATA → 一括読み取りでデータ取得＋リセット判定
- *   → リセット検知時は WORK_ACK_RESET に遷移
- *   WORK_ACK_RESET → ACK書き込み → WORK_READ_DATA に戻る
+ * RDY割り込みで呼び出され、ストリーミングデータをraw読み取りする。
+ * IQS9150はRESTART方式の読み取りに非対応のため、
+ * i2c_read（レジスタアドレスなし）で16バイトを一括読み取りする。
  * ============================================================ */
 static void iqs915x_work_handler(struct k_work *work) {
   struct iqs915x_data *data = CONTAINER_OF(work, struct iqs915x_data, work);
@@ -292,173 +240,87 @@ static void iqs915x_work_handler(struct k_work *work) {
   const struct iqs915x_config *config = dev->config;
   int ret;
 
-  // 初期化中はステップハンドラに委譲
+  // 初期化中はステップハンドラに委譲（書き込みのみ）
   if (!data->initialized) {
     iqs915x_init_step_handler(dev);
     return;
   }
 
-  // ハートビート: work_handlerが呼ばれているか確認（デバッグ用）
-  static int work_call_count = 0;
-  work_call_count++;
-  // 最初の5回は毎回ログ出力、その後は500回ごと
-  if (work_call_count <= 5 || work_call_count % 500 == 0) {
-    LOG_INF("work_handler #%d, state=%d", work_call_count, data->work_state);
+  // ストリーミングデータをraw読み取り
+  struct iqs915x_stream_data stream;
+  ret = iqs915x_read_stream(dev, &stream);
+  if (ret < 0) {
+    LOG_ERR("Failed to read stream: %d", ret);
+    return;
   }
 
-  // 通常動作のステートマシン
-  switch (data->work_state) {
+  // トラックパッドデータの処理
+  bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
+  bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
 
-  case WORK_READ_INFO_FLAGS:
-    // このステートは現在未使用（WORK_READ_DATAで一括取得するため）
-    // 将来の拡張用に残す
-    data->work_state = WORK_READ_DATA;
-    break;
-
-  case WORK_ACK_RESET: {
-    // リセットフラグをクリア（Activeモード + ACK Reset）
-    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
-                              IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
-    if (ret < 0) {
-      LOG_ERR("Failed to write ACK reset: %d", ret);
-      return;
-    }
-    LOG_INF("ACK reset sent");
-    // ACK後は再初期化を実行（デバイスがリセットされた場合、設定も消えるため）
-    data->init_step = INIT_CONFIG_SETTINGS;
-    data->initialized = false;
-    break;
+  if (!scroll) {
+    data->scroll_x_acc = 0;
+    data->scroll_y_acc = 0;
   }
 
-  case WORK_READ_DATA: {
-    // === 診断: raw読み取りでストリーミングデータを確認 ===
-    const struct iqs915x_config *cfg = dev->config;
-
-    // 16バイトのraw読み取り（レジスタアドレスなし）
-    // IQS9150のデフォルトストリーミング出力を確認
-    // 指を触れて非ゼロデータが出るか確認
-    uint8_t raw_buf[16] = {0};
-    ret = i2c_read_dt(&cfg->i2c, raw_buf, sizeof(raw_buf));
-    if (ret < 0) {
-      LOG_ERR("raw read 16B failed: %d", ret);
-      break;
-    }
-
-    // 最初の10回は無条件出力
-    // その後はデータが非ゼロの場合のみ
-    bool has_data = false;
-    for (int i = 0; i < 16; i++) {
-      if (raw_buf[i] != 0) {
-        has_data = true;
-        break;
-      }
-    }
-
-    if (work_call_count <= 10 || has_data) {
-      LOG_INF("raw16: %02x%02x %02x%02x %02x%02x %02x%02x "
-              "%02x%02x %02x%02x %02x%02x %02x%02x",
-              raw_buf[0], raw_buf[1], raw_buf[2], raw_buf[3], raw_buf[4],
-              raw_buf[5], raw_buf[6], raw_buf[7], raw_buf[8], raw_buf[9],
-              raw_buf[10], raw_buf[11], raw_buf[12], raw_buf[13], raw_buf[14],
-              raw_buf[15]);
-    }
-
-    // リセットループ防止: テスト中はリセット検知をスキップ
-    if (work_call_count <= 20) {
-      break;
-    }
-
-    uint16_t info_flags = 0;
-
-    // 診断用: バルク読み取りの結果もダミーで初期化
-    struct iqs915x_bulk_data bulk = {0};
-    bulk.info_flags = info_flags;
-
-    // --- 以下、通常のトラックパッド処理 ---
-
-    bool tp_movement = (bulk.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
-    bool scroll = (bulk.gesture_tf & IQS915X_SCROLL) != 0;
-
-    if (!scroll) {
-      // スクロール中でなければアキュムレータをクリア
-      data->scroll_x_acc = 0;
-      data->scroll_y_acc = 0;
-    }
-
-    // タップジェスチャーの判定
-    uint16_t button_code;
-    bool button_pressed = false;
-    if (bulk.gesture_sf & IQS915X_SINGLE_TAP) {
-      button_pressed = true;
-      button_code = INPUT_BTN_0;
-    } else if (bulk.gesture_tf & IQS915X_TWO_FINGER_TAP) {
-      button_pressed = true;
-      button_code = INPUT_BTN_1;
-    }
-
-    // プレス＆ホールドの状態遷移
-    bool hold_became_active =
-        (bulk.gesture_sf & IQS915X_PRESS_AND_HOLD) && !data->active_hold;
-    bool hold_released =
-        !(bulk.gesture_sf & IQS915X_PRESS_AND_HOLD) && data->active_hold;
-
-    // 移動とジェスチャーの処理
-    if (hold_became_active) {
-      LOG_INF("Hold became active");
-      input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-      data->active_hold = true;
-    } else if (hold_released) {
-      LOG_INF("Hold became inactive");
-      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-      data->active_hold = false;
-    } else if (button_pressed) {
-      // 保留中のリリースをキャンセル
-      k_work_cancel_delayable(&data->button_release_work);
-
-      // ボタンを即座に押下
-      input_report_key(dev, button_code, 1, true, K_FOREVER);
-      data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
-
-      // 100ms後にリリースをスケジュール
-      k_work_schedule(&data->button_release_work, K_MSEC(100));
-    } else if (scroll) {
-      // TODO: このdivisorをDTS設定で公開する
-      int16_t scroll_div = 32;
-
-      // 一度に一つのスクロール方向のみ有効
-      if (bulk.rel_x != 0) {
-        // デフォルトではX軸は「ナチュラル」
-        if (!config->natural_scroll_x) {
-          bulk.rel_x *= -1;
-        }
-        data->scroll_x_acc += bulk.rel_x;
-        if (abs(data->scroll_x_acc) >= scroll_div) {
-          input_report_rel(dev, INPUT_REL_HWHEEL,
-                           data->scroll_x_acc / scroll_div, true, K_FOREVER);
-          data->scroll_x_acc %= scroll_div;
-        }
-        return;
-      }
-      if (bulk.rel_y != 0) {
-        if (config->natural_scroll_y) {
-          bulk.rel_y *= -1;
-        }
-        data->scroll_y_acc += bulk.rel_y;
-        if (abs(data->scroll_y_acc) >= scroll_div) {
-          input_report_rel(dev, INPUT_REL_WHEEL,
-                           data->scroll_y_acc / scroll_div, true, K_FOREVER);
-          data->scroll_y_acc %= scroll_div;
-        }
-        return;
-      }
-    } else if (tp_movement) {
-      if (bulk.rel_x != 0 || bulk.rel_y != 0) {
-        input_report_rel(dev, INPUT_REL_X, bulk.rel_x, false, K_FOREVER);
-        input_report_rel(dev, INPUT_REL_Y, bulk.rel_y, true, K_FOREVER);
-      }
-    }
-    break;
+  // タップジェスチャー判定
+  uint16_t button_code;
+  bool button_pressed = false;
+  if (stream.gesture_sf & IQS915X_SINGLE_TAP) {
+    button_pressed = true;
+    button_code = INPUT_BTN_0;
+  } else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP) {
+    button_pressed = true;
+    button_code = INPUT_BTN_1;
   }
+
+  // プレス＆ホールドの状態遷移
+  bool hold_became_active =
+      (stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && !data->active_hold;
+  bool hold_released =
+      !(stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && data->active_hold;
+
+  // 移動とジェスチャーの処理
+  if (hold_became_active) {
+    input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+    data->active_hold = true;
+  } else if (hold_released) {
+    input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+    data->active_hold = false;
+  } else if (button_pressed) {
+    k_work_cancel_delayable(&data->button_release_work);
+    input_report_key(dev, button_code, 1, true, K_FOREVER);
+    data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
+    k_work_schedule(&data->button_release_work, K_MSEC(100));
+  } else if (scroll) {
+    int16_t scroll_div = 32;
+    if (stream.rel_x != 0) {
+      if (!config->natural_scroll_x) {
+        stream.rel_x *= -1;
+      }
+      data->scroll_x_acc += stream.rel_x;
+      if (abs(data->scroll_x_acc) >= scroll_div) {
+        input_report_rel(dev, INPUT_REL_HWHEEL, data->scroll_x_acc / scroll_div,
+                         true, K_FOREVER);
+        data->scroll_x_acc %= scroll_div;
+      }
+    }
+    if (stream.rel_y != 0) {
+      if (config->natural_scroll_y) {
+        stream.rel_y *= -1;
+      }
+      data->scroll_y_acc += stream.rel_y;
+      if (abs(data->scroll_y_acc) >= scroll_div) {
+        input_report_rel(dev, INPUT_REL_WHEEL, data->scroll_y_acc / scroll_div,
+                         true, K_FOREVER);
+        data->scroll_y_acc %= scroll_div;
+      }
+    }
+  } else if (tp_movement) {
+    if (stream.rel_x != 0 || stream.rel_y != 0) {
+      input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
+      input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
+    }
   }
 }
 
@@ -475,10 +337,6 @@ static void iqs915x_rdy_handler(const struct device *port,
 
 /* ============================================================
  * デバイス初期化関数
- * Zephyrのデバイスモデルから呼び出される。
- *
- * GPIO・I2Cの初期設定のみ行い、デバイスのレジスタ設定は
- * RDY割り込みによるステートマシンで段階的に実行する。
  * ============================================================ */
 static int iqs915x_init(const struct device *dev) {
   const struct iqs915x_config *config = dev->config;
@@ -512,7 +370,6 @@ static int iqs915x_init(const struct device *dev) {
       return ret;
     }
 
-    // デバイスをリセット
     gpio_pin_set_dt(&config->reset_gpio, 1);
     k_msleep(1);
     gpio_pin_set_dt(&config->reset_gpio, 0);
@@ -539,8 +396,6 @@ static int iqs915x_init(const struct device *dev) {
     return ret;
   }
 
-  // RDYの割り込み設定
-  // DTSのgpio-flagsで極性を設定可能（GPIO_INT_EDGE_TO_ACTIVE）
   ret = gpio_pin_interrupt_configure_dt(&config->rdy_gpio,
                                         GPIO_INT_EDGE_TO_ACTIVE);
   if (ret < 0) {
@@ -555,7 +410,6 @@ static int iqs915x_init(const struct device *dev) {
 
 /* ============================================================
  * デバイスインスタンスマクロ
- * DTSで定義された各IQS915xノードに対してインスタンスを生成する。
  * ============================================================ */
 #define IQS915X_INIT(n)                                                        \
   static struct iqs915x_data iqs915x_data_##n;                                 \
