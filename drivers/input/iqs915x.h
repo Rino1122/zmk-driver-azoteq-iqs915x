@@ -12,6 +12,8 @@
  *   - IQS9150はリトルエンディアン（IQS5xxはビッグエンディアン）
  *   - I2Cデフォルトアドレス: 0x56
  *   - メモリアドレスは16bit幅
+ *   - デフォルトではI2C STOPで通信ウィンドウが閉じるため、
+ *     1回のRDY期間中に実行できるI2Cトランザクションは1つのみ。
  */
 
 #ifndef IQS915X_H_
@@ -141,9 +143,8 @@
  * 設定レジスタ (Read-Write)
  * ============================================================ */
 
-// 注意: ACK Resetは SYSTEM_CONTROL (0x11BC) の Bit 7 で行う
-
 // System Control (2 bytes)
+// 注意: ACK Resetは Bit 7 で行う
 #define IQS915X_SYSTEM_CONTROL 0x11BC
 // System Control ビットフラグ
 #define IQS915X_MODE_SELECT_MASK 0x0007     // Bit 2-0: モード選択
@@ -160,6 +161,9 @@
 // Config Settings (2 bytes)
 #define IQS915X_CONFIG_SETTINGS 0x11BE
 // Config Settings ビットフラグ
+// 注意: TERMINATE_COMMS=0（デフォルト）ではI2C STOPで通信ウィンドウが閉じる。
+// データシート推奨はI2C STOPでの自動終了のため、本ドライバでは
+// TERMINATE_COMMSを設定せず、1トランザクション/RDYで動作する。
 #define IQS915X_TERMINATE_COMMS BIT(6)      // 1: 手動終了（0xEEEE書込み必要）
 #define IQS915X_EVENT_MODE BIT(8)           // 0: ストリーミング, 1: イベントモード
 #define IQS915X_GESTURE_EVENT BIT(9)        // ジェスチャーイベント有効化
@@ -193,14 +197,6 @@
 #define IQS915X_SCROLL_CONS_DIST 0x1214     // 連続スクロール判定の移動量
 
 /* ============================================================
- * 通信ウィンドウ制御
- * Config Settings (0x11BE) の Terminate Comms (Bit 6) が1の場合、
- * 0xEEEEに書き込むことで通信ウィンドウを明示的に終了させる。
- * Bit 6 が0の場合はI2C STOPで自動終了する。
- * ============================================================ */
-#define IQS915X_END_COMM_WINDOW 0xEEEE
-
-/* ============================================================
  * マウスボタンヘルパー
  * ============================================================ */
 #define LEFT_BUTTON_BIT BIT(0)
@@ -209,6 +205,33 @@
 #define LEFT_BUTTON_CODE INPUT_BTN_0
 #define RIGHT_BUTTON_CODE (INPUT_BTN_0 + 1)
 #define MIDDLE_BUTTON_CODE (INPUT_BTN_0 + 2)
+
+/* ============================================================
+ * ステートマシン定義
+ *
+ * IQS9150はデフォルトでI2C STOPにより通信ウィンドウが閉じるため、
+ * 1回のRDY信号に対して1回のI2Cトランザクションしか実行できない。
+ * そのため、複数レジスタの読み書きは複数のRDYサイクルにわたって
+ * ステートマシンで管理する。
+ * ============================================================ */
+
+// 初期化ステップ: iqs915x_setup中に1ステップずつ進行
+enum iqs915x_init_step {
+    INIT_ACK_RESET,                // リセットACK
+    INIT_CONFIG_SETTINGS,          // イベントモード・ジェスチャーイベント設定
+    INIT_SINGLE_FINGER_GESTURES,   // 1本指ジェスチャー有効化
+    INIT_HOLD_TIME,                // プレス＆ホールド判定時間
+    INIT_TWO_FINGER_GESTURES,      // 2本指ジェスチャー有効化
+    INIT_TRACKPAD_SETTINGS,        // 軸設定（FlipX/Y, SwitchXY）
+    INIT_COMPLETE,                 // 初期化完了
+};
+
+// 通常動作時のワークハンドラステート
+enum iqs915x_work_state {
+    WORK_READ_INFO_FLAGS,          // Info Flags読み取り（リセット検知）
+    WORK_ACK_RESET,                // リセットACK書き込み
+    WORK_READ_DATA,                // トラックパッドデータ一括読み取り
+};
 
 /* ============================================================
  * データ構造体
@@ -243,7 +266,15 @@ struct iqs915x_data {
     struct gpio_callback rdy_cb;
     struct k_work work;
     struct k_work_delayable button_release_work;
-    bool initialized;
+
+    // ステートマシン
+    enum iqs915x_init_step init_step;    // 初期化進行状態
+    enum iqs915x_work_state work_state;  // 通常動作ステート
+    bool initialized;                    // 初期化完了フラグ
+
+    // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
+    uint16_t last_info_flags;
+
     // 直前のサイクルで押されたボタンのビットマスク
     uint8_t buttons_pressed;
     // プレス＆ホールドが有効かどうか
