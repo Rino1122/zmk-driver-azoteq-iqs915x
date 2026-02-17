@@ -331,40 +331,64 @@ static void iqs915x_work_handler(struct k_work *work) {
   }
 
   case WORK_READ_DATA: {
-    // 診断: 異なるレジスタを読んでI2C読み取りの動作確認
-    uint16_t diag_val = 0;
-    uint16_t diag_reg;
-    const char *diag_name;
+    // === 診断: 複数のI2C読み取り方式をテスト ===
+    const struct iqs915x_config *cfg = dev->config;
 
-    // 最初の2回: PRODUCT_NUMBER (0x1000) を読む → 0x076A が期待値
-    // 3回目以降: INFO_FLAGS (0x1020) を読む
     if (work_call_count <= 2) {
-      diag_reg = IQS915X_PRODUCT_NUMBER;
-      diag_name = "PRODUCT_NUM";
+      // テスト1: レジスタアドレスなしのraw読み取り (i2c_read_dt)
+      // IQS9150がストリーミングモードでデータを自動出力するか確認
+      uint8_t raw_buf[4] = {0};
+      ret = i2c_read_dt(&cfg->i2c, raw_buf, sizeof(raw_buf));
+      if (ret < 0) {
+        LOG_ERR("raw read failed: %d", ret);
+      } else {
+        LOG_INF("raw read (no addr): %02x %02x %02x %02x", raw_buf[0],
+                raw_buf[1], raw_buf[2], raw_buf[3]);
+      }
+    } else if (work_call_count <= 4) {
+      // テスト2: STOP+START方式 (2回に分けてアドレス設定→読み取り)
+      // i2c_transferでI2C_MSG_STOPを明示的に使用
+      uint8_t reg_buf[2] = {0x10, 0x00}; // PRODUCT_NUMBER
+      uint8_t data_buf[2] = {0};
+      struct i2c_msg msgs[2] = {
+          {
+              // メッセージ1: レジスタアドレス書き込み（STOPなし）
+              .buf = reg_buf,
+              .len = sizeof(reg_buf),
+              .flags = I2C_MSG_WRITE,
+          },
+          {
+              // メッセージ2: データ読み取り（RESTART + STOP）
+              .buf = data_buf,
+              .len = sizeof(data_buf),
+              .flags = I2C_MSG_RESTART | I2C_MSG_READ | I2C_MSG_STOP,
+          },
+      };
+      ret = i2c_transfer_dt(&cfg->i2c, msgs, 2);
+      if (ret < 0) {
+        LOG_ERR("transfer read failed: %d", ret);
+      } else {
+        uint16_t val = (data_buf[1] << 8) | data_buf[0];
+        LOG_INF("transfer read PRODUCT_NUM: %02x %02x (=0x%04x)", data_buf[0],
+                data_buf[1], val);
+      }
     } else {
-      diag_reg = IQS915X_INFO_FLAGS;
-      diag_name = "INFO_FLAGS";
+      // テスト3: 通常のi2c_write_read_dt（参考）
+      uint16_t val = 0;
+      ret = iqs915x_read_reg16(dev, IQS915X_PRODUCT_NUMBER, &val);
+      if (ret < 0) {
+        LOG_ERR("write_read failed: %d", ret);
+      } else {
+        LOG_INF("write_read PRODUCT_NUM = 0x%04x", val);
+      }
     }
 
-    ret = iqs915x_read_reg16(dev, diag_reg, &diag_val);
-    if (ret < 0) {
-      LOG_ERR("Failed to read %s: %d", diag_name, ret);
-      return;
+    // リセットループ防止: テスト中はリセット検知をスキップ
+    if (work_call_count <= 10) {
+      break;
     }
 
-    // 最初の10回は無条件出力
-    if (work_call_count <= 10 || diag_val) {
-      LOG_INF("read %s (0x%04x) = 0x%04x", diag_name, diag_reg, diag_val);
-    }
-
-    uint16_t info_flags = (work_call_count <= 2) ? 0 : diag_val;
-
-    // リセット検知
-    if (info_flags & IQS915X_SHOW_RESET) {
-      LOG_INF("Device reset detected");
-      data->work_state = WORK_ACK_RESET;
-      return;
-    }
+    uint16_t info_flags = 0;
 
     // 診断用: バルク読み取りの結果もダミーで初期化
     struct iqs915x_bulk_data bulk = {0};
