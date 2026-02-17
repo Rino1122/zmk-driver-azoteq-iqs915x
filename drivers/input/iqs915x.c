@@ -331,31 +331,30 @@ static void iqs915x_work_handler(struct k_work *work) {
   }
 
   case WORK_READ_DATA: {
-    // REL_X〜TRACKPAD_FLAGSまでを1回のI2Cトランザクションで一括読み取り
-    struct iqs915x_bulk_data bulk;
-    ret = iqs915x_read_bulk(dev, &bulk);
+    // 診断: バルク読み取りではなく単一レジスタ読み取りで確認
+    // INFO_FLAGS (0x1020) のみを読む（最小限の1トランザクション）
+    uint16_t info_flags = 0;
+    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
     if (ret < 0) {
-      LOG_ERR("Failed to read bulk data: %d", ret);
+      LOG_ERR("Failed to read info flags: %d", ret);
       return;
     }
 
+    // 最初の5回は無条件出力、その後は非ゼロの場合のみ
+    if (work_call_count <= 5 || info_flags) {
+      LOG_INF("single read: info_flags=0x%04x", info_flags);
+    }
+
     // リセット検知
-    if (bulk.info_flags & IQS915X_SHOW_RESET) {
+    if (info_flags & IQS915X_SHOW_RESET) {
       LOG_INF("Device reset detected");
-      // 次のRDYでACKを書き込む
       data->work_state = WORK_ACK_RESET;
       return;
     }
 
-    // 診断ログ: バルク読み取りの結果を表示
-    // 最初の5回は無条件出力、その後は非ゼロの場合のみ
-    if (work_call_count <= 5 || bulk.info_flags || bulk.trackpad_flags ||
-        bulk.gesture_sf || bulk.gesture_tf || bulk.rel_x || bulk.rel_y) {
-      LOG_INF("bulk: info=0x%04x tp=0x%04x sf=0x%04x tf=0x%04x "
-              "rx=%d ry=%d",
-              bulk.info_flags, bulk.trackpad_flags, bulk.gesture_sf,
-              bulk.gesture_tf, bulk.rel_x, bulk.rel_y);
-    }
+    // 診断用: バルク読み取りの結果もダミーで初期化
+    struct iqs915x_bulk_data bulk = {0};
+    bulk.info_flags = info_flags;
 
     // --- 以下、通常のトラックパッド処理 ---
 
