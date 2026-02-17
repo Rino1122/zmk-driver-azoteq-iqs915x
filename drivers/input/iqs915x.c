@@ -331,19 +331,33 @@ static void iqs915x_work_handler(struct k_work *work) {
   }
 
   case WORK_READ_DATA: {
-    // 診断: バルク読み取りではなく単一レジスタ読み取りで確認
-    // INFO_FLAGS (0x1020) のみを読む（最小限の1トランザクション）
-    uint16_t info_flags = 0;
-    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
+    // 診断: 異なるレジスタを読んでI2C読み取りの動作確認
+    uint16_t diag_val = 0;
+    uint16_t diag_reg;
+    const char *diag_name;
+
+    // 最初の2回: PRODUCT_NUMBER (0x1000) を読む → 0x076A が期待値
+    // 3回目以降: INFO_FLAGS (0x1020) を読む
+    if (work_call_count <= 2) {
+      diag_reg = IQS915X_PRODUCT_NUMBER;
+      diag_name = "PRODUCT_NUM";
+    } else {
+      diag_reg = IQS915X_INFO_FLAGS;
+      diag_name = "INFO_FLAGS";
+    }
+
+    ret = iqs915x_read_reg16(dev, diag_reg, &diag_val);
     if (ret < 0) {
-      LOG_ERR("Failed to read info flags: %d", ret);
+      LOG_ERR("Failed to read %s: %d", diag_name, ret);
       return;
     }
 
-    // 最初の5回は無条件出力、その後は非ゼロの場合のみ
-    if (work_call_count <= 5 || info_flags) {
-      LOG_INF("single read: info_flags=0x%04x", info_flags);
+    // 最初の10回は無条件出力
+    if (work_call_count <= 10 || diag_val) {
+      LOG_INF("read %s (0x%04x) = 0x%04x", diag_name, diag_reg, diag_val);
     }
+
+    uint16_t info_flags = (work_call_count <= 2) ? 0 : diag_val;
 
     // リセット検知
     if (info_flags & IQS915X_SHOW_RESET) {
