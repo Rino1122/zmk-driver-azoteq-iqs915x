@@ -298,6 +298,14 @@ static void iqs915x_work_handler(struct k_work *work) {
     return;
   }
 
+  // ハートビート: work_handlerが呼ばれているか確認（デバッグ用）
+  static int work_call_count = 0;
+  work_call_count++;
+  // 最初の5回は毎回ログ出力、その後は500回ごと
+  if (work_call_count <= 5 || work_call_count % 500 == 0) {
+    LOG_INF("work_handler #%d, state=%d", work_call_count, data->work_state);
+  }
+
   // 通常動作のステートマシン
   switch (data->work_state) {
 
@@ -340,9 +348,9 @@ static void iqs915x_work_handler(struct k_work *work) {
     }
 
     // 診断ログ: バルク読み取りの結果を表示
-    // info_flagsまたはtrackpad_flagsが非ゼロの場合に出力
-    if (bulk.info_flags || bulk.trackpad_flags || bulk.gesture_sf ||
-        bulk.gesture_tf) {
+    // 最初の5回は無条件出力、その後は非ゼロの場合のみ
+    if (work_call_count <= 5 || bulk.info_flags || bulk.trackpad_flags ||
+        bulk.gesture_sf || bulk.gesture_tf || bulk.rel_x || bulk.rel_y) {
       LOG_INF("bulk: info=0x%04x tp=0x%04x sf=0x%04x tf=0x%04x "
               "rx=%d ry=%d",
               bulk.info_flags, bulk.trackpad_flags, bulk.gesture_sf,
