@@ -2,49 +2,69 @@ properties:
   rdy-gpios:
     type: phandle-array
     required: true
-    description: "Data Ready (RDY) pin for the Azoteq IQS915x trackpad. IQS9150ではRDYがLOWになった時にデータ準備完了を通知する。"
+    description: "Data Ready (RDY) pin. IQS9150ではRDYがLOWでデータ準備完了を通知する。"
   
   reset-gpios:
     type: phandle-array
-    description: "Reset pin for the Azoteq IQS915x trackpad"
+    description: "Reset pin (optional)"
 
   one-finger-tap:
     type: boolean
-    description: "Register single finger tap gestures and report them as a left click"
+    description: "Enable single finger tap (left click)"
 
   press-and-hold:
     type: boolean
-    description: "Register press and hold gestures and report them as a left click until released"
+    description: "Enable press and hold (left click until released)"
   
   press-and-hold-time:
     type: int
-    description: "Time in ms (in addition to the tap time) it takes to register a press and hold gesture"
+    description: "Press and hold detection time in ms (added to tap time)"
     default: 250
 
   two-finger-tap:
     type: boolean
-    description: "Register two finger tap gestures and report them as a right click"
+    description: "Enable two finger tap (right click)"
   
   scroll:
     type: boolean
-    description: "Register and report scroll gestures, both vertical and horizontal scroll is supported"
+    description: "Enable two-finger scroll (vertical and horizontal)"
 
   natural-scroll-x:
     type: boolean
-    description: "Whether content should track finger movement when scrolling on the x axis."
+    description: "Natural scroll on x axis (content follows finger direction)"
 
   natural-scroll-y:
     type: boolean
-    description: "Whether content should track finger movement when scrolling on the y axis."
+    description: "Natural scroll on y axis (content follows finger direction)"
 
   switch-xy:
     type: boolean
-    description: "Flip x and y axes"
+    description: "Swap x and y axes"
   
   flip-x:
     type: boolean
-    description: "Invert the direction of the x axis"
+    description: "Invert x axis direction"
 
   flip-y:
     type: boolean
-    description: "Invert the direction of the y axis"
+    description: "Invert y axis direction"
+
+  scroll-divisor:
+    type: int
+    default: 8
+    description: |
+      Scroll sensitivity divisor. Smaller values = more sensitive scrolling.
+      Default: 8. Increase for slower scrolling, decrease for faster.
+
+  tap-time:
+    type: int
+    description: |
+      Tap detection time in ms. If not set, IQS9150 NVM default is used.
+      Shorter values make taps more responsive but may cause false positives.
+
+  report-rate-ms:
+    type: int
+    description: |
+      Active mode sampling period in ms. Lower values = smoother cursor but
+      higher power consumption. If not set, IQS9150 NVM default is used.
+      Typical: 10 (100Hz default), 5 (200Hz), 2 (500Hz).

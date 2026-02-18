@@ -215,6 +215,34 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return;
     }
     LOG_DBG("Init: Trackpad settings configured");
+    data->init_step = INIT_TAP_TIME;
+    break;
+  }
+
+  case INIT_TAP_TIME:
+    // DTSでtap-timeが指定されている場合のみ書き込み
+    if (config->tap_time > 0) {
+      ret = iqs915x_write_reg16(dev, IQS915X_TAP_TIME, config->tap_time);
+      if (ret < 0) {
+        LOG_ERR("Failed to configure tap time: %d", ret);
+        return;
+      }
+      LOG_DBG("Init: Tap time set to %d ms", config->tap_time);
+    }
+    data->init_step = INIT_REPORT_RATE;
+    break;
+
+  case INIT_REPORT_RATE:
+    // DTSでreport-rate-msが指定されている場合のみ書き込み
+    if (config->report_rate_ms > 0) {
+      ret = iqs915x_write_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
+                                config->report_rate_ms);
+      if (ret < 0) {
+        LOG_ERR("Failed to configure report rate: %d", ret);
+        return;
+      }
+      LOG_DBG("Init: Report rate set to %d ms", config->report_rate_ms);
+    }
     data->init_step = INIT_COMPLETE;
     data->initialized = true;
     data->work_state = WORK_READ_DATA;
@@ -222,9 +250,9 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     break;
   }
 
-  case INIT_COMPLETE:
-    break;
-  }
+case INIT_COMPLETE:
+  break;
+}
 }
 
 /* ============================================================
@@ -260,7 +288,7 @@ static void iqs915x_work_handler(struct k_work *work) {
 
   // 診断: ジェスチャーフラグが非ゼロのときにログ出力
   if (stream.gesture_sf || stream.gesture_tf) {
-    LOG_INF("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
+    LOG_DBG("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
             stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
             (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
             stream.trackpad_flags);
@@ -305,7 +333,7 @@ static void iqs915x_work_handler(struct k_work *work) {
     // (REL_X/REL_Yはスクロール中はゼロ)
     int16_t gx = (int16_t)stream.gesture_x;
     int16_t gy = (int16_t)stream.gesture_y;
-    int16_t scroll_div = 32;
+    int16_t scroll_div = config->scroll_divisor;
     if (gx != 0) {
       if (!config->natural_scroll_x) {
         gx *= -1;
@@ -435,6 +463,9 @@ static int iqs915x_init(const struct device *dev) {
       .scroll = DT_INST_PROP(n, scroll),                                       \
       .natural_scroll_x = DT_INST_PROP(n, natural_scroll_x),                   \
       .natural_scroll_y = DT_INST_PROP(n, natural_scroll_y),                   \
+      .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                       \
+      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                             \
+      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                 \
       .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),     \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                 \
       .flip_x = DT_INST_PROP(n, flip_x),                                       \

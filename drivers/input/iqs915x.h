@@ -196,6 +196,14 @@
 #define IQS915X_SCROLL_INITIAL_DIST 0x1212  // スクロール開始に必要な移動量
 #define IQS915X_SCROLL_CONS_DIST 0x1214     // 連続スクロール判定の移動量
 
+// サンプリング周期レジスタ (各2 bytes, ms単位)
+// データシート Section 6.1 参照
+#define IQS915X_ACTIVE_MODE_REPORT_RATE  0x11A2  // Active Mode (デフォルト: ~10ms)
+#define IQS915X_IDLE_TOUCH_REPORT_RATE   0x11A4  // Idle-Touch Mode
+#define IQS915X_IDLE_MODE_REPORT_RATE    0x11A6  // Idle Mode
+#define IQS915X_LP1_MODE_REPORT_RATE     0x11A8  // LP1 Mode
+#define IQS915X_LP2_MODE_REPORT_RATE     0x11AA  // LP2 Mode
+
 /* ============================================================
  * マウスボタンヘルパー
  * ============================================================ */
@@ -223,6 +231,8 @@ enum iqs915x_init_step {
     INIT_HOLD_TIME,                // プレス＆ホールド判定時間
     INIT_TWO_FINGER_GESTURES,      // 2本指ジェスチャー有効化
     INIT_TRACKPAD_SETTINGS,        // 軸設定（FlipX/Y, SwitchXY）
+    INIT_TAP_TIME,                 // タップ判定時間（オプション）
+    INIT_REPORT_RATE,              // レポートレート（オプション）
     INIT_COMPLETE,                 // 初期化完了
 };
 
@@ -253,6 +263,11 @@ struct iqs915x_config {
     bool scroll;
     bool natural_scroll_x;
     bool natural_scroll_y;
+    uint16_t scroll_divisor;  // スクロール感度除数
+
+    // タイミング設定
+    uint16_t tap_time;        // タップ判定時間(ms), 0=NVMデフォルト
+    uint16_t report_rate_ms;  // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
     // 軸設定
     bool switch_xy;
