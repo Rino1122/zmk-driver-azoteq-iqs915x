@@ -147,7 +147,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to ACK reset: %d", ret);
       return; // 次のRDYでリトライ
     }
-    LOG_INF("Init: ACK reset sent");
+    LOG_DBG("Init: ACK reset sent");
     data->init_step = INIT_CONFIG_SETTINGS;
     break;
 
@@ -159,7 +159,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure settings: %d", ret);
       return;
     }
-    LOG_INF("Init: Config settings written (streaming mode)");
+    LOG_DBG("Init: Config settings written (streaming mode)");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
 
@@ -173,7 +173,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure single finger gestures: %d", ret);
       return;
     }
-    LOG_INF("Init: Single finger gestures configured");
+    LOG_DBG("Init: Single finger gestures configured");
     data->init_step = INIT_HOLD_TIME;
     break;
   }
@@ -185,7 +185,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure hold time: %d", ret);
       return;
     }
-    LOG_INF("Init: Hold time configured");
+    LOG_DBG("Init: Hold time configured");
     data->init_step = INIT_TWO_FINGER_GESTURES;
     break;
 
@@ -199,7 +199,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure two finger gestures: %d", ret);
       return;
     }
-    LOG_INF("Init: Two finger gestures configured");
+    LOG_DBG("Init: Two finger gestures configured");
     data->init_step = INIT_TRACKPAD_SETTINGS;
     break;
   }
@@ -214,7 +214,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure trackpad settings: %d", ret);
       return;
     }
-    LOG_INF("Init: Trackpad settings configured");
+    LOG_DBG("Init: Trackpad settings configured");
     data->init_step = INIT_COMPLETE;
     data->initialized = true;
     data->work_state = WORK_READ_DATA;
@@ -257,6 +257,13 @@ static void iqs915x_work_handler(struct k_work *work) {
   // トラックパッドデータの処理
   bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
   bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
+
+  // 診断: ジェスチャーフラグが非ゼロのときにログ出力
+  if (stream.gesture_sf || stream.gesture_tf) {
+    LOG_INF("gesture: sf=0x%04x tf=0x%04x rx=%d ry=%d tp=0x%04x",
+            stream.gesture_sf, stream.gesture_tf, stream.rel_x, stream.rel_y,
+            stream.trackpad_flags);
+  }
 
   if (!scroll) {
     data->scroll_x_acc = 0;
