@@ -68,3 +68,19 @@ properties:
       Active mode sampling period in ms. Lower values = smoother cursor but
       higher power consumption. If not set, IQS9150 NVM default is used.
       Typical: 10 (100Hz default), 5 (200Hz), 2 (500Hz).
+
+  azoteq,init-data:
+    type: uint8-array
+    description: |
+      Full IQS9150/IQS9151 initialization data for devices without NVM.
+      This byte array contains all register values from memory map address
+      0x115C through 0x15EB (1168 bytes) followed by 0x2000 through 0x2005
+      (6 bytes), totaling 1174 bytes.
+
+      Use the provided conversion script to generate this data from the
+      Azoteq GUI-exported header file:
+        python3 scripts/convert_init_header.py IQS9150_init.h
+
+      When both init-data and individual DTS properties (e.g. tap-time,
+      report-rate-ms) are specified, init-data is written first, then
+      individual properties override the corresponding registers.

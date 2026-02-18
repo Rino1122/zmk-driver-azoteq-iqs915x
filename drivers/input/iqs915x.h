@@ -205,6 +205,30 @@
 #define IQS915X_LP2_MODE_REPORT_RATE     0x11AA  // LP2 Mode
 
 /* ============================================================
+ * 初期化データ（init-data）メモリマップ定数
+ *
+ * IQS9150/IQS9151はNVMを搭載しないため、起動時に全設定レジスタを
+ * I2Cで書き込む必要がある。init-dataはメモリマップ上の2つの連続領域
+ * （メイン領域 + エンジニアリング領域）から構成される。
+ * ============================================================ */
+
+// メイン領域: 0x115C〜0x15EB（ALP補償〜仮想ホイール）
+#define IQS915X_INIT_DATA_BASE_ADDR    0x115C
+#define IQS915X_INIT_DATA_MAIN_SIZE    1168   // 0x15EB - 0x115C + 1 = 0x0490
+
+// エンジニアリング領域: 0x2000〜0x2005
+#define IQS915X_INIT_DATA_ENG_ADDR     0x2000
+#define IQS915X_INIT_DATA_ENG_SIZE     6
+
+// init-dataの合計サイズ（バイト）
+#define IQS915X_INIT_DATA_TOTAL_SIZE   (IQS915X_INIT_DATA_MAIN_SIZE + IQS915X_INIT_DATA_ENG_SIZE)
+
+// 1回のRDYサイクルで書き込むチャンクサイズ（バイト）
+// nRF52のTWIM EasyDMAバッファ上限（255バイト）以内で、
+// 2バイトのレジスタアドレスを考慮した保守的な値
+#define IQS915X_INIT_WRITE_CHUNK_SIZE  128
+
+/* ============================================================
  * マウスボタンヘルパー
  * ============================================================ */
 #define LEFT_BUTTON_BIT BIT(0)
@@ -226,6 +250,7 @@
 // 初期化ステップ: iqs915x_setup中に1ステップずつ進行
 enum iqs915x_init_step {
     INIT_ACK_RESET,                // リセットACK
+    INIT_WRITE_INIT_DATA,          // init-dataブロック書き込み（複数RDYサイクル）
     INIT_CONFIG_SETTINGS,          // イベントモード・ジェスチャーイベント設定
     INIT_SINGLE_FINGER_GESTURES,   // 1本指ジェスチャー有効化
     INIT_HOLD_TIME,                // プレス＆ホールド判定時間
@@ -252,6 +277,10 @@ struct iqs915x_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec rdy_gpio;
     struct gpio_dt_spec reset_gpio;
+
+    // 初期化データ（NVM非搭載デバイス用）
+    const uint8_t *init_data;     // DTSから読み込んだバイト配列（NULLの場合はスキップ）
+    uint16_t init_data_len;       // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE想定）
 
     // ジェスチャー設定
     bool one_finger_tap;
@@ -286,6 +315,7 @@ struct iqs915x_data {
     enum iqs915x_init_step init_step;    // 初期化進行状態
     enum iqs915x_work_state work_state;  // 通常動作ステート
     bool initialized;                    // 初期化完了フラグ
+    uint16_t init_data_offset;           // init-data書き込み進捗（バイトオフセット）
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;

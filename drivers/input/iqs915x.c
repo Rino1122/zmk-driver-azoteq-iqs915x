@@ -17,6 +17,7 @@
 #define DT_DRV_COMPAT azoteq_iqs915x
 
 #include <stdlib.h>
+#include <string.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
@@ -57,6 +58,25 @@ static int iqs915x_write_reg8(const struct device *dev, uint16_t reg,
   uint8_t buf[3] = {reg >> 8, reg & 0xFF, val};
 
   return i2c_write_dt(&config->i2c, buf, sizeof(buf));
+}
+
+// バイトブロックを指定アドレスに書き込む（init-data用）
+// bufにはデータのみが含まれ、アドレスは本関数が付与する
+static int iqs915x_write_block(const struct device *dev, uint16_t reg,
+                               const uint8_t *data, uint16_t len) {
+  const struct iqs915x_config *config = dev->config;
+  // アドレス(2バイト) + データを連結したバッファを作成
+  uint8_t buf[IQS915X_INIT_WRITE_CHUNK_SIZE + 2];
+
+  if (len > IQS915X_INIT_WRITE_CHUNK_SIZE) {
+    return -EINVAL;
+  }
+
+  buf[0] = reg >> 8;
+  buf[1] = reg & 0xFF;
+  memcpy(&buf[2], data, len);
+
+  return i2c_write_dt(&config->i2c, buf, len + 2);
 }
 
 /* ============================================================
@@ -148,8 +168,60 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return; // 次のRDYでリトライ
     }
     LOG_DBG("Init: ACK reset sent");
-    data->init_step = INIT_CONFIG_SETTINGS;
+    data->init_step = INIT_WRITE_INIT_DATA;
+    data->init_data_offset = 0;
     break;
+
+  case INIT_WRITE_INIT_DATA: {
+    // init-dataが未設定の場合はスキップ
+    if (!config->init_data || config->init_data_len == 0) {
+      LOG_DBG("Init: No init-data, skipping NVM write");
+      data->init_step = INIT_CONFIG_SETTINGS;
+      break;
+    }
+
+    uint16_t offset = data->init_data_offset;
+    uint16_t total = config->init_data_len;
+
+    if (offset < IQS915X_INIT_DATA_MAIN_SIZE) {
+      // メイン領域 (0x115C〜0x15EB) の書き込み
+      uint16_t remaining = IQS915X_INIT_DATA_MAIN_SIZE - offset;
+      uint16_t chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
+      uint16_t addr = IQS915X_INIT_DATA_BASE_ADDR + offset;
+
+      ret = iqs915x_write_block(dev, addr, &config->init_data[offset], chunk);
+      if (ret < 0) {
+        LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
+        return; // 次のRDYでリトライ
+      }
+      LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr,
+              offset + chunk, total);
+      data->init_data_offset = offset + chunk;
+    } else if (offset < total) {
+      // エンジニアリング領域 (0x2000〜0x2005) の書き込み
+      uint16_t eng_offset = offset - IQS915X_INIT_DATA_MAIN_SIZE;
+      uint16_t remaining = IQS915X_INIT_DATA_ENG_SIZE - eng_offset;
+      uint16_t chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
+      uint16_t addr = IQS915X_INIT_DATA_ENG_ADDR + eng_offset;
+
+      ret = iqs915x_write_block(dev, addr, &config->init_data[offset], chunk);
+      if (ret < 0) {
+        LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
+        return;
+      }
+      LOG_DBG("Init: Wrote %d eng bytes at 0x%04x (%d/%d)", chunk, addr,
+              offset + chunk, total);
+      data->init_data_offset = offset + chunk;
+    }
+
+    // 全データ書き込み完了判定
+    if (data->init_data_offset >= total) {
+      LOG_INF("Init: All init-data written (%d bytes)", total);
+      data->init_step = INIT_CONFIG_SETTINGS;
+    }
+    // 未完了の場合は同じステップに留まり、次のRDYで続きを書き込む
+    break;
+  }
 
   case INIT_CONFIG_SETTINGS:
     // ジェスチャーエンジン有効化（ストリーミングモード）
@@ -457,6 +529,11 @@ static int iqs915x_init(const struct device *dev) {
       .i2c = I2C_DT_SPEC_INST_GET(n),                                          \
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                         \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),             \
+      .init_data = COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),     \
+                               (DT_INST_PROP(n, azoteq_init_data)), (NULL)),   \
+      .init_data_len =                                                         \
+          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),              \
+                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),           \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                       \
       .press_and_hold = DT_INST_PROP(n, press_and_hold),                       \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                       \
