@@ -260,8 +260,9 @@ static void iqs915x_work_handler(struct k_work *work) {
 
   // 診断: ジェスチャーフラグが非ゼロのときにログ出力
   if (stream.gesture_sf || stream.gesture_tf) {
-    LOG_INF("gesture: sf=0x%04x tf=0x%04x rx=%d ry=%d tp=0x%04x",
-            stream.gesture_sf, stream.gesture_tf, stream.rel_x, stream.rel_y,
+    LOG_INF("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
+            stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
+            (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
             stream.trackpad_flags);
   }
 
@@ -300,23 +301,27 @@ static void iqs915x_work_handler(struct k_work *work) {
     data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
     k_work_schedule(&data->button_release_work, K_MSEC(100));
   } else if (scroll) {
+    // スクロール: GESTURE_X/Yをスクロールデルタとして使用
+    // (REL_X/REL_Yはスクロール中はゼロ)
+    int16_t gx = (int16_t)stream.gesture_x;
+    int16_t gy = (int16_t)stream.gesture_y;
     int16_t scroll_div = 32;
-    if (stream.rel_x != 0) {
+    if (gx != 0) {
       if (!config->natural_scroll_x) {
-        stream.rel_x *= -1;
+        gx *= -1;
       }
-      data->scroll_x_acc += stream.rel_x;
+      data->scroll_x_acc += gx;
       if (abs(data->scroll_x_acc) >= scroll_div) {
         input_report_rel(dev, INPUT_REL_HWHEEL, data->scroll_x_acc / scroll_div,
                          true, K_FOREVER);
         data->scroll_x_acc %= scroll_div;
       }
     }
-    if (stream.rel_y != 0) {
+    if (gy != 0) {
       if (config->natural_scroll_y) {
-        stream.rel_y *= -1;
+        gy *= -1;
       }
-      data->scroll_y_acc += stream.rel_y;
+      data->scroll_y_acc += gy;
       if (abs(data->scroll_y_acc) >= scroll_div) {
         input_report_rel(dev, INPUT_REL_WHEEL, data->scroll_y_acc / scroll_div,
                          true, K_FOREVER);
