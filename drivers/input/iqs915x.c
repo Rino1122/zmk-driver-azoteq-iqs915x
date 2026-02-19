@@ -45,8 +45,8 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
                                uint16_t val) {
   const struct iqs915x_config *config = dev->config;
-  // アドレスはビッグエンディアン, データはリトルエンディアン
-  uint8_t buf[4] = {reg >> 8, reg & 0xFF, val & 0xFF, val >> 8};
+  // アドレスもリトルエンディアン
+  uint8_t buf[4] = {reg & 0xFF, reg >> 8, val & 0xFF, val >> 8};
 
   return i2c_write_dt(&config->i2c, buf, sizeof(buf));
 }
@@ -55,7 +55,7 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
 static int iqs915x_write_reg8(const struct device *dev, uint16_t reg,
                               uint8_t val) {
   const struct iqs915x_config *config = dev->config;
-  uint8_t buf[3] = {reg >> 8, reg & 0xFF, val};
+  uint8_t buf[3] = {reg & 0xFF, reg >> 8, val};
 
   return i2c_write_dt(&config->i2c, buf, sizeof(buf));
 }
@@ -72,8 +72,8 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
     return -EINVAL;
   }
 
-  buf[0] = reg >> 8;
-  buf[1] = reg & 0xFF;
+  buf[0] = reg & 0xFF;
+  buf[1] = reg >> 8;
   memcpy(&buf[2], data, len);
 
   return i2c_write_dt(&config->i2c, buf, len + 2);
