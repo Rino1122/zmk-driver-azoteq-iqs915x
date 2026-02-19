@@ -355,7 +355,17 @@ static void iqs915x_work_handler(struct k_work *work) {
 
   // IQS915xのランタイムリセット検出
   // NVM非搭載のため、リセット時は全設定が失われる → 再初期化が必須
-  if (stream.info_flags & IQS915X_SHOW_RESET) {
+  //
+  // 注意: 初期化完了直後の最初の読み取りではSHOW_RESETを無視する。
+  // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
+  // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
+  if (data->init_step == INIT_COMPLETE) {
+    // 初期化後の最初の読み取り: SHOW_RESETは残留フラグなので無視
+    data->init_step = INIT_ACK_RESET; // 次回以降は通常のリセット検出を行う
+    if (stream.info_flags & IQS915X_SHOW_RESET) {
+      LOG_DBG("Ignoring stale SHOW_RESET after init");
+    }
+  } else if (stream.info_flags & IQS915X_SHOW_RESET) {
     LOG_WRN("IQS915x runtime reset detected, re-initializing...");
     data->initialized = false;
     data->init_step = INIT_ACK_RESET;
