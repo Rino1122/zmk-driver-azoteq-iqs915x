@@ -320,11 +320,10 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     data->work_state = WORK_READ_DATA;
     LOG_INF("IQS915x initialization complete");
     break;
-  }
 
-case INIT_COMPLETE:
-  break;
-}
+  case INIT_COMPLETE:
+    break;
+  }
 }
 
 /* ============================================================
