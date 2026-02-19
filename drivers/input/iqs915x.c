@@ -316,8 +316,22 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       }
       LOG_DBG("Init: Report rate set to %d ms", config->report_rate_ms);
     }
+    data->init_step = INIT_VERIFY_RESET;
+    break;
+
+  case INIT_VERIFY_RESET: {
+    // 最終ACKの前に一度読み取りを行う
+    // これにより、デバイスの状態を最新にしてからACKを送る
+    struct iqs915x_stream_data stream;
+    ret = iqs915x_read_stream(dev, &stream);
+    if (ret < 0) {
+      LOG_ERR("Failed to verify reset: %d", ret);
+      return;
+    }
+    LOG_DBG("Init: Verify reset flags: 0x%04x", stream.info_flags);
     data->init_step = INIT_FINAL_ACK_RESET;
     break;
+  }
 
   case INIT_FINAL_ACK_RESET:
     // 初期化シーケンスの最後に再度リセットフラグをクリア
@@ -375,7 +389,8 @@ static void iqs915x_work_handler(struct k_work *work) {
   // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
   // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
   if (stream.info_flags & IQS915X_SHOW_RESET) {
-    LOG_WRN("IQS915x runtime reset detected, re-initializing...");
+    LOG_WRN("IQS915x runtime reset detected (flags=0x%04x), re-initializing...",
+            stream.info_flags);
     data->initialized = false;
     data->init_step = INIT_ACK_RESET;
     data->init_data_offset = 0;
