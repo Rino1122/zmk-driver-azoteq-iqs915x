@@ -28,7 +28,7 @@
 
 #include "iqs915x.h"
 
-LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_LOG_LEVEL);
+LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 /* ============================================================
  * I2C通信関数
