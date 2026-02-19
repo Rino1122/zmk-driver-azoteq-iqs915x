@@ -20,6 +20,7 @@
 #define IQS915X_H_
 
 #include <zephyr/device.h>
+#include <stdint.h>
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -258,6 +259,7 @@ enum iqs915x_init_step {
     INIT_TRACKPAD_SETTINGS,        // 軸設定（FlipX/Y, SwitchXY）
     INIT_TAP_TIME,                 // タップ判定時間（オプション）
     INIT_REPORT_RATE,              // レポートレート（オプション）
+    INIT_FINAL_ACK_RESET,          // 最終リセットACK（Show Resetフラグクリア）
     INIT_COMPLETE,                 // 初期化完了
 };
 

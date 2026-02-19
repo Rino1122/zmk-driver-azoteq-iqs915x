@@ -316,6 +316,20 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       }
       LOG_DBG("Init: Report rate set to %d ms", config->report_rate_ms);
     }
+    data->init_step = INIT_FINAL_ACK_RESET;
+    break;
+
+  case INIT_FINAL_ACK_RESET:
+    // 初期化シーケンスの最後に再度リセットフラグをクリア
+    // これにより、初期化完了直後の最初の読み取りでSHOW_RESETが
+    // 残留しているのを防ぐ。
+    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
+                              IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
+    if (ret < 0) {
+      LOG_ERR("Failed to final ACK reset: %d", ret);
+      return;
+    }
+    LOG_DBG("Init: Final ACK reset sent");
     data->init_step = INIT_COMPLETE;
     data->initialized = true;
     data->work_state = WORK_READ_DATA;
@@ -360,13 +374,7 @@ static void iqs915x_work_handler(struct k_work *work) {
   // 注意: 初期化完了直後の最初の読み取りではSHOW_RESETを無視する。
   // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
   // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
-  if (data->init_step == INIT_COMPLETE) {
-    // 初期化後の最初の読み取り: SHOW_RESETは残留フラグなので無視
-    data->init_step = INIT_ACK_RESET; // 次回以降は通常のリセット検出を行う
-    if (stream.info_flags & IQS915X_SHOW_RESET) {
-      LOG_DBG("Ignoring stale SHOW_RESET after init");
-    }
-  } else if (stream.info_flags & IQS915X_SHOW_RESET) {
+  if (stream.info_flags & IQS915X_SHOW_RESET) {
     LOG_WRN("IQS915x runtime reset detected, re-initializing...");
     data->initialized = false;
     data->init_step = INIT_ACK_RESET;
