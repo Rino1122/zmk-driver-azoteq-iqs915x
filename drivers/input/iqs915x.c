@@ -354,6 +354,19 @@ static void iqs915x_work_handler(struct k_work *work) {
     return;
   }
 
+  // IQS915xのランタイムリセット検出
+  // NVM非搭載のため、リセット時は全設定が失われる → 再初期化が必須
+  if (stream.info_flags & IQS915X_SHOW_RESET) {
+    LOG_WRN("IQS915x runtime reset detected, re-initializing...");
+    data->initialized = false;
+    data->init_step = INIT_ACK_RESET;
+    data->init_data_offset = 0;
+    data->active_hold = false;
+    data->buttons_pressed = 0;
+    iqs915x_init_step_handler(dev);
+    return;
+  }
+
   // トラックパッドデータの処理
   bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
   bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
