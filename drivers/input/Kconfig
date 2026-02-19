@@ -17,9 +17,13 @@ config INPUT_AZOTEQ_IQS915X_INIT_PRIORITY
       Driver initialization priority for the IQS915x driver.
       Lower values initialize earlier.
 
-module = INPUT_AZOTEQ_IQS915X
-module-str = "Log level for Azoteq IQS915x driver"
-source "subsys/logging/Kconfig.template.log_config"
+config INPUT_AZOTEQ_IQS915X_LOG_LEVEL
+    int "Log level for Azoteq IQS915x driver"
+    default 3
+    depends on LOG
+    help
+      Sets log level for IQS915x driver.
+      Levels: 0 (Off), 1 (Error), 2 (Warning), 3 (Info), 4 (Debug)
 
 
 endif # INPUT_AZOTEQ_IQS915X
