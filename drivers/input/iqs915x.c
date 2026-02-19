@@ -226,13 +226,15 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   case INIT_CONFIG_SETTINGS:
     // ジェスチャーエンジン有効化（イベントモード）
     // 省電力のためイベントモードを使用（IQS915X_EVENT_MODE）
+    // カーソル移動(TP_EVENT)とジェスチャー(GESTURE_EVENT)の両方を有効化
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                              IQS915X_EVENT_MODE | IQS915X_GESTURE_EVENT);
+                              IQS915X_EVENT_MODE | IQS915X_GESTURE_EVENT |
+                                  IQS915X_TP_EVENT);
     if (ret < 0) {
       LOG_ERR("Failed to configure settings: %d", ret);
       return;
     }
-    LOG_DBG("Init: Config settings written (event mode)");
+    LOG_DBG("Init: Config settings written (event mode + tp event)");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
 

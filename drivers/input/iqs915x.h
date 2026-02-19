@@ -168,6 +168,7 @@
 #define IQS915X_TERMINATE_COMMS BIT(6)      // 1: 手動終了（0xEEEE書込み必要）
 #define IQS915X_EVENT_MODE BIT(8)           // 0: ストリーミング, 1: イベントモード
 #define IQS915X_GESTURE_EVENT BIT(9)        // ジェスチャーイベント有効化
+#define IQS915X_TP_EVENT BIT(13)            // トラックパッドイベント有効化
 
 // Trackpad Settings (1 byte)
 // XYのフリップ・スワップ設定
