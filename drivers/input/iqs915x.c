@@ -572,13 +572,14 @@ static int iqs915x_init(const struct device *dev) {
  * デバイスインスタンスマクロ
  * ============================================================ */
 #define IQS915X_INIT(n)                                                        \
+  static const uint8_t iqs915x_init_data_##n[] =                               \
+      DT_INST_PROP_OR(n, azoteq_init_data, {0});                               \
   static struct iqs915x_data iqs915x_data_##n;                                 \
   static const struct iqs915x_config iqs915x_config_##n = {                    \
       .i2c = I2C_DT_SPEC_INST_GET(n),                                          \
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                         \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),             \
-      .init_data = COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),     \
-                               (DT_INST_PROP(n, azoteq_init_data)), (NULL)),   \
+      .init_data = iqs915x_init_data_##n,                                      \
       .init_data_len =                                                         \
           COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),              \
                       (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),           \
