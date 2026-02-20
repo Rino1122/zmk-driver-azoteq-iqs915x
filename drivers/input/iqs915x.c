@@ -224,17 +224,15 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_CONFIG_SETTINGS:
-    // ジェスチャーエンジン有効化（イベントモード）
-    // 省電力のためイベントモードを使用（IQS915X_EVENT_MODE）
-    // カーソル移動(TP_EVENT)とジェスチャー(GESTURE_EVENT)の両方を有効化
+    // ジェスチャーエンジン有効化
+    // テスト: ストリーミングモードにするため、EVENT_MODEを外す
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                              IQS915X_EVENT_MODE | IQS915X_GESTURE_EVENT |
-                                  IQS915X_TP_EVENT);
+                              IQS915X_GESTURE_EVENT | IQS915X_TP_EVENT);
     if (ret < 0) {
       LOG_ERR("Failed to configure settings: %d", ret);
       return;
     }
-    LOG_DBG("Init: Config settings written (event mode + tp event)");
+    LOG_DBG("Init: Config settings written (streaming mode Test)");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
 
@@ -313,10 +311,20 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       ret = iqs915x_write_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
                                 config->report_rate_ms);
       if (ret < 0) {
-        LOG_ERR("Failed to configure report rate: %d", ret);
+        LOG_ERR("Failed to configure active report rate: %d", ret);
         return;
       }
-      LOG_DBG("Init: Report rate set to %d ms", config->report_rate_ms);
+
+      // テスト: Idle-Touchモードに入った場合でもサンプリングレートを維持させる
+      ret = iqs915x_write_reg16(dev, IQS915X_IDLE_TOUCH_REPORT_RATE,
+                                config->report_rate_ms);
+      if (ret < 0) {
+        LOG_ERR("Failed to configure idle-touch report rate: %d", ret);
+        return;
+      }
+
+      LOG_DBG("Init: Report rates (Active/Idle-Touch) set to %d ms",
+              config->report_rate_ms);
     }
     data->init_step = INIT_VERIFY_RESET;
     break;
