@@ -478,6 +478,7 @@ static void iqs915x_work_handler(struct k_work *work) {
     }
   } else if (tp_movement) {
     if (stream.rel_x != 0 || stream.rel_y != 0) {
+      LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x, stream.rel_y);
       input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
       input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
     }
