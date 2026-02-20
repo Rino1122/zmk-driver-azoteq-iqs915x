@@ -224,15 +224,17 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_CONFIG_SETTINGS:
-    // ジェスチャーエンジン有効化
-    // テスト: ストリーミングモードにするため、EVENT_MODEを外す
+    // ジェスチャーエンジン有効化（イベントモード）
+    // 省電力のためイベントモードを使用（IQS915X_EVENT_MODE）
+    // カーソル移動(TP_EVENT)とジェスチャー(GESTURE_EVENT)の両方を有効化
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                              IQS915X_GESTURE_EVENT | IQS915X_TP_EVENT);
+                              IQS915X_EVENT_MODE | IQS915X_GESTURE_EVENT |
+                                  IQS915X_TP_EVENT);
     if (ret < 0) {
       LOG_ERR("Failed to configure settings: %d", ret);
       return;
     }
-    LOG_DBG("Init: Config settings written (streaming mode Test)");
+    LOG_DBG("Init: Config settings written (event mode + tp event)");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
 
@@ -366,129 +368,135 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 }
 
 /* ============================================================
- * メインワークハンドラ
+ * メインスレッド
  *
- * RDY割り込みで呼び出され、ストリーミングデータをraw読み取りする。
+ * RDY割り込みでセマフォが解放され、ストリーミングデータをraw読み取りする。
  * IQS9150はRESTART方式の読み取りに非対応のため、
  * i2c_read（レジスタアドレスなし）で16バイトを一括読み取りする。
  * ============================================================ */
-static void iqs915x_work_handler(struct k_work *work) {
-  struct iqs915x_data *data = CONTAINER_OF(work, struct iqs915x_data, work);
+static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
+  struct iqs915x_data *data = p1;
   const struct device *dev = data->dev;
   const struct iqs915x_config *config = dev->config;
   int ret;
 
-  // 初期化中はステップハンドラに委譲（書き込みのみ）
-  if (!data->initialized) {
-    iqs915x_init_step_handler(dev);
-    return;
-  }
+  while (true) {
+    // RDY割り込みを待機
+    k_sem_take(&data->rdy_sem, K_FOREVER);
 
-  // ストリーミングデータをraw読み取り
-  struct iqs915x_stream_data stream;
-  ret = iqs915x_read_stream(dev, &stream);
-  if (ret < 0) {
-    LOG_ERR("Failed to read stream: %d", ret);
-    return;
-  }
-
-  // IQS915xのランタイムリセット検出
-  // NVM非搭載のため、リセット時は全設定が失われる → 再初期化が必須
-  //
-  // 注意: 初期化完了直後の最初の読み取りではSHOW_RESETを無視する。
-  // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
-  // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
-  if (stream.info_flags & IQS915X_SHOW_RESET) {
-    LOG_WRN("IQS915x runtime reset detected (flags=0x%04x), re-initializing...",
-            stream.info_flags);
-    data->initialized = false;
-    data->init_step = INIT_ACK_RESET;
-    data->init_data_offset = 0;
-    data->active_hold = false;
-    data->buttons_pressed = 0;
-    iqs915x_init_step_handler(dev);
-    return;
-  }
-
-  // トラックパッドデータの処理
-  bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
-  bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
-
-  // 診断: ジェスチャーフラグが非ゼロのときにログ出力
-  if (stream.gesture_sf || stream.gesture_tf) {
-    LOG_DBG("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
-            stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
-            (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
-            stream.trackpad_flags);
-  }
-
-  if (!scroll) {
-    data->scroll_x_acc = 0;
-    data->scroll_y_acc = 0;
-  }
-
-  // タップジェスチャー判定
-  uint16_t button_code;
-  bool button_pressed = false;
-  if (stream.gesture_sf & IQS915X_SINGLE_TAP) {
-    button_pressed = true;
-    button_code = INPUT_BTN_0;
-  } else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP) {
-    button_pressed = true;
-    button_code = INPUT_BTN_1;
-  }
-
-  // プレス＆ホールドの状態遷移
-  bool hold_became_active =
-      (stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && !data->active_hold;
-  bool hold_released =
-      !(stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && data->active_hold;
-
-  // 移動とジェスチャーの処理
-  if (hold_became_active) {
-    input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-    data->active_hold = true;
-  } else if (hold_released) {
-    input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-    data->active_hold = false;
-  } else if (button_pressed) {
-    k_work_cancel_delayable(&data->button_release_work);
-    input_report_key(dev, button_code, 1, true, K_FOREVER);
-    data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
-    k_work_schedule(&data->button_release_work, K_MSEC(100));
-  } else if (scroll) {
-    // スクロール: GESTURE_X/Yをスクロールデルタとして使用
-    // (REL_X/REL_Yはスクロール中はゼロ)
-    int16_t gx = (int16_t)stream.gesture_x;
-    int16_t gy = (int16_t)stream.gesture_y;
-    int16_t scroll_div = config->scroll_divisor;
-    if (gx != 0) {
-      if (!config->natural_scroll_x) {
-        gx *= -1;
-      }
-      data->scroll_x_acc += gx;
-      if (abs(data->scroll_x_acc) >= scroll_div) {
-        input_report_rel(dev, INPUT_REL_HWHEEL, data->scroll_x_acc / scroll_div,
-                         true, K_FOREVER);
-        data->scroll_x_acc %= scroll_div;
-      }
+    // 初期化中はステップハンドラに委譲（書き込みのみ）
+    if (!data->initialized) {
+      iqs915x_init_step_handler(dev);
+      continue;
     }
-    if (gy != 0) {
-      if (config->natural_scroll_y) {
-        gy *= -1;
-      }
-      data->scroll_y_acc += gy;
-      if (abs(data->scroll_y_acc) >= scroll_div) {
-        input_report_rel(dev, INPUT_REL_WHEEL, data->scroll_y_acc / scroll_div,
-                         true, K_FOREVER);
-        data->scroll_y_acc %= scroll_div;
-      }
+
+    // ストリーミングデータをraw読み取り
+    struct iqs915x_stream_data stream;
+    ret = iqs915x_read_stream(dev, &stream);
+    if (ret < 0) {
+      LOG_ERR("Failed to read stream: %d", ret);
+      continue;
     }
-  } else if (tp_movement) {
-    if (stream.rel_x != 0 || stream.rel_y != 0) {
-      LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x, stream.rel_y);
-      input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
-      input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
+
+    // IQS915xのランタイムリセット検出
+    // NVM非搭載のため、リセット時は全設定が失われる → 再初期化が必須
+    //
+    // 注意: 初期化完了直後の最初の読み取りではSHOW_RESETを無視する。
+    // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
+    // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
+    if (stream.info_flags & IQS915X_SHOW_RESET) {
+      LOG_WRN(
+          "IQS915x runtime reset detected (flags=0x%04x), re-initializing...",
+          stream.info_flags);
+      data->initialized = false;
+      data->init_step = INIT_ACK_RESET;
+      data->init_data_offset = 0;
+      data->active_hold = false;
+      data->buttons_pressed = 0;
+      iqs915x_init_step_handler(dev);
+      continue;
+    }
+
+    // トラックパッドデータの処理
+    bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
+    bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
+
+    // 診断: ジェスチャーフラグが非ゼロのときにログ出力
+    if (stream.gesture_sf || stream.gesture_tf) {
+      LOG_DBG("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
+              stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
+              (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
+              stream.trackpad_flags);
+    }
+
+    if (!scroll) {
+      data->scroll_x_acc = 0;
+      data->scroll_y_acc = 0;
+    }
+
+    // タップジェスチャー判定
+    uint16_t button_code;
+    bool button_pressed = false;
+    if (stream.gesture_sf & IQS915X_SINGLE_TAP) {
+      button_pressed = true;
+      button_code = INPUT_BTN_0;
+    } else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP) {
+      button_pressed = true;
+      button_code = INPUT_BTN_1;
+    }
+
+    // プレス＆ホールドの状態遷移
+    bool hold_became_active =
+        (stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && !data->active_hold;
+    bool hold_released =
+        !(stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && data->active_hold;
+
+    // 移動とジェスチャーの処理
+    if (hold_became_active) {
+      input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+      data->active_hold = true;
+    } else if (hold_released) {
+      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+      data->active_hold = false;
+    } else if (button_pressed) {
+      k_work_cancel_delayable(&data->button_release_work);
+      input_report_key(dev, button_code, 1, true, K_FOREVER);
+      data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
+      k_work_schedule(&data->button_release_work, K_MSEC(100));
+    } else if (scroll) {
+      // スクロール: GESTURE_X/Yをスクロールデルタとして使用
+      // (REL_X/REL_Yはスクロール中はゼロ)
+      int16_t gx = (int16_t)stream.gesture_x;
+      int16_t gy = (int16_t)stream.gesture_y;
+      int16_t scroll_div = config->scroll_divisor;
+      if (gx != 0) {
+        if (!config->natural_scroll_x) {
+          gx *= -1;
+        }
+        data->scroll_x_acc += gx;
+        if (abs(data->scroll_x_acc) >= scroll_div) {
+          input_report_rel(dev, INPUT_REL_HWHEEL,
+                           data->scroll_x_acc / scroll_div, true, K_FOREVER);
+          data->scroll_x_acc %= scroll_div;
+        }
+      }
+      if (gy != 0) {
+        if (config->natural_scroll_y) {
+          gy *= -1;
+        }
+        data->scroll_y_acc += gy;
+        if (abs(data->scroll_y_acc) >= scroll_div) {
+          input_report_rel(dev, INPUT_REL_WHEEL,
+                           data->scroll_y_acc / scroll_div, true, K_FOREVER);
+          data->scroll_y_acc %= scroll_div;
+        }
+      }
+    } else if (tp_movement) {
+      if (stream.rel_x != 0 || stream.rel_y != 0) {
+        LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x, stream.rel_y);
+        input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
+        input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
+      }
     }
   }
 }
@@ -502,7 +510,7 @@ static void iqs915x_rdy_handler(const struct device *port,
   struct iqs915x_data *data = CONTAINER_OF(cb, struct iqs915x_data, rdy_cb);
 
   LOG_DBG("rdy_handler called");
-  k_work_submit(&data->work);
+  k_sem_give(&data->rdy_sem);
 }
 
 /* ============================================================
@@ -523,9 +531,16 @@ static int iqs915x_init(const struct device *dev) {
   data->work_state = WORK_READ_DATA;
   data->initialized = false;
 
-  k_work_init(&data->work, iqs915x_work_handler);
+  k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
+
+  // 専用スレッドの起動 (優先度: 高め K_PRIO_COOP(2))
+  k_thread_create(&data->thread, data->thread_stack,
+                  K_KERNEL_STACK_SIZEOF(data->thread_stack),
+                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_COOP(2), 0,
+                  K_NO_WAIT);
+  k_thread_name_set(&data->thread, "iqs915x");
 
   // リセットGPIOの設定（オプショナル）
   if (config->reset_gpio.port) {

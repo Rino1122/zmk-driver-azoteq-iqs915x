@@ -312,7 +312,12 @@ struct iqs915x_config {
 struct iqs915x_data {
     const struct device *dev;
     struct gpio_callback rdy_cb;
-    struct k_work work;
+    
+    // 専用スレッド用
+    struct k_sem rdy_sem;
+    struct k_thread thread;
+    K_KERNEL_STACK_MEMBER(thread_stack, 1024);
+
     struct k_work_delayable button_release_work;
 
     // ステートマシン
