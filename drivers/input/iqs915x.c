@@ -501,6 +501,7 @@ static void iqs915x_rdy_handler(const struct device *port,
                                 gpio_port_pins_t pins) {
   struct iqs915x_data *data = CONTAINER_OF(cb, struct iqs915x_data, rdy_cb);
 
+  LOG_DBG("rdy_handler called");
   k_work_submit(&data->work);
 }
 
