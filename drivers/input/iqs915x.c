@@ -386,14 +386,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
   int ret;
 
   while (true) {
-    // RDY割り込みを待機
-    k_sem_take(&data->rdy_sem, K_FOREVER);
-
-    // 初期化中はステップハンドラに委譲（書き込みのみ）
     if (!data->initialized) {
+      // 初期化中はRDYが来なくてもタイムアウト(20ms)で強制的に次のステップへ進み、
+      // マスターからのI2C通信（クロックストレッチ）によってICをウェイクアップさせる。
+      // これにより、初期化中にICが低消費電力モードに入ったり、イベントモードに
+      // 移行してRDYがアサートされなくなることによる初期化ストップを防ぐ。
+      k_sem_take(&data->rdy_sem, K_MSEC(20));
       iqs915x_init_step_handler(dev);
       continue;
     }
+
+    // 通常動作時はRDY割り込みを待機
+    k_sem_take(&data->rdy_sem, K_FOREVER);
 
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
