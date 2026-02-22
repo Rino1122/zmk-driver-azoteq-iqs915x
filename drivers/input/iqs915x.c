@@ -304,10 +304,10 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       }
       LOG_DBG("Init: Tap time set to %d ms", config->tap_time);
     }
-    data->init_step = INIT_REPORT_RATE;
+    data->init_step = INIT_ACTIVE_REPORT_RATE;
     break;
 
-  case INIT_REPORT_RATE:
+  case INIT_ACTIVE_REPORT_RATE:
     // DTSでreport-rate-msが指定されている場合のみ書き込み
     if (config->report_rate_ms > 0) {
       ret = iqs915x_write_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
@@ -316,7 +316,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to configure active report rate: %d", ret);
         return;
       }
+      LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
+    }
+    data->init_step = INIT_IDLE_TOUCH_REPORT_RATE;
+    break;
 
+  case INIT_IDLE_TOUCH_REPORT_RATE:
+    if (config->report_rate_ms > 0) {
       // テスト: Idle-Touchモードに入った場合でもサンプリングレートを維持させる
       ret = iqs915x_write_reg16(dev, IQS915X_IDLE_TOUCH_REPORT_RATE,
                                 config->report_rate_ms);
@@ -324,8 +330,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to configure idle-touch report rate: %d", ret);
         return;
       }
-
-      LOG_DBG("Init: Report rates (Active/Idle-Touch) set to %d ms",
+      LOG_DBG("Init: Idle-Touch report rate set to %d ms",
               config->report_rate_ms);
     }
     data->init_step = INIT_VERIFY_RESET;
@@ -413,7 +418,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       data->init_data_offset = 0;
       data->active_hold = false;
       data->buttons_pressed = 0;
-      iqs915x_init_step_handler(dev);
       continue;
     }
 
