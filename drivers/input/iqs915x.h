@@ -252,6 +252,8 @@
 
 // 初期化ステップ: iqs915x_setup中に1ステップずつ進行
 enum iqs915x_init_step {
+    INIT_SOFTWARE_RESET,           // ソフトウェアリセット発行
+    INIT_WAIT_SOFTWARE_RESET,      // ソフトウェアリセット完了待機
     INIT_ACK_RESET,                // リセットACK
     INIT_WRITE_INIT_DATA,          // init-dataブロック書き込み（複数RDYサイクル）
     INIT_CONFIG_SETTINGS,          // イベントモード・ジェスチャーイベント設定
@@ -328,7 +330,7 @@ struct iqs915x_data {
     enum iqs915x_work_state work_state;  // 通常動作ステート
     bool initialized;                    // 初期化完了フラグ
     uint16_t init_data_offset;           // init-data書き込み進捗（バイトオフセット）
-    uint8_t reati_wait_count;            // Re-ATI完了待機のリトライカウンタ
+    uint8_t wait_count;                  // SW ResetやRe-ATIなどの待機リトライカウンタ
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;
