@@ -250,7 +250,19 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       uint16_t chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
       uint16_t addr = IQS915X_INIT_DATA_BASE_ADDR + offset;
 
-      ret = iqs915x_write_block(dev, addr, &config->init_data[offset], chunk);
+      uint8_t buffer[IQS915X_INIT_WRITE_CHUNK_SIZE];
+      memcpy(buffer, &config->init_data[offset], chunk);
+
+      // 初期化中のブロック書き込みで、通信手法（クロックストレッチ無効化）などが
+      // 即時反映されて後続データが欠損するのを防ぐため、マスク処理を行う
+      for (int i = 0; i < chunk; i++) {
+        uint16_t current_addr = addr + i;
+        if (current_addr == IQS915X_CONFIG_SETTINGS) {
+          buffer[i] &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
+        }
+      }
+
+      ret = iqs915x_write_block(dev, addr, buffer, chunk);
       if (ret < 0) {
         LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
         return; // 次のRDYでリトライ
