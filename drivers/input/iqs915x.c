@@ -254,11 +254,19 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       memcpy(buffer, &config->init_data[offset], chunk);
 
       // 初期化中のブロック書き込みで、通信手法（クロックストレッチ無効化）などが
-      // 即時反映されて後続データが欠損するのを防ぐため、マスク処理を行う
+      // 即時反映されて後続データが欠損するのを防ぎ、さらに
+      // 予期せぬRe-ATIやリセットの暴発を完全に防ぐマスク処理を適用
       for (int i = 0; i < chunk; i++) {
         uint16_t current_addr = addr + i;
         if (current_addr == IQS915X_CONFIG_SETTINGS) {
           buffer[i] &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
+        } else if (current_addr == IQS915X_SYSTEM_CONTROL) {
+          // System Control (0x11BC / 0x11BD) を強制的かつ完全にゼロクリア
+          // (チャンク書き込み中の未明のRe-ATI,
+          // Reset発動によるICのハングやNACKを防ぐ)
+          buffer[i] = 0x00;
+        } else if (current_addr == IQS915X_SYSTEM_CONTROL + 1) {
+          buffer[i] = 0x00;
         }
       }
 
@@ -316,6 +324,11 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     //   初期化ポーリングに必須。1だとRDY外通信で0xEEEEが返る）
     // - Terminate Comms = 0: I2C STOPでウィンドウ終了（ドライバの前提）
     config_settings &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
+
+    // 【検証用パッチ】ノイズ誤検知によるRDY連発を防ぐため、
+    // 座標移動とジェスチャー以外のイベント（SwitchとTP
+    // Touch）をマスクして無効化する
+    config_settings &= ~(BIT(14) | BIT(13));
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, config_settings);
     if (ret < 0) {
