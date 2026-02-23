@@ -465,7 +465,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     }
     LOG_DBG("Init: Final ACK reset + Re-ATI sent");
     data->init_step = INIT_WAIT_REATI;
-    data->reati_wait_count = 0;
+    data->wait_count = 0;
     break;
   }
 
