@@ -358,9 +358,10 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_FINAL_ACK_RESET:
-    // リセットフラグをクリア
+    // リセットフラグをクリアし、各種設定を反映させるためにRe-ATIを実行
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
-                              IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
+                              IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET |
+                                  IQS915X_REATI_TP | IQS915X_REATI_ALP);
     if (ret < 0) {
       LOG_ERR("Failed to final ACK reset: %d", ret);
       return;
@@ -397,6 +398,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       // 初期化中は電源投入直後の深い省電力等でRDYが出ない場合に備え、
       // 50msごとにタイムアウトさせて強制的に初期化ステップへ進み、
       // I2C通信(クロックストレッチ)を送りつけてウェイクアップさせます。
+      // また、すでにRDYがアクティブな場合はエッジ待ちをせず即座に進行します。
+      if (gpio_pin_get_dt(&config->rdy_gpio) > 0) {
+        k_sem_give(&data->rdy_sem);
+      }
       k_sem_take(&data->rdy_sem, K_MSEC(50));
       iqs915x_init_step_handler(dev);
       continue;
