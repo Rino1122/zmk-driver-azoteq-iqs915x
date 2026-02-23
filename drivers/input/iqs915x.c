@@ -160,14 +160,10 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   switch (data->init_step) {
   case INIT_ACK_RESET:
-    // リセットフラグをクリア（Activeモード + ACK Reset）
-    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
-                              IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
-    if (ret < 0) {
-      LOG_ERR("Failed to ACK reset: %d", ret);
-      return; // 次のRDYでリトライ
-    }
-    LOG_DBG("Init: ACK reset sent");
+    // データシートの推奨に従い、初期化が完了するまではAck Resetを送信せず
+    // Show Resetフラグを維持することで、強制的にストリーミングモード状態
+    // （RDY連発）を作り出し、初期設定データを最速で書き込みます。
+    LOG_DBG("Init: Skipping initial ACK reset to retain Show Reset flag");
     data->init_step = INIT_WRITE_INIT_DATA;
     data->init_data_offset = 0;
     break;
@@ -397,18 +393,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
   int ret;
 
   while (true) {
+    // Show Resetフラグを維持しているため、初期化中もイベントが
+    // 発生し続けRDYが連発します。よってタイムアウトは不要です。
+    k_sem_take(&data->rdy_sem, K_FOREVER);
+
     if (!data->initialized) {
-      // 初期化中はRDYが来なくてもタイムアウト(20ms)で強制的に次のステップへ進み、
-      // マスターからのI2C通信（クロックストレッチ）によってICをウェイクアップさせる。
-      // これにより、初期化中にICが低消費電力モードに入ったり、イベントモードに
-      // 移行してRDYがアサートされなくなることによる初期化ストップを防ぐ。
-      k_sem_take(&data->rdy_sem, K_MSEC(20));
       iqs915x_init_step_handler(dev);
       continue;
     }
-
-    // 通常動作時はRDY割り込みを待機
-    k_sem_take(&data->rdy_sem, K_FOREVER);
 
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
