@@ -587,7 +587,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
               "re-initializing...",
               stream.info_flags);
       data->initialized = false;
-      data->init_step = INIT_ACK_RESET;
+      data->init_step = INIT_SOFTWARE_RESET;
       data->init_data_offset = 0;
       data->active_hold = false;
       data->buttons_pressed = 0;
@@ -704,7 +704,7 @@ static int iqs915x_init(const struct device *dev) {
   }
 
   data->dev = dev;
-  data->init_step = INIT_ACK_RESET;
+  data->init_step = INIT_SOFTWARE_RESET;
   data->work_state = WORK_READ_DATA;
   data->initialized = false;
 
