@@ -424,39 +424,57 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_WAIT_REATI: {
-    // ACK_RESET + Re-ATI送信後、SHOW_RESETフラグがクリアされるまで待機する。
-    // Re-ATIが完了するまでSHOW_RESETが残り続けるため、これを確認することで
-    // Re-ATI完了を間接的に検知する。
+    // ACK_RESET + Re-ATI送信後の待機ステップ。
+    // Re-ATI処理中にI2C通信を行うとICが0xEEEEを返し続け、
+    // ポーリング自体がRe-ATIの完了を妨害してしまう。
+    // そのため、Re-ATIに十分な時間（~500ms）を与えてから読み取りで確認する。
+    data->reati_wait_count++;
+
+    // Phase 1: I2C通信なしで待機（10サイクル ≈ 500ms）
+    if (data->reati_wait_count <= 10) {
+      LOG_DBG("Init: Pausing for Re-ATI (%d/10)", data->reati_wait_count);
+      break;
+    }
+
+    // Phase 2: ストリーミング読み取りでRe-ATI完了を確認
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
     if (ret < 0) {
-      LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
+      LOG_ERR("Failed to read during Re-ATI verify: %d", ret);
       return; // 次のRDYでリトライ
     }
-    data->reati_wait_count++;
 
-    if (!(stream.info_flags & IQS915X_SHOW_RESET)) {
-      // SHOW_RESETがクリアされた = ACK_RESET処理完了 & Re-ATI完了
-      LOG_INF("Init: Re-ATI complete, SHOW_RESET cleared after %d cycles",
-              data->reati_wait_count);
-      data->init_step = INIT_COMPLETE;
-      data->initialized = true;
-      data->work_state = WORK_READ_DATA;
-      data->last_info_flags = stream.info_flags;
-      LOG_INF("IQS915x initialization complete");
-    } else if (data->reati_wait_count > 200) {
-      // タイムアウト（200サイクル ≈ 10秒）: 安全のため初期化完了扱いにする
-      LOG_WRN("Init: Re-ATI wait timeout after %d cycles, proceeding anyway",
-              data->reati_wait_count);
-      data->init_step = INIT_COMPLETE;
-      data->initialized = true;
-      data->work_state = WORK_READ_DATA;
-      data->last_info_flags = 0;
-      LOG_INF("IQS915x initialization complete (timeout)");
+    if (stream.info_flags == 0xEEEE) {
+      // ICがまだ処理中（Re-ATI未完了）
+      if (data->reati_wait_count > 60) {
+        // タイムアウト（60サイクル ≈ 3秒）
+        LOG_WRN("Init: Re-ATI timeout (IC busy), proceeding anyway");
+      } else {
+        LOG_DBG("Init: IC busy (0xEEEE), cycle=%d", data->reati_wait_count);
+        break;
+      }
+    } else if (stream.info_flags & IQS915X_SHOW_RESET) {
+      // SHOW_RESETがまだ立っている（ACK_RESET未処理）
+      if (data->reati_wait_count > 60) {
+        LOG_WRN("Init: SHOW_RESET timeout (0x%04x), proceeding anyway",
+                stream.info_flags);
+      } else {
+        LOG_DBG("Init: SHOW_RESET still set (0x%04x), cycle=%d",
+                stream.info_flags, data->reati_wait_count);
+        break;
+      }
     } else {
-      LOG_DBG("Init: Waiting for Re-ATI (flags=0x%04x, cycle=%d)",
+      // 正常完了: SHOW_RESETクリア、有効なデータ
+      LOG_INF("Init: Re-ATI complete (flags=0x%04x) after %d cycles",
               stream.info_flags, data->reati_wait_count);
     }
+
+    // 完了（正常またはタイムアウト）
+    data->init_step = INIT_COMPLETE;
+    data->initialized = true;
+    data->work_state = WORK_READ_DATA;
+    data->last_info_flags = stream.info_flags;
+    LOG_INF("IQS915x initialization complete");
     break;
   }
 
