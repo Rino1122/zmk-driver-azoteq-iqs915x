@@ -338,7 +338,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_VERIFY_RESET: {
     // 最終ACKの前に一度読み取りを行う
-    // デバイスの状態を最新にしてフラグを確認する
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
     if (ret < 0) {
@@ -346,17 +345,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return;
     }
     LOG_DBG("Init: Verify reset flags: 0x%04x", stream.info_flags);
-
-    if (stream.info_flags & IQS915X_SHOW_RESET) {
-      // まだSHOW_RESETが残っている場合はACKを送信するステートへ
-      data->init_step = INIT_FINAL_ACK_RESET;
-    } else {
-      // SHOW_RESETがクリアされていれば初期化完了
-      data->init_step = INIT_COMPLETE;
-      data->initialized = true;
-      data->work_state = WORK_READ_DATA;
-      LOG_INF("IQS915x initialization complete");
-    }
+    data->init_step = INIT_FINAL_ACK_RESET;
     break;
   }
 
@@ -369,8 +358,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return;
     }
     LOG_DBG("Init: Final ACK reset sent");
-    // 次の通信ウィンドウで状態が更新されたか必ず確認する
-    data->init_step = INIT_VERIFY_RESET;
+    data->init_step = INIT_COMPLETE;
+    data->initialized = true;
+    data->work_state = WORK_READ_DATA;
+    // 初回の読み取りではSHOW_RESETを無視するフラグ
+    data->last_info_flags = 0xFFFF;
+    LOG_INF("IQS915x initialization complete");
     break;
 
   case INIT_COMPLETE:
@@ -414,21 +407,25 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
     }
 
     // IQS915xのランタイムリセット検出
-    // NVM非搭載のため、リセット時は全設定が失われる → 再初期化が必須
-    //
-    // 注意: 初期化完了直後の最初の読み取りではSHOW_RESETを無視する。
-    // 初期化シーケンスは書き込みのみ（ストリーミング読み取りなし）のため、
-    // INIT_ACK_RESETで送ったフラグクリアが反映されず、SHOW_RESETが残留する。
+    // 初期化直後の最初の読み取りでは、ACK_RESETがIC内部で反映される前の古いフラグを
+    // 読んでしまうことがあるため、1回だけSHOW_RESETを意図的に無視する。
     if (stream.info_flags & IQS915X_SHOW_RESET) {
-      LOG_WRN(
-          "IQS915x runtime reset detected (flags=0x%04x), re-initializing...",
-          stream.info_flags);
-      data->initialized = false;
-      data->init_step = INIT_ACK_RESET;
-      data->init_data_offset = 0;
-      data->active_hold = false;
-      data->buttons_pressed = 0;
-      continue;
+      if (data->last_info_flags == 0xFFFF) {
+        LOG_DBG("Ignoring stale SHOW_RESET flag from first read");
+        data->last_info_flags = stream.info_flags;
+      } else {
+        LOG_WRN(
+            "IQS915x runtime reset detected (flags=0x%04x), re-initializing...",
+            stream.info_flags);
+        data->initialized = false;
+        data->init_step = INIT_ACK_RESET;
+        data->init_data_offset = 0;
+        data->active_hold = false;
+        data->buttons_pressed = 0;
+        continue;
+      }
+    } else {
+      data->last_info_flags = stream.info_flags;
     }
 
     // トラックパッドデータの処理
