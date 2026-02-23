@@ -419,13 +419,46 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to final ACK reset: %d", ret);
       return;
     }
-    LOG_DBG("Init: Final ACK reset sent");
-    data->init_step = INIT_COMPLETE;
-    data->initialized = true;
-    data->work_state = WORK_READ_DATA;
-    // 初回の読み取りではSHOW_RESETを無視するフラグ
-    data->last_info_flags = 0xFFFF;
-    LOG_INF("IQS915x initialization complete");
+    LOG_DBG("Init: Final ACK reset + Re-ATI sent");
+    data->init_step = INIT_WAIT_REATI;
+    data->reati_wait_count = 0;
+    break;
+  }
+
+  case INIT_WAIT_REATI: {
+    // ACK_RESET + Re-ATI送信後、SHOW_RESETフラグがクリアされるまで待機する。
+    // Re-ATIが完了するまでSHOW_RESETが残り続けるため、これを確認することで
+    // Re-ATI完了を間接的に検知する。
+    struct iqs915x_stream_data stream;
+    ret = iqs915x_read_stream(dev, &stream);
+    if (ret < 0) {
+      LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
+      return; // 次のRDYでリトライ
+    }
+    data->reati_wait_count++;
+
+    if (!(stream.info_flags & IQS915X_SHOW_RESET)) {
+      // SHOW_RESETがクリアされた = ACK_RESET処理完了 & Re-ATI完了
+      LOG_INF("Init: Re-ATI complete, SHOW_RESET cleared after %d cycles",
+              data->reati_wait_count);
+      data->init_step = INIT_COMPLETE;
+      data->initialized = true;
+      data->work_state = WORK_READ_DATA;
+      data->last_info_flags = stream.info_flags;
+      LOG_INF("IQS915x initialization complete");
+    } else if (data->reati_wait_count > 200) {
+      // タイムアウト（200サイクル ≈ 10秒）: 安全のため初期化完了扱いにする
+      LOG_WRN("Init: Re-ATI wait timeout after %d cycles, proceeding anyway",
+              data->reati_wait_count);
+      data->init_step = INIT_COMPLETE;
+      data->initialized = true;
+      data->work_state = WORK_READ_DATA;
+      data->last_info_flags = 0;
+      LOG_INF("IQS915x initialization complete (timeout)");
+    } else {
+      LOG_DBG("Init: Waiting for Re-ATI (flags=0x%04x, cycle=%d)",
+              stream.info_flags, data->reati_wait_count);
+    }
     break;
   }
 
@@ -473,25 +506,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
     }
 
     // IQS915xのランタイムリセット検出
-    // 初期化直後の最初の読み取りでは、ACK_RESETがIC内部で反映される前の古いフラグを
-    // 読んでしまうことがあるため、1回だけSHOW_RESETを意図的に無視する。
+    // INIT_WAIT_REATIステップでSHOW_RESETクリアを確認済みなので、
+    // 通常モードでSHOW_RESETが立っている場合は真のランタイムリセット。
     if (stream.info_flags & IQS915X_SHOW_RESET) {
-      if (data->last_info_flags == 0xFFFF) {
-        LOG_DBG("Ignoring stale SHOW_RESET flag from first read");
-        data->last_info_flags = stream.info_flags;
-      } else {
-        LOG_WRN("IQS915x runtime reset detected (flags=0x%04x), "
-                "re-initializing...",
-                stream.info_flags);
-        data->initialized = false;
-        data->init_step = INIT_ACK_RESET;
-        data->init_data_offset = 0;
-        data->active_hold = false;
-        data->buttons_pressed = 0;
-        continue;
-      }
-    } else {
-      data->last_info_flags = stream.info_flags;
+      LOG_WRN("IQS915x runtime reset detected (flags=0x%04x), "
+              "re-initializing...",
+              stream.info_flags);
+      data->initialized = false;
+      data->init_step = INIT_ACK_RESET;
+      data->init_data_offset = 0;
+      data->active_hold = false;
+      data->buttons_pressed = 0;
+      continue;
     }
 
     // トラックパッドデータの処理

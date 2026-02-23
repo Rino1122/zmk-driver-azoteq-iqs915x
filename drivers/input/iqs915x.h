@@ -263,6 +263,7 @@ enum iqs915x_init_step {
     INIT_IDLE_TOUCH_REPORT_RATE,   // レポートレート（Idle-Touch）
     INIT_VERIFY_RESET,             // リセット状態確認（ダミー読み取り）
     INIT_FINAL_ACK_RESET,          // 最終リセットACK（Show Resetフラグクリア）
+    INIT_WAIT_REATI,               // Re-ATI完了待機（SHOW_RESETクリアを確認）
     INIT_COMPLETE,                 // 初期化完了
 };
 
@@ -326,6 +327,7 @@ struct iqs915x_data {
     enum iqs915x_work_state work_state;  // 通常動作ステート
     bool initialized;                    // 初期化完了フラグ
     uint16_t init_data_offset;           // init-data書き込み進捗（バイトオフセット）
+    uint8_t reati_wait_count;            // Re-ATI完了待機のリトライカウンタ
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;
