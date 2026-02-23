@@ -404,15 +404,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_FINAL_ACK_RESET: {
-    uint16_t sys_ctrl = 0;
-    ret = iqs915x_read_reg16(dev, IQS915X_SYSTEM_CONTROL, &sys_ctrl);
-    if (ret < 0) {
-      LOG_ERR("Failed to read system control: %d", ret);
-      return;
-    }
-
-    // リセットフラグをクリアし、各種設定を反映させるためにRe-ATIを実行
-    sys_ctrl |= (IQS915X_ACK_RESET | IQS915X_REATI_TP | IQS915X_REATI_ALP);
+    // リセットフラグをクリアし、各種設定を反映させるためにRe-ATIを実行。
+    // 重要: IQS915xは1回のRDYサイクルにつき1つのI2Cトランザクションしか
+    // 許可しないため、read-modify-writeパターンは使えない（readで
+    // 通信ウィンドウが閉じ、writeが無視される）。
+    // Mode Select = 0x00 (Active Mode) のまま直接書き込む。
+    uint16_t sys_ctrl =
+        IQS915X_ACK_RESET | IQS915X_REATI_TP | IQS915X_REATI_ALP;
 
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, sys_ctrl);
     if (ret < 0) {
