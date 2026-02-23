@@ -165,6 +165,7 @@
 // 注意: TERMINATE_COMMS=0（デフォルト）ではI2C STOPで通信ウィンドウが閉じる。
 // データシート推奨はI2C STOPでの自動終了のため、本ドライバでは
 // TERMINATE_COMMSを設定せず、1トランザクション/RDYで動作する。
+#define IQS915X_FORCE_COMMS_METHOD BIT(4)    // 0: クロックストレッチ, 1: コマンド要求方式
 #define IQS915X_TERMINATE_COMMS BIT(6)      // 1: 手動終了（0xEEEE書込み必要）
 #define IQS915X_EVENT_MODE BIT(8)           // 0: ストリーミング, 1: イベントモード
 #define IQS915X_GESTURE_EVENT BIT(9)        // ジェスチャーイベント有効化

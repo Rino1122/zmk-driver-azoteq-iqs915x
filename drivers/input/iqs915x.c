@@ -256,8 +256,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       config_settings = 0x000E; // ALP Re-ATI, TP Re-ATI, ALP ATI Mode (Full)
     }
 
-    // GUIで出力した init-data (ヘッダファイル) の設定値に完全に従うため、
-    // ここではドライバ側で強制的に Event Mode などのフラグを上書きしません。
+    // ドライバの動作に必要な通信設定を強制適用:
+    // - Force Comms Method = 0:
+    // RDY外通信時にクロックストレッチで応答（ドライバの
+    //   初期化ポーリングに必須。1だとRDY外通信で0xEEEEが返る）
+    // - Terminate Comms = 0: I2C STOPでウィンドウ終了（ドライバの前提）
+    config_settings &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, config_settings);
     if (ret < 0) {
