@@ -338,7 +338,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_VERIFY_RESET: {
     // 最終ACKの前に一度読み取りを行う
-    // これにより、デバイスの状態を最新にしてからACKを送る
+    // デバイスの状態を最新にしてフラグを確認する
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
     if (ret < 0) {
@@ -346,14 +346,22 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return;
     }
     LOG_DBG("Init: Verify reset flags: 0x%04x", stream.info_flags);
-    data->init_step = INIT_FINAL_ACK_RESET;
+
+    if (stream.info_flags & IQS915X_SHOW_RESET) {
+      // まだSHOW_RESETが残っている場合はACKを送信するステートへ
+      data->init_step = INIT_FINAL_ACK_RESET;
+    } else {
+      // SHOW_RESETがクリアされていれば初期化完了
+      data->init_step = INIT_COMPLETE;
+      data->initialized = true;
+      data->work_state = WORK_READ_DATA;
+      LOG_INF("IQS915x initialization complete");
+    }
     break;
   }
 
   case INIT_FINAL_ACK_RESET:
-    // 初期化シーケンスの最後に再度リセットフラグをクリア
-    // これにより、初期化完了直後の最初の読み取りでSHOW_RESETが
-    // 残留しているのを防ぐ。
+    // リセットフラグをクリア
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
                               IQS915X_MODE_ACTIVE | IQS915X_ACK_RESET);
     if (ret < 0) {
@@ -361,10 +369,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       return;
     }
     LOG_DBG("Init: Final ACK reset sent");
-    data->init_step = INIT_COMPLETE;
-    data->initialized = true;
-    data->work_state = WORK_READ_DATA;
-    LOG_INF("IQS915x initialization complete");
+    // 次の通信ウィンドウで状態が更新されたか必ず確認する
+    data->init_step = INIT_VERIFY_RESET;
     break;
 
   case INIT_COMPLETE:
