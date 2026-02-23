@@ -393,14 +393,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
   int ret;
 
   while (true) {
-    // Show Resetフラグを維持しているため、初期化中もイベントが
-    // 発生し続けRDYが連発します。よってタイムアウトは不要です。
-    k_sem_take(&data->rdy_sem, K_FOREVER);
-
     if (!data->initialized) {
+      // 初期化中は電源投入直後の深い省電力等でRDYが出ない場合に備え、
+      // 50msごとにタイムアウトさせて強制的に初期化ステップへ進み、
+      // I2C通信(クロックストレッチ)を送りつけてウェイクアップさせます。
+      k_sem_take(&data->rdy_sem, K_MSEC(50));
       iqs915x_init_step_handler(dev);
       continue;
     }
+
+    // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
+    k_sem_take(&data->rdy_sem, K_FOREVER);
 
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
