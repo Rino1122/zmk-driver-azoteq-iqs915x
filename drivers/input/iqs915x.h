@@ -257,7 +257,6 @@ enum iqs915x_init_step {
     INIT_WAIT_SOFTWARE_RESET,      // ソフトウェアリセット完了待機
     INIT_ACK_RESET,                // リセットACK
     INIT_WRITE_INIT_DATA,          // init-dataブロック書き込み（複数RDYサイクル）
-    INIT_CONFIG_SETTINGS,          // イベントモード・ジェスチャーイベント設定
     INIT_SINGLE_FINGER_GESTURES,   // 1本指ジェスチャー有効化
     INIT_HOLD_TIME,                // プレス＆ホールド判定時間
     INIT_TWO_FINGER_GESTURES,      // 2本指ジェスチャー有効化

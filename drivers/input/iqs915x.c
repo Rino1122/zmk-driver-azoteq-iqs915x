@@ -334,7 +334,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   case INIT_WRITE_INIT_DATA: {
     if (!config->init_data || config->init_data_len == 0) {
       LOG_DBG("Init: No init-data, skipping NVM write");
-      data->init_step = INIT_CONFIG_SETTINGS;
+      data->init_step = INIT_SINGLE_FINGER_GESTURES;
       break;
     }
 
@@ -401,30 +401,6 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       // init-data書き込み完了後は、ACK ResetとATI実行へ進む
       data->init_step = INIT_ACK_RESET;
     }
-    break;
-  }
-
-  case INIT_CONFIG_SETTINGS: {
-    // init-dataが存在する場合は、INIT_WRITE_INIT_DATAのバッファ変換で
-    // EVENT_MODE=1, FORCE_COMMS_METHOD=0, TERMINATE_COMMS=0が
-    // 既に確定しているため、このステップは不要でスキップする。
-    // init-dataがない場合のみ実際に設定を適用する。
-    if (config->init_data_len == 0) {
-      uint16_t clear_mask =
-          IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS;
-      uint16_t set_mask = IQS915X_EVENT_MODE;
-      ret = iqs915x_modify_reg16(dev, IQS915X_CONFIG_SETTINGS, clear_mask,
-                                 set_mask);
-      if (ret < 0) {
-        LOG_ERR("Failed to configure settings: %d", ret);
-        return;
-      }
-      LOG_DBG("Init: Config settings applied (no init-data)");
-    } else {
-      LOG_DBG("Init: Config settings already set by init-data buffer patch, "
-              "skipping");
-    }
-    data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
   }
 
@@ -623,7 +599,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_INF("Init: Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
       // Re-ATI完了後はDTS設定の書き込みへ進む
-      data->init_step = INIT_CONFIG_SETTINGS;
+      data->init_step = INIT_SINGLE_FINGER_GESTURES;
       break;
     }
 
@@ -632,7 +608,7 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_WRN("Init: Re-ATI timeout after %d cycles (flags=0x%04x), proceeding "
               "anyway",
               data->wait_count, stream.info_flags);
-      data->init_step = INIT_CONFIG_SETTINGS;
+      data->init_step = INIT_SINGLE_FINGER_GESTURES;
       break;
     }
 
