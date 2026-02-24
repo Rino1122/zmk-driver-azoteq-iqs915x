@@ -264,6 +264,7 @@ enum iqs915x_init_step {
     INIT_TAP_TIME,                 // タップ判定時間（オプション）
     INIT_ACTIVE_REPORT_RATE,       // レポートレート（Active）
     INIT_IDLE_TOUCH_REPORT_RATE,   // レポートレート（Idle-Touch）
+    INIT_VERIFY_EVENT_MODE,        // Event Mode有効確認（未設定なら強制設定）
     INIT_VERIFY_RESET,             // リセット状態確認（ダミー読み取り）
     INIT_FINAL_ACK_RESET,          // 最終リセットACK（Show Resetフラグクリア）
     INIT_WAIT_REATI,               // Re-ATI完了待機（SHOW_RESETクリアを確認）

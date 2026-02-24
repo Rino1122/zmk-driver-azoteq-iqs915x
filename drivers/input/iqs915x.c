@@ -550,8 +550,36 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_DBG("Init: Idle-Touch report rate set to %d ms",
               config->report_rate_ms);
     }
+    data->init_step = INIT_VERIFY_EVENT_MODE;
+    break;
+
+  case INIT_VERIFY_EVENT_MODE: {
+    // DTS設定完了後、Event Modeが有効になっているかを確認する。
+    // init-dataバッファパッチやDTS設定で設定済のはずだが、
+    // 実際にレジスタを読み返して確認する。
+    uint16_t cfg = 0;
+    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
+    if (ret < 0) {
+      LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
+      return;
+    }
+    if (cfg & IQS915X_EVENT_MODE) {
+      LOG_DBG("Init: Event Mode confirmed (CONFIG_SETTINGS=0x%04x)", cfg);
+    } else {
+      // Event Modeが無効な場合は警告を出して強制設定する
+      LOG_WRN("Init: Event Mode NOT set (CONFIG_SETTINGS=0x%04x). "
+              "Forcing Event Mode on.",
+              cfg);
+      ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
+                                cfg | IQS915X_EVENT_MODE);
+      if (ret < 0) {
+        LOG_ERR("Failed to force Event Mode: %d", ret);
+        return;
+      }
+    }
     data->init_step = INIT_VERIFY_RESET;
     break;
+  }
 
   case INIT_VERIFY_RESET: {
     struct iqs915x_stream_data stream;
