@@ -82,6 +82,7 @@ static int iqs915x_read_reg8(const struct device *dev, uint16_t reg,
 }
 
 // 16bitレジスタを読み出し、値が異なる場合のみ書き込む
+// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
                                 uint16_t val) {
   uint16_t current_val = 0;
@@ -90,10 +91,14 @@ static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
     return ret;
   if (current_val == val)
     return 0;
-  return iqs915x_write_reg16(dev, reg, val);
+  ret = iqs915x_write_reg16(dev, reg, val);
+  if (ret < 0)
+    return ret;
+  return 1; // 書き込みが発生したことを示す
 }
 
 // 8bitレジスタを読み出し、値が異なる場合のみ書き込む
+// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_update_reg8(const struct device *dev, uint16_t reg,
                                uint8_t val) {
   uint8_t current_val = 0;
@@ -102,10 +107,14 @@ static int iqs915x_update_reg8(const struct device *dev, uint16_t reg,
     return ret;
   if (current_val == val)
     return 0;
-  return iqs915x_write_reg8(dev, reg, val);
+  ret = iqs915x_write_reg8(dev, reg, val);
+  if (ret < 0)
+    return ret;
+  return 1; // 書き込みが発生したことを示す
 }
 
 // 16bitレジスタの特定ビットを変更する（リード・モディファイ・ライト）
+// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_modify_reg16(const struct device *dev, uint16_t reg,
                                 uint16_t clear_mask, uint16_t set_mask) {
   uint16_t current_val = 0;
@@ -115,10 +124,14 @@ static int iqs915x_modify_reg16(const struct device *dev, uint16_t reg,
   uint16_t new_val = (current_val & ~clear_mask) | set_mask;
   if (current_val == new_val)
     return 0;
-  return iqs915x_write_reg16(dev, reg, new_val);
+  ret = iqs915x_write_reg16(dev, reg, new_val);
+  if (ret < 0)
+    return ret;
+  return 1; // 書き込みが発生したことを示す
 }
 
 // 8bitレジスタの特定ビットを変更する
+// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_modify_reg8(const struct device *dev, uint16_t reg,
                                uint8_t clear_mask, uint8_t set_mask) {
   uint8_t current_val = 0;
@@ -128,7 +141,10 @@ static int iqs915x_modify_reg8(const struct device *dev, uint16_t reg,
   uint8_t new_val = (current_val & ~clear_mask) | set_mask;
   if (current_val == new_val)
     return 0;
-  return iqs915x_write_reg8(dev, reg, new_val);
+  ret = iqs915x_write_reg8(dev, reg, new_val);
+  if (ret < 0)
+    return ret;
+  return 1; // 書き込みが発生したことを示す
 }
 
 // バイトブロックを指定アドレスに書き込む（init-data用）
@@ -335,12 +351,24 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
       for (int i = 0; i < chunk; i++) {
         uint16_t current_addr = addr + i;
+        uint8_t original = buffer[i];
         if (current_addr == IQS915X_SYSTEM_CONTROL) {
+          // ACK_RESET(bit7), REATI_ALP(bit6), REATI_TP(bit5) は
+          // 初期化シーケンス中に誤って実行されないよう強制クリアする
           buffer[i] &= ~0xE0;
         } else if (current_addr == IQS915X_CONFIG_SETTINGS) {
+          // TERMINATE_COMMS(bit6), FORCE_COMMS_METHOD(bit4) は
+          // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアする
           buffer[i] &= ~0x50;
         } else if (current_addr == IQS915X_CONFIG_SETTINGS + 1) {
+          // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
           buffer[i] |= 0x01;
+        }
+        // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
+        if (buffer[i] != original) {
+          LOG_WRN("Init: init-data overridden at reg 0x%04x: "
+                  "init-data=0x%02x -> forced=0x%02x",
+                  current_addr, original, buffer[i]);
         }
       }
 
@@ -377,21 +405,25 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_CONFIG_SETTINGS: {
-    // 必要に応じて、Event Mode=1, Force Comms=0, Terminate Comms=0などを強制
-    uint16_t clear_mask = IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS;
-    uint16_t set_mask = IQS915X_EVENT_MODE;
-
-    // 【パッチ】もしノイズ対策等で手動・Switch・TP Touch
-    // Toggledを外したい場合は付与するが今回は最低限に。 clear_mask |= BIT(14) |
-    // BIT(13); // 必要であれば
-
-    ret = iqs915x_modify_reg16(dev, IQS915X_CONFIG_SETTINGS, clear_mask,
-                               set_mask);
-    if (ret < 0) {
-      LOG_ERR("Failed to configure settings: %d", ret);
-      return;
+    // init-dataが存在する場合は、INIT_WRITE_INIT_DATAのバッファ変換で
+    // EVENT_MODE=1, FORCE_COMMS_METHOD=0, TERMINATE_COMMS=0が
+    // 既に確定しているため、このステップは不要でスキップする。
+    // init-dataがない場合のみ実際に設定を適用する。
+    if (config->init_data_len == 0) {
+      uint16_t clear_mask =
+          IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS;
+      uint16_t set_mask = IQS915X_EVENT_MODE;
+      ret = iqs915x_modify_reg16(dev, IQS915X_CONFIG_SETTINGS, clear_mask,
+                                 set_mask);
+      if (ret < 0) {
+        LOG_ERR("Failed to configure settings: %d", ret);
+        return;
+      }
+      LOG_DBG("Init: Config settings applied (no init-data)");
+    } else {
+      LOG_DBG("Init: Config settings already set by init-data buffer patch, "
+              "skipping");
     }
-    LOG_DBG("Init: Config settings verified");
     data->init_step = INIT_SINGLE_FINGER_GESTURES;
     break;
   }
@@ -410,6 +442,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure single finger gestures: %d", ret);
       return;
     }
+    if (ret > 0 && config->init_data_len > 0) {
+      LOG_WRN("Init: SF_GESTURES_ENABLE (0x%04x) overridden from init-data "
+              "value by DTS (one_finger_tap=%d, press_and_hold=%d)",
+              IQS915X_SINGLE_FINGER_GESTURES_ENABLE, config->one_finger_tap,
+              config->press_and_hold);
+    }
     LOG_DBG("Init: Single finger gestures configured");
     data->init_step = INIT_HOLD_TIME;
     break;
@@ -421,6 +459,11 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     if (ret < 0) {
       LOG_ERR("Failed to configure hold time: %d", ret);
       return;
+    }
+    if (ret > 0 && config->init_data_len > 0) {
+      LOG_WRN("Init: HOLD_TIME (0x%04x) overridden from init-data value "
+              "by DTS (press_and_hold_time=%d ms)",
+              IQS915X_HOLD_TIME, config->press_and_hold_time);
     }
     LOG_DBG("Init: Hold time configured");
     data->init_step = INIT_TWO_FINGER_GESTURES;
@@ -439,6 +482,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     if (ret < 0) {
       LOG_ERR("Failed to configure two finger gestures: %d", ret);
       return;
+    }
+    if (ret > 0 && config->init_data_len > 0) {
+      LOG_WRN("Init: TF_GESTURES_ENABLE (0x%04x) overridden from init-data "
+              "value by DTS (two_finger_tap=%d, scroll=%d)",
+              IQS915X_TWO_FINGER_GESTURES_ENABLE, config->two_finger_tap,
+              config->scroll);
     }
     LOG_DBG("Init: Two finger gestures configured");
     data->init_step = INIT_TRACKPAD_SETTINGS;
@@ -462,6 +511,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure trackpad settings: %d", ret);
       return;
     }
+    if (ret > 0 && config->init_data_len > 0) {
+      LOG_WRN("Init: TRACKPAD_SETTINGS (0x%04x) overridden from init-data "
+              "value by DTS (flip_x=%d, flip_y=%d, switch_xy=%d)",
+              IQS915X_TRACKPAD_SETTINGS, config->flip_x, config->flip_y,
+              config->switch_xy);
+    }
     LOG_DBG("Init: Trackpad settings configured");
     data->init_step = INIT_TAP_TIME;
     break;
@@ -473,6 +528,11 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       if (ret < 0) {
         LOG_ERR("Failed to configure tap time: %d", ret);
         return;
+      }
+      if (ret > 0 && config->init_data_len > 0) {
+        LOG_WRN("Init: TAP_TIME (0x%04x) overridden from init-data value "
+                "by DTS (tap_time=%d ms)",
+                IQS915X_TAP_TIME, config->tap_time);
       }
       LOG_DBG("Init: Tap time set to %d ms", config->tap_time);
     }
@@ -487,6 +547,11 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to configure active report rate: %d", ret);
         return;
       }
+      if (ret > 0 && config->init_data_len > 0) {
+        LOG_WRN("Init: ACTIVE_REPORT_RATE (0x%04x) overridden from init-data "
+                "value by DTS (report_rate_ms=%d ms)",
+                IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
+      }
       LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
     }
     data->init_step = INIT_IDLE_TOUCH_REPORT_RATE;
@@ -499,6 +564,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       if (ret < 0) {
         LOG_ERR("Failed to configure idle-touch report rate: %d", ret);
         return;
+      }
+      if (ret > 0 && config->init_data_len > 0) {
+        LOG_WRN(
+            "Init: IDLE_TOUCH_REPORT_RATE (0x%04x) overridden from init-data "
+            "value by DTS (report_rate_ms=%d ms)",
+            IQS915X_IDLE_TOUCH_REPORT_RATE, config->report_rate_ms);
       }
       LOG_DBG("Init: Idle-Touch report rate set to %d ms",
               config->report_rate_ms);
