@@ -252,6 +252,7 @@
 
 // 初期化ステップ: iqs915x_setup中に1ステップずつ進行
 enum iqs915x_init_step {
+    INIT_CHECK_SHOW_RESET,         // SHOW_RESETフラグ確認
     INIT_SOFTWARE_RESET,           // ソフトウェアリセット発行
     INIT_WAIT_SOFTWARE_RESET,      // ソフトウェアリセット完了待機
     INIT_ACK_RESET,                // リセットACK
