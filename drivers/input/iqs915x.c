@@ -34,7 +34,8 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
  * I2C通信関数
  *
  * 書き込み: 通常のi2c_write（アドレス+データ）
- * 読み取り: i2c_write_read（スレーブアドレス+Write -> レジスタアドレス -> Repeated START -> スレーブアドレス+Read -> 読み出し -> STOP/NACK）
+ * 読み取り: i2c_write_read（スレーブアドレス+Write -> レジスタアドレス ->
+ * Repeated START -> スレーブアドレス+Read -> 読み出し -> STOP/NACK）
  *   Zephyrのi2c_write_read_dtでデータシート要件の読み取りシーケンスが完結する。
  * ストリーミング出力: 0x1014〜0x1022 の16バイト
  * ============================================================ */
@@ -85,8 +86,10 @@ static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
                                 uint16_t val) {
   uint16_t current_val = 0;
   int ret = iqs915x_read_reg16(dev, reg, &current_val);
-  if (ret < 0) return ret;
-  if (current_val == val) return 0;
+  if (ret < 0)
+    return ret;
+  if (current_val == val)
+    return 0;
   return iqs915x_write_reg16(dev, reg, val);
 }
 
@@ -95,8 +98,10 @@ static int iqs915x_update_reg8(const struct device *dev, uint16_t reg,
                                uint8_t val) {
   uint8_t current_val = 0;
   int ret = iqs915x_read_reg8(dev, reg, &current_val);
-  if (ret < 0) return ret;
-  if (current_val == val) return 0;
+  if (ret < 0)
+    return ret;
+  if (current_val == val)
+    return 0;
   return iqs915x_write_reg8(dev, reg, val);
 }
 
@@ -105,9 +110,11 @@ static int iqs915x_modify_reg16(const struct device *dev, uint16_t reg,
                                 uint16_t clear_mask, uint16_t set_mask) {
   uint16_t current_val = 0;
   int ret = iqs915x_read_reg16(dev, reg, &current_val);
-  if (ret < 0) return ret;
+  if (ret < 0)
+    return ret;
   uint16_t new_val = (current_val & ~clear_mask) | set_mask;
-  if (current_val == new_val) return 0;
+  if (current_val == new_val)
+    return 0;
   return iqs915x_write_reg16(dev, reg, new_val);
 }
 
@@ -116,9 +123,11 @@ static int iqs915x_modify_reg8(const struct device *dev, uint16_t reg,
                                uint8_t clear_mask, uint8_t set_mask) {
   uint8_t current_val = 0;
   int ret = iqs915x_read_reg8(dev, reg, &current_val);
-  if (ret < 0) return ret;
+  if (ret < 0)
+    return ret;
   uint8_t new_val = (current_val & ~clear_mask) | set_mask;
-  if (current_val == new_val) return 0;
+  if (current_val == new_val)
+    return 0;
   return iqs915x_write_reg8(dev, reg, new_val);
 }
 
@@ -230,14 +239,27 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to read Info Flags: %d", ret);
       return; // 次のRDYでリトライ
     }
-    
+
+    if (info_flags == 0xEEEE) {
+      // ICがまだビジー状態。次のRDYサイクルで再試行する
+      LOG_DBG("Init: IC busy (0xEEEE), waiting...");
+      break;
+    }
+
+    // INFO_FLAGS bit7 = SHOW_RESET。電源投入直後のリセット時にセットされる
     if (info_flags & IQS915X_SHOW_RESET) {
-      LOG_INF("Init: SHOW_RESET is set (0x%04x). Proceed to write init-data.", info_flags);
+      LOG_INF("Init: SHOW_RESET is set (0x%04x). Proceed to write init-data.",
+              info_flags);
       data->init_step = INIT_WRITE_INIT_DATA;
       data->init_data_offset = 0;
     } else {
-      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Skip init-data writing.", info_flags);
-      data->init_step = INIT_CONFIG_SETTINGS;
+      // SHOW_RESETが立っていない場合は初期化データ書き込みをスキップする
+      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Skipping init-data write.",
+              info_flags);
+      data->init_step = INIT_COMPLETE;
+      data->initialized = true;
+      data->work_state = WORK_READ_DATA;
+      data->last_info_flags = info_flags;
     }
     break;
   }
@@ -280,7 +302,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_ACK_RESET: {
-    uint16_t sys_ctrl = IQS915X_ACK_RESET | IQS915X_REATI_TP | IQS915X_REATI_ALP;
+    uint16_t sys_ctrl =
+        IQS915X_ACK_RESET | IQS915X_REATI_TP | IQS915X_REATI_ALP;
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, sys_ctrl);
     if (ret < 0) {
       LOG_ERR("Failed to send initial ACK reset: %d", ret);
@@ -326,7 +349,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
         return; // 次のRDYでリトライ
       }
-      LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr, offset + chunk, total);
+      LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr,
+              offset + chunk, total);
       data->init_data_offset = offset + chunk;
     } else if (offset < total) {
       uint16_t eng_offset = offset - IQS915X_INIT_DATA_MAIN_SIZE;
@@ -339,7 +363,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
         return;
       }
-      LOG_DBG("Init: Wrote %d eng bytes at 0x%04x (%d/%d)", chunk, addr, offset + chunk, total);
+      LOG_DBG("Init: Wrote %d eng bytes at 0x%04x (%d/%d)", chunk, addr,
+              offset + chunk, total);
       data->init_data_offset = offset + chunk;
     }
 
@@ -355,11 +380,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     // 必要に応じて、Event Mode=1, Force Comms=0, Terminate Comms=0などを強制
     uint16_t clear_mask = IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS;
     uint16_t set_mask = IQS915X_EVENT_MODE;
-    
-    // 【パッチ】もしノイズ対策等で手動・Switch・TP Touch Toggledを外したい場合は付与するが今回は最低限に。
-    // clear_mask |= BIT(14) | BIT(13); // 必要であれば
 
-    ret = iqs915x_modify_reg16(dev, IQS915X_CONFIG_SETTINGS, clear_mask, set_mask);
+    // 【パッチ】もしノイズ対策等で手動・Switch・TP Touch
+    // Toggledを外したい場合は付与するが今回は最低限に。 clear_mask |= BIT(14) |
+    // BIT(13); // 必要であれば
+
+    ret = iqs915x_modify_reg16(dev, IQS915X_CONFIG_SETTINGS, clear_mask,
+                               set_mask);
     if (ret < 0) {
       LOG_ERR("Failed to configure settings: %d", ret);
       return;
@@ -372,10 +399,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   case INIT_SINGLE_FINGER_GESTURES: {
     uint16_t clear_mask = IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD;
     uint16_t set_mask = 0;
-    if (config->one_finger_tap) set_mask |= IQS915X_SINGLE_TAP;
-    if (config->press_and_hold) set_mask |= IQS915X_PRESS_AND_HOLD;
-    
-    ret = iqs915x_modify_reg16(dev, IQS915X_SINGLE_FINGER_GESTURES_ENABLE, clear_mask, set_mask);
+    if (config->one_finger_tap)
+      set_mask |= IQS915X_SINGLE_TAP;
+    if (config->press_and_hold)
+      set_mask |= IQS915X_PRESS_AND_HOLD;
+
+    ret = iqs915x_modify_reg16(dev, IQS915X_SINGLE_FINGER_GESTURES_ENABLE,
+                               clear_mask, set_mask);
     if (ret < 0) {
       LOG_ERR("Failed to configure single finger gestures: %d", ret);
       return;
@@ -386,7 +416,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_HOLD_TIME:
-    ret = iqs915x_update_reg16(dev, IQS915X_HOLD_TIME, config->press_and_hold_time);
+    ret = iqs915x_update_reg16(dev, IQS915X_HOLD_TIME,
+                               config->press_and_hold_time);
     if (ret < 0) {
       LOG_ERR("Failed to configure hold time: %d", ret);
       return;
@@ -398,10 +429,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   case INIT_TWO_FINGER_GESTURES: {
     uint16_t clear_mask = IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL;
     uint16_t set_mask = 0;
-    if (config->two_finger_tap) set_mask |= IQS915X_TWO_FINGER_TAP;
-    if (config->scroll) set_mask |= IQS915X_SCROLL;
-    
-    ret = iqs915x_modify_reg16(dev, IQS915X_TWO_FINGER_GESTURES_ENABLE, clear_mask, set_mask);
+    if (config->two_finger_tap)
+      set_mask |= IQS915X_TWO_FINGER_TAP;
+    if (config->scroll)
+      set_mask |= IQS915X_SCROLL;
+
+    ret = iqs915x_modify_reg16(dev, IQS915X_TWO_FINGER_GESTURES_ENABLE,
+                               clear_mask, set_mask);
     if (ret < 0) {
       LOG_ERR("Failed to configure two finger gestures: %d", ret);
       return;
@@ -412,13 +446,18 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_TRACKPAD_SETTINGS: {
-    uint8_t clear_mask = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
+    uint8_t clear_mask =
+        IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
     uint8_t set_mask = 0;
-    if (config->flip_x) set_mask |= IQS915X_FLIP_X;
-    if (config->flip_y) set_mask |= IQS915X_FLIP_Y;
-    if (config->switch_xy) set_mask |= IQS915X_SWITCH_XY_AXIS;
-    
-    ret = iqs915x_modify_reg8(dev, IQS915X_TRACKPAD_SETTINGS, clear_mask, set_mask);
+    if (config->flip_x)
+      set_mask |= IQS915X_FLIP_X;
+    if (config->flip_y)
+      set_mask |= IQS915X_FLIP_Y;
+    if (config->switch_xy)
+      set_mask |= IQS915X_SWITCH_XY_AXIS;
+
+    ret = iqs915x_modify_reg8(dev, IQS915X_TRACKPAD_SETTINGS, clear_mask,
+                              set_mask);
     if (ret < 0) {
       LOG_ERR("Failed to configure trackpad settings: %d", ret);
       return;
@@ -442,7 +481,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_ACTIVE_REPORT_RATE:
     if (config->report_rate_ms > 0) {
-      ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
+      ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
+                                 config->report_rate_ms);
       if (ret < 0) {
         LOG_ERR("Failed to configure active report rate: %d", ret);
         return;
@@ -454,12 +494,14 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_IDLE_TOUCH_REPORT_RATE:
     if (config->report_rate_ms > 0) {
-      ret = iqs915x_update_reg16(dev, IQS915X_IDLE_TOUCH_REPORT_RATE, config->report_rate_ms);
+      ret = iqs915x_update_reg16(dev, IQS915X_IDLE_TOUCH_REPORT_RATE,
+                                 config->report_rate_ms);
       if (ret < 0) {
         LOG_ERR("Failed to configure idle-touch report rate: %d", ret);
         return;
       }
-      LOG_DBG("Init: Idle-Touch report rate set to %d ms", config->report_rate_ms);
+      LOG_DBG("Init: Idle-Touch report rate set to %d ms",
+              config->report_rate_ms);
     }
     data->init_step = INIT_VERIFY_RESET;
     break;
@@ -489,38 +531,43 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_WAIT_REATI: {
     data->wait_count++;
-    if (data->wait_count <= 10) {
-      LOG_DBG("Init: Pausing for Re-ATI (%d/10)", data->wait_count);
-      break;
-    }
 
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
     if (ret < 0) {
-      LOG_ERR("Failed to read during Re-ATI verify: %d", ret);
+      LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
       return; // 次のRDYでリトライ
     }
 
     if (stream.info_flags == 0xEEEE) {
-      if (data->wait_count > 60) {
-        LOG_WRN("Init: Re-ATI timeout (IC busy), proceeding anyway");
-      } else {
-        LOG_DBG("Init: IC busy (0xEEEE), cycle=%d", data->wait_count);
-        break;
-      }
-    } else if (stream.info_flags & IQS915X_SHOW_RESET) {
-      if (data->wait_count > 60) {
-        LOG_WRN("Init: SHOW_RESET timeout (0x%04x), proceeding anyway", stream.info_flags);
-      } else {
-        LOG_DBG("Init: SHOW_RESET still set (0x%04x), cycle=%d", stream.info_flags, data->wait_count);
-        break;
-      }
-    } else {
-      LOG_INF("Init: Re-ATI complete (flags=0x%04x) after %d cycles", stream.info_flags, data->wait_count);
+      // ICがまだビジー状態、次のRDYで再試行
+      LOG_DBG("Init: IC busy (0xEEEE) during Re-ATI wait, cycle=%d",
+              data->wait_count);
+      break;
     }
 
-    // 完了後はDTS設定の書き込みへ進む
-    data->init_step = INIT_CONFIG_SETTINGS;
+    // REATI_OCCURRED (bit4) フラグでRe-ATI完了を検出する
+    // このフラグはRe-ATIが実行されたRDYサイクルで1回だけセットされる
+    if (stream.info_flags & IQS915X_REATI_OCCURRED) {
+      LOG_INF("Init: Re-ATI occurred (flags=0x%04x) after %d cycles",
+              stream.info_flags, data->wait_count);
+      // Re-ATI完了後はDTS設定の書き込みへ進む
+      data->init_step = INIT_CONFIG_SETTINGS;
+      break;
+    }
+
+    if (data->wait_count > 60) {
+      // タイムアウト: Re-ATIが検出できなかったが次のステップへ進む
+      LOG_WRN("Init: Re-ATI timeout after %d cycles (flags=0x%04x), proceeding "
+              "anyway",
+              data->wait_count, stream.info_flags);
+      data->init_step = INIT_CONFIG_SETTINGS;
+      break;
+    }
+
+    // Re-ATIはまだ発生していない、次のRDYで再確認
+    LOG_DBG("Init: Waiting for Re-ATI (flags=0x%04x, cycle=%d/60)",
+            stream.info_flags, data->wait_count);
     break;
   }
 
@@ -582,8 +629,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
     }
 
     // トラックパッドデータの処理について、イベントフラグが立っている場合のみ処理を実行する
-    bool has_tp_event = (stream.info_flags & (IQS915X_TP_TOUCH_TOGGLED | BIT(9))) != 0;
-    if (stream.gesture_sf != 0 || stream.gesture_tf != 0 || (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0) {
+    bool has_tp_event =
+        (stream.info_flags & (IQS915X_TP_TOUCH_TOGGLED | BIT(9))) != 0;
+    if (stream.gesture_sf != 0 || stream.gesture_tf != 0 ||
+        (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0) {
       has_tp_event = true;
     }
 
@@ -593,10 +642,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
 
       // 診断: ジェスチャーフラグが非ゼロのときにログ出力
       if (stream.gesture_sf || stream.gesture_tf) {
-        LOG_DBG("gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
-                stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
-                (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
-                stream.trackpad_flags);
+        LOG_DBG(
+            "gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
+            stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
+            (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
+            stream.trackpad_flags);
       }
 
       if (!scroll) {
@@ -663,7 +713,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
         }
       } else if (tp_movement) {
         if (stream.rel_x != 0 || stream.rel_y != 0) {
-          LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x, stream.rel_y);
+          LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x,
+                  stream.rel_y);
           input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
           input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
         }
