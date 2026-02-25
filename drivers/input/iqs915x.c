@@ -688,6 +688,34 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       continue;
     }
 
+    // info_flagsに立っているビットを個別にDBGログ出力する（連続RDY原因調査用）
+    if (stream.info_flags != 0 && stream.info_flags != 0xEEEE) {
+      // Charging Mode (bit2-0) のデコード
+      static const char *const mode_names[] = {"ACTIVE", "IDLE_TOUCH", "IDLE",
+                                               "LP1", "LP2"};
+      uint8_t mode = stream.info_flags & IQS915X_CHARGING_MODE_MASK;
+      const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
+
+      LOG_DBG(
+          "info_flags=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          stream.info_flags, mode_str,
+          (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
+          (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
+          (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
+          (stream.info_flags & IQS915X_ALP_REATI_OCCURRED) ? " ALP_REATI_OCC"
+                                                           : "",
+          (stream.info_flags & IQS915X_SHOW_RESET) ? " SHOW_RESET" : "",
+          (stream.info_flags & IQS915X_ALP_PROX_STATUS) ? " ALP_PROX_STS" : "",
+          (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) ? " GLOBAL_TP_TOUCH"
+                                                        : "",
+          (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
+          (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
+          (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
+          (stream.info_flags & IQS915X_TP_TOUCH_TOGGLED) ? " TP_TOUCH_TOG" : "",
+          (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
+          (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
+    }
+
     // IQS915xのランタイムリセット検出
     // INIT_WAIT_REATIステップでSHOW_RESETクリアを確認済みなので、
     // 通常モードでSHOW_RESETが立っている場合は真のランタイムリセット。

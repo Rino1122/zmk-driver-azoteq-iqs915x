@@ -116,14 +116,41 @@
 
 /* ============================================================
  * Info Flags ビットフラグ (0x1020)
+ * データシート Section 15: INFO_FLAGS レジスタ定義
  * ============================================================ */
-#define IQS915X_SHOW_RESET BIT(7)           // リセット発生の通知
-#define IQS915X_ATI_ERROR BIT(3)            // ATIエラー
-#define IQS915X_REATI_OCCURRED BIT(4)       // Re-ATI実行通知
-#define IQS915X_ALP_PROX_TOGGLED BIT(12)    // ALP Proximity変化
-#define IQS915X_TP_TOUCH_TOGGLED BIT(13)    // タッチ状態変化
-#define IQS915X_SWITCH_TOGGLED BIT(14)      // スイッチ状態変化
-#define IQS915X_SNAP_TOGGLED BIT(15)        // スナップ状態変化
+// Bit 2-0: 現在の動作モード
+#define IQS915X_CHARGING_MODE_MASK  0x0007
+#define IQS915X_MODE_ACTIVE         0x0000  // Activeモード
+#define IQS915X_MODE_IDLE_TOUCH     0x0001  // Idle-Touchモード
+#define IQS915X_MODE_IDLE           0x0002  // Idleモード
+#define IQS915X_MODE_LP1            0x0003  // LP1モード
+#define IQS915X_MODE_LP2            0x0004  // LP2モード
+// Bit 3: ATI Error - トラックパッドATIエラー
+#define IQS915X_ATI_ERROR           BIT(3)
+// Bit 4: Re-ATI Occurred - トラックパッドRe-ATI完了
+#define IQS915X_REATI_OCCURRED      BIT(4)
+// Bit 5: ALP ATI Error - ALPチャネルATIエラー
+#define IQS915X_ALP_ATI_ERROR       BIT(5)
+// Bit 6: ALP Re-ATI Occurred - ALPチャネルRe-ATI完了
+#define IQS915X_ALP_REATI_OCCURRED  BIT(6)
+// Bit 7: Show Reset - リセット発生通知（ACK Resetで解除）
+#define IQS915X_SHOW_RESET          BIT(7)
+// Bit 8: ALP Prox Status - ALPチャネルのProx/Touch検出状態
+#define IQS915X_ALP_PROX_STATUS     BIT(8)
+// Bit 9: Global TP Touch - いずれかのTPチャネルでタッチ検出中
+#define IQS915X_GLOBAL_TP_TOUCH     BIT(9)
+// Bit 10: Switch Pressed - スイッチ押下検出中
+#define IQS915X_SWITCH_PRESSED      BIT(10)
+// Bit 11: Global Snap - いずれかのSnapチャネルでスナップ検出中
+#define IQS915X_GLOBAL_SNAP         BIT(11)
+// Bit 12: ALP Prox Toggled - ALPチャネルProx状態変化
+#define IQS915X_ALP_PROX_TOGGLED    BIT(12)
+// Bit 13: TP Touch Toggled - TPチャネルタッチ状態変化
+#define IQS915X_TP_TOUCH_TOGGLED    BIT(13)
+// Bit 14: Switch Toggled - スイッチ状態変化
+#define IQS915X_SWITCH_TOGGLED      BIT(14)
+// Bit 15: Snap Toggled - Snapチャネル状態変化
+#define IQS915X_SNAP_TOGGLED        BIT(15)
 
 /* ============================================================
  * Trackpad Flags ビットフラグ (0x1022)
