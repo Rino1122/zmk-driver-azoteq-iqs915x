@@ -648,14 +648,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
 
   while (true) {
     if (!data->initialized) {
-      // 初期化中は電源投入直後の深い省電力等でRDYが出ない場合に備え、
-      // 50msごとにタイムアウトさせて強制的に初期化ステップへ進み、
-      // I2C通信(クロックストレッチ)を送りつけてウェイクアップさせます。
-      // また、すでにRDYがアクティブな場合はエッジ待ちをせず即座に進行します。
+      // SHOW_RESETフラグが立っている期間、IQSは自律的にRDYをトグルし続ける仕様のため
+      // マスター側からForce Comms（RDY High時にI2C
+      // STARTを発行）を行う必要はない。
+      // RDY割り込みをひたすら待ち、割り込み駆動で初期化ステップを進める。
+      //
+      // ただし割り込みのエッジ取りこぼし対策として：
+      // - すでにRDYがLowになっている場合はセマフォをgiveしてすぐ進む
+      // - 長めのタイムアウトで完全停止を防ぐ（ICが応答しない異常時の安全策）
       if (gpio_pin_get_dt(&config->rdy_gpio) > 0) {
         k_sem_give(&data->rdy_sem);
       }
-      k_sem_take(&data->rdy_sem, K_MSEC(50));
+      k_sem_take(&data->rdy_sem, K_MSEC(2000));
       iqs915x_init_step_handler(dev);
       continue;
     }
