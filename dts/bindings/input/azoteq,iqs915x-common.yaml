@@ -71,6 +71,7 @@ properties:
 
   azoteq,init-data:
     type: uint8-array
+    required: true
     description: |
       Full IQS9150/IQS9151 initialization data for devices without NVM.
       This byte array contains all register values from memory map address

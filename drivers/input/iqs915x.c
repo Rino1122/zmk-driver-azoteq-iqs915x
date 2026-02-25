@@ -333,9 +333,10 @@ static void iqs915x_init_step_handler(const struct device *dev) {
 
   case INIT_WRITE_INIT_DATA: {
     if (!config->init_data || config->init_data_len == 0) {
-      LOG_DBG("Init: No init-data, skipping NVM write");
-      data->init_step = INIT_SINGLE_FINGER_GESTURES;
-      break;
+      // init-dataは必須。YAMLバインディングでrequired: trueとしているため
+      // 通常はビルド時にエラーとなるが、実行時の安全策としても確認する。
+      LOG_ERR("Init: init-data is required but not set. Halting.");
+      return;
     }
 
     uint16_t offset = data->init_data_offset;
@@ -516,6 +517,8 @@ static void iqs915x_init_step_handler(const struct device *dev) {
     break;
 
   case INIT_ACTIVE_REPORT_RATE:
+    // report-rate-msはActive modeのレポートレートのみに適用する。
+    // Idle-Touch/Idle/LP1/LP2モードのレポートレートはinit-dataの設定に委ねる。
     if (config->report_rate_ms > 0) {
       ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
                                  config->report_rate_ms);
@@ -523,32 +526,12 @@ static void iqs915x_init_step_handler(const struct device *dev) {
         LOG_ERR("Failed to configure active report rate: %d", ret);
         return;
       }
-      if (ret > 0 && config->init_data_len > 0) {
+      if (ret > 0) {
         LOG_WRN("Init: ACTIVE_REPORT_RATE (0x%04x) overridden from init-data "
                 "value by DTS (report_rate_ms=%d ms)",
                 IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
       }
       LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
-    }
-    data->init_step = INIT_IDLE_TOUCH_REPORT_RATE;
-    break;
-
-  case INIT_IDLE_TOUCH_REPORT_RATE:
-    if (config->report_rate_ms > 0) {
-      ret = iqs915x_update_reg16(dev, IQS915X_IDLE_TOUCH_REPORT_RATE,
-                                 config->report_rate_ms);
-      if (ret < 0) {
-        LOG_ERR("Failed to configure idle-touch report rate: %d", ret);
-        return;
-      }
-      if (ret > 0 && config->init_data_len > 0) {
-        LOG_WRN(
-            "Init: IDLE_TOUCH_REPORT_RATE (0x%04x) overridden from init-data "
-            "value by DTS (report_rate_ms=%d ms)",
-            IQS915X_IDLE_TOUCH_REPORT_RATE, config->report_rate_ms);
-      }
-      LOG_DBG("Init: Idle-Touch report rate set to %d ms",
-              config->report_rate_ms);
     }
     data->init_step = INIT_VERIFY_EVENT_MODE;
     break;
