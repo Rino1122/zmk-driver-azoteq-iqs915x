@@ -764,11 +764,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       bool hold_became_active = false;
       bool hold_released = false;
 
-      // 現在タッチしていない場合、待機時間窓をリセット
-      if (!is_touching) {
-          data->tap_drag_window_exp = 0;
-      }
-
+      // 現在タッチしていない場合、ドラッグ中でなければ待機時間窓をリセットする処理は後述
       if (config->press_and_hold) {
           if (data->active_hold) {
               // 既にドラッグ状態の場合、指が離れたら解除
@@ -777,15 +773,19 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
                   data->active_hold = false;
               }
           } else {
-              // ドラッグ状態でない場合
+              // ドラッグ状態ではない
               if (single_tap_pressed) {
-                  // シングルタップが来たので、ここから300ms以内ならドラッグ開始
+                  // シングルタップが「完了＝指が離れた」時点でフラグが立つため、ここから300ms以内をタイムアウト窓に設定
                   data->tap_drag_window_exp = now_ms + 300;
-              } else if (is_touching && data->tap_drag_window_exp > 0 && now_ms <= data->tap_drag_window_exp) {
-                  // 300msの時間窓内に再度タッチされた場合、ドラッグ開始
+              }
+
+              // 時間窓が有効な間に、新たにタッチが開始されたらドラッグ開始
+              if (is_touching && data->tap_drag_window_exp > 0 && now_ms <= data->tap_drag_window_exp) {
+                  // ただし、「タップとほぼ同時」による誤判定を防ぐため、シングルタップ検知フレームではないことを確認するか、あるいは今回はシンプルに「タッチ中なら開始」とする
+                  // IQSのシングルタップフラグは指が離れた瞬間に立つため、is_touchingと被ることは稀だが安全のため
                   hold_became_active = true;
                   data->active_hold = true;
-                  data->tap_drag_window_exp = 0; // 条件を満たしたので窓を閉じる
+                  data->tap_drag_window_exp = 0; // 窓を閉じる
               }
 
               // 時間窓の有効期限切れをチェック
@@ -794,7 +794,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
               }
           }
       } else {
-          // タップ＆ドラッグ機能が無効な場合は、不要な変数をクリアしておく
+          // タップ＆ドラッグ機能が無効な場合はクリア
           data->tap_drag_window_exp = 0;
       }
 
