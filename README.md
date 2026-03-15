@@ -14,6 +14,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 - Press and hold: Reported as a continuous left click (allows click and drag).
 - Vertical scroll.
 - Horizontal scroll.
+- Kinetic (inertial) scroll.
 
 ## Usage
 
@@ -47,8 +48,11 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         two-finger-tap;
 
         scroll;
-        natural-scroll-y;
-        natural-scroll-x;
+
+        /* Kinetic (inertial) scroll settings */
+        kinetic-scroll;
+        kinetic-friction = <85>;     /* 0-100% velocity retention per tick */
+        kinetic-interval-ms = <15>;  /* Time between kinetic updates */
 
         switch-xy;
 

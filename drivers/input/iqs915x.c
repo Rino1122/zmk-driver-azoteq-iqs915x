@@ -830,7 +830,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       data->initialized = false;
       data->init_step = INIT_CHECK_SHOW_RESET;
       data->init_data_offset = 0;
+      // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
+      if (data->active_hold) {
+        input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+      }
       data->active_hold = false;
+      data->is_touching = false;
+      data->last_touch_up_time = 0;
+      data->last_touch_down_time = 0;
       data->buttons_pressed = 0;
       // 慣性スクロールもキャンセル
       iqs915x_cancel_kinetic_scroll(data);
@@ -839,17 +846,27 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       continue;
     }
 
-    bool is_touching_any = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
-    
-    // has_tp_eventの条件を拡張し、アクティブな指の数が変化した場合やドラッグ中なら常に処理が走るようにする
+    // =========================================================
+    // ドラッグ解除チェック: has_tp_event に依存せず毎フレーム実行
+    // has_tp_event が false のフレームでも確実にドラッグを解除する
+    // =========================================================
+    bool is_touching_now = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
+    bool drag_just_released = false;
+
+    if (config->press_and_hold && data->active_hold && !is_touching_now) {
+      drag_just_released = true;
+      data->active_hold = false;
+      data->last_touch_up_time = 0;
+      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+      data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+    }
+
+    // data->is_touching は常に最新の状態を反映する（has_tp_eventの外で更新）
+    bool was_touching = data->is_touching;
+    data->is_touching = is_touching_now;
+
     bool has_tp_event =
         (stream.info_flags & (IQS915X_TP_TOUCH_TOGGLED | BIT(9))) != 0;
-    
-    // 指数が減少して0になった(=指を離した)場合も必ず通るようにする
-    if (!is_touching_any && data->active_hold) {
-      has_tp_event = true;
-    }
-    
     if (stream.gesture_sf != 0 || stream.gesture_tf != 0 ||
         (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0) {
       has_tp_event = true;
@@ -907,75 +924,57 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       }
 
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
+      // 注: ドラッグ解除は上で has_tp_event の外で処理済み
       int64_t now_ms = k_uptime_get();
-      // 指の本数が1本以上であればタッチ中とする
-      bool is_touching = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
-      bool was_touching = data->is_touching;
+      bool is_touching = is_touching_now;
       
       bool hold_became_active = false;
-      bool hold_released = false;
 
-      if (config->press_and_hold) {
-          if (data->active_hold) {
-              // ドラッグ中で、指が完全に離れたら終了
-              if (!is_touching) {
-                  hold_released = true;
-                  data->active_hold = false;
-                  data->last_touch_up_time = 0; // 解除時は窓を閉じる
-              }
-          } else {
-              // ----- 生のTouch Down / Up イベントによる高速判定 -----
-              if (is_touching && !was_touching) {
-                  // Touch Down (指が触れた瞬間)
-                  data->last_touch_down_time = now_ms;
-                  
-                  // 前回のタッチリリース(Touch Up)から300ms以内に再び触れられたらドラッグ開始！
-                  if (data->last_touch_up_time > 0 && (now_ms - data->last_touch_up_time) < 300) {
-                      hold_became_active = true;
-                      data->active_hold = true;
-                      data->last_touch_up_time = 0; // 消費したため窓を閉じる
-                  }
-              } else if (!is_touching && was_touching) {
-                  // Touch Up (指が離れた瞬間)
-                  // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
-                  if ((now_ms - data->last_touch_down_time) < 200) {
-                      // 短いタップとして認定し、ここから300msの窓を開始
-                      data->last_touch_up_time = now_ms;
-                  } else {
-                      // 長く触っていた場合はタップではないので窓を開かない
-                      data->last_touch_up_time = 0;
-                  }
-              }
+      if (config->press_and_hold && !data->active_hold) {
+          // ----- 生のTouch Down / Up イベントによる高速判定 -----
+          if (is_touching && !was_touching) {
+              // Touch Down (指が触れた瞬間)
+              data->last_touch_down_time = now_ms;
               
-              // ----------------------------------------------------
-              // ハードウェアのシングルタップフラグからのフォールバック対応
-              // （もし生のTouch Up判定が漏れた場合でも、ハードウェア判定でタップが確定したら窓を開く）
-              if (single_tap_pressed) {
-                  data->last_touch_up_time = now_ms;
+              // 前回のタッチリリース(Touch Up)から300ms以内に再び触れられたらドラッグ開始！
+              if (data->last_touch_up_time > 0 && (now_ms - data->last_touch_up_time) < 300) {
+                  hold_became_active = true;
+                  data->active_hold = true;
+                  data->last_touch_up_time = 0; // 消費したため窓を閉じる
               }
-
-              // 時間窓の有効期限切れを定期チェック
-              if (data->last_touch_up_time > 0 && now_ms > (data->last_touch_up_time + 300)) {
+          } else if (!is_touching && was_touching) {
+              // Touch Up (指が離れた瞬間)
+              // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
+              if ((now_ms - data->last_touch_down_time) < 200) {
+                  // 短いタップとして認定し、ここから300msの窓を開始
+                  data->last_touch_up_time = now_ms;
+              } else {
+                  // 長く触っていた場合はタップではないので窓を開かない
                   data->last_touch_up_time = 0;
               }
           }
-      } else {
+          
+          // ハードウェアのシングルタップフラグからのフォールバック対応
+          if (single_tap_pressed) {
+              data->last_touch_up_time = now_ms;
+          }
+
+          // 時間窓の有効期限切れを定期チェック
+          if (data->last_touch_up_time > 0 && now_ms > (data->last_touch_up_time + 300)) {
+              data->last_touch_up_time = 0;
+          }
+      } else if (!config->press_and_hold) {
           data->last_touch_up_time = 0;
       }
-      
-      // 更新
-      data->is_touching = is_touching;
 
       // 移動とジェスチャーの処理
       // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
       if (hold_became_active) {
         k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-        // data->buttons_pressedを立てておくと、将来的にタイマー等で意図せず解放されるのを防げる
         data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-      } else if (hold_released) {
-        input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-        data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0); // 押下状態をクリア
+      } else if (drag_just_released) {
+        // ドラッグ解除はhas_tp_eventの外で処理済み（ここはスキップ）
       }
       
       // hold_released のフレームでもシングルタップ/ダブルタップは処理可能にする（干渉を防ぐため else if にしない）
@@ -996,9 +995,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
         int16_t gy = (int16_t)stream.gesture_y;
         int16_t scroll_div = config->scroll_divisor;
         if (gx != 0) {
-          if (!config->natural_scroll_x) {
-            gx *= -1;
-          }
           data->scroll_x_acc += gx;
           if (abs(data->scroll_x_acc) >= scroll_div) {
             input_report_rel(dev, INPUT_REL_HWHEEL,
@@ -1007,9 +1003,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
           }
         }
         if (gy != 0) {
-          if (config->natural_scroll_y) {
-            gy *= -1;
-          }
           data->scroll_y_acc += gy;
           if (abs(data->scroll_y_acc) >= scroll_div) {
             input_report_rel(dev, INPUT_REL_WHEEL,
@@ -1149,8 +1142,6 @@ static int iqs915x_init(const struct device *dev) {
       .press_and_hold = DT_INST_PROP(n, press_and_hold),                       \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                       \
       .scroll = DT_INST_PROP(n, scroll),                                       \
-      .natural_scroll_x = DT_INST_PROP(n, natural_scroll_x),                   \
-      .natural_scroll_y = DT_INST_PROP(n, natural_scroll_y),                   \
       .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                       \
       .kinetic_scroll = DT_INST_PROP(n, kinetic_scroll),                       \
       .kinetic_friction = DT_INST_PROP_OR(n, kinetic_friction, 85),            \

@@ -326,8 +326,6 @@ struct iqs915x_config {
 
     // スクロール設定
     bool scroll;
-    bool natural_scroll_x;
-    bool natural_scroll_y;
     uint16_t scroll_divisor;  // スクロール感度除数
 
     // 慣性スクロール設定

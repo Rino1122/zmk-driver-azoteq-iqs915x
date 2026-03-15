@@ -29,13 +29,9 @@ properties:
     type: boolean
     description: "Enable two-finger scroll (vertical and horizontal)"
 
-  natural-scroll-x:
+  scroll:
     type: boolean
-    description: "Natural scroll on x axis (content follows finger direction)"
-
-  natural-scroll-y:
-    type: boolean
-    description: "Natural scroll on y axis (content follows finger direction)"
+    description: "Enable two-finger scroll (vertical and horizontal)"
 
   switch-xy:
     type: boolean
