@@ -369,6 +369,11 @@ struct iqs915x_data {
     // Tap-and-Dragの待機時間窓 (Uptimeのミリ秒、0は非アクティブ)
     int64_t tap_drag_window_exp;
 
+    // 生のタッチ状態トラッキング（Rapid Tap-and-Drag判定用）
+    bool is_touching;
+    int64_t last_touch_down_time;
+    int64_t last_touch_up_time;
+
     // スクロールアキュムレータ
     int16_t scroll_x_acc;
     int16_t scroll_y_acc;

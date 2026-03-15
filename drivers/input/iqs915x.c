@@ -230,12 +230,16 @@ static void iqs915x_button_release_work_handler(struct k_work *work) {
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, button_release_work);
 
-  for (int i = 0; i < 3; i++) {
-    if (data->buttons_pressed & BIT(i)) {
-      input_report_key(data->dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
-      data->buttons_pressed &= ~BIT(i);
-    }
+  // データレースによるボタンスタック（永遠に押しっぱなしになる症状）を防ぐため、
+  // buttons_pressedマスクに依存せず、確実に0(リリース)を送信する
+  if (!data->active_hold) {
+    input_report_key(data->dev, INPUT_BTN_0, 0, true, K_FOREVER);
+    data->buttons_pressed &= ~BIT(0);
   }
+  
+  // 2本指タップ(右クリック)など、左ボタン以外も確実にリリース
+  input_report_key(data->dev, INPUT_BTN_1, 0, true, K_FOREVER);
+  data->buttons_pressed &= ~BIT(1);
 }
 
 /* ============================================================
@@ -766,10 +770,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
         button_code = INPUT_BTN_1;
       }
 
-      // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移
+      // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
       int64_t now_ms = k_uptime_get();
-      // 指の本数が1本以上であればタッチ中とする（GLOBAL_TP_TOUCHだけでなく、指カウントもみる）
+      // 指の本数が1本以上であればタッチ中とする
       bool is_touching = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
+      bool was_touching = data->is_touching;
+      
       bool hold_became_active = false;
       bool hold_released = false;
 
@@ -779,29 +785,50 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
               if (!is_touching) {
                   hold_released = true;
                   data->active_hold = false;
+                  data->last_touch_up_time = 0; // 解除時は窓を閉じる
               }
           } else {
-              // ドラッグ中でない場合
+              // ----- 生のTouch Down / Up イベントによる高速判定 -----
+              if (is_touching && !was_touching) {
+                  // Touch Down (指が触れた瞬間)
+                  data->last_touch_down_time = now_ms;
+                  
+                  // 前回のタッチリリース(Touch Up)から300ms以内に再び触れられたらドラッグ開始！
+                  if (data->last_touch_up_time > 0 && (now_ms - data->last_touch_up_time) < 300) {
+                      hold_became_active = true;
+                      data->active_hold = true;
+                      data->last_touch_up_time = 0; // 消費したため窓を閉じる
+                  }
+              } else if (!is_touching && was_touching) {
+                  // Touch Up (指が離れた瞬間)
+                  // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
+                  if ((now_ms - data->last_touch_down_time) < 200) {
+                      // 短いタップとして認定し、ここから300msの窓を開始
+                      data->last_touch_up_time = now_ms;
+                  } else {
+                      // 長く触っていた場合はタップではないので窓を開かない
+                      data->last_touch_up_time = 0;
+                  }
+              }
+              
+              // ----------------------------------------------------
+              // ハードウェアのシングルタップフラグからのフォールバック対応
+              // （もし生のTouch Up判定が漏れた場合でも、ハードウェア判定でタップが確定したら窓を開く）
               if (single_tap_pressed) {
-                  // シングルタップが「完了」した時点で再タッチ窓をスタート
-                  data->tap_drag_window_exp = now_ms + 300; // 300msの猶予
+                  data->last_touch_up_time = now_ms;
               }
 
-              // 時間窓が有効な間にタッチが始まったらドラッグ開始
-              if (is_touching && data->tap_drag_window_exp > 0 && now_ms <= data->tap_drag_window_exp) {
-                  hold_became_active = true;
-                  data->active_hold = true;
-                  data->tap_drag_window_exp = 0; // 窓を閉じてこれ以上の誤判定を防ぐ
-              }
-
-              // 時間窓の有効期限切れをチェック
-              if (data->tap_drag_window_exp > 0 && now_ms > data->tap_drag_window_exp) {
-                  data->tap_drag_window_exp = 0;
+              // 時間窓の有効期限切れを定期チェック
+              if (data->last_touch_up_time > 0 && now_ms > (data->last_touch_up_time + 300)) {
+                  data->last_touch_up_time = 0;
               }
           }
       } else {
-          data->tap_drag_window_exp = 0;
+          data->last_touch_up_time = 0;
       }
+      
+      // 更新
+      data->is_touching = is_touching;
 
       // 移動とジェスチャーの処理
       // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
