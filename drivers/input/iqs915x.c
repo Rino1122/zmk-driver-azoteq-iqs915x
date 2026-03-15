@@ -720,9 +720,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       continue;
     }
 
-    // トラックパッドデータの処理について、イベントフラグが立っている場合のみ処理を実行する
+    bool is_touching_any = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
+    
+    // has_tp_eventの条件を拡張し、アクティブな指の数が変化した場合やドラッグ中なら常に処理が走るようにする
     bool has_tp_event =
         (stream.info_flags & (IQS915X_TP_TOUCH_TOGGLED | BIT(9))) != 0;
+    
+    // 指数が減少して0になった(=指を離した)場合も必ず通るようにする
+    if (!is_touching_any && data->active_hold) {
+      has_tp_event = true;
+    }
+    
     if (stream.gesture_sf != 0 || stream.gesture_tf != 0 ||
         (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0) {
       has_tp_event = true;
@@ -747,7 +755,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       }
 
       // タップジェスチャー判定
-      uint16_t button_code;
+      uint16_t button_code = 0;
       bool single_tap_pressed = false;
       bool two_finger_tap_pressed = false;
       if (stream.gesture_sf & IQS915X_SINGLE_TAP) {
@@ -760,32 +768,30 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
 
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移
       int64_t now_ms = k_uptime_get();
-      bool is_touching = (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
+      // 指の本数が1本以上であればタッチ中とする（GLOBAL_TP_TOUCHだけでなく、指カウントもみる）
+      bool is_touching = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
       bool hold_became_active = false;
       bool hold_released = false;
 
-      // 現在タッチしていない場合、ドラッグ中でなければ待機時間窓をリセットする処理は後述
       if (config->press_and_hold) {
           if (data->active_hold) {
-              // 既にドラッグ状態の場合、指が離れたら解除
+              // ドラッグ中で、指が完全に離れたら終了
               if (!is_touching) {
                   hold_released = true;
                   data->active_hold = false;
               }
           } else {
-              // ドラッグ状態ではない
+              // ドラッグ中でない場合
               if (single_tap_pressed) {
-                  // シングルタップが「完了＝指が離れた」時点でフラグが立つため、ここから300ms以内をタイムアウト窓に設定
-                  data->tap_drag_window_exp = now_ms + 300;
+                  // シングルタップが「完了」した時点で再タッチ窓をスタート
+                  data->tap_drag_window_exp = now_ms + 300; // 300msの猶予
               }
 
-              // 時間窓が有効な間に、新たにタッチが開始されたらドラッグ開始
+              // 時間窓が有効な間にタッチが始まったらドラッグ開始
               if (is_touching && data->tap_drag_window_exp > 0 && now_ms <= data->tap_drag_window_exp) {
-                  // ただし、「タップとほぼ同時」による誤判定を防ぐため、シングルタップ検知フレームではないことを確認するか、あるいは今回はシンプルに「タッチ中なら開始」とする
-                  // IQSのシングルタップフラグは指が離れた瞬間に立つため、is_touchingと被ることは稀だが安全のため
                   hold_became_active = true;
                   data->active_hold = true;
-                  data->tap_drag_window_exp = 0; // 窓を閉じる
+                  data->tap_drag_window_exp = 0; // 窓を閉じてこれ以上の誤判定を防ぐ
               }
 
               // 時間窓の有効期限切れをチェック
@@ -794,24 +800,30 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
               }
           }
       } else {
-          // タップ＆ドラッグ機能が無効な場合はクリア
           data->tap_drag_window_exp = 0;
       }
 
       // 移動とジェスチャーの処理
+      // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
       if (hold_became_active) {
-        // ドラッグ開始: タップイベント解放の遅延ワークキューをキャンセルして左ボタン押し下げ
         k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+        // data->buttons_pressedを立てておくと、将来的にタイマー等で意図せず解放されるのを防げる
+        data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
       } else if (hold_released) {
-        // ドラッグ終了: 左ボタン離上
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-      } else if (single_tap_pressed || two_finger_tap_pressed) {
+        data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0); // 押下状態をクリア
+      }
+      
+      // hold_released のフレームでもシングルタップ/ダブルタップは処理可能にする（干渉を防ぐため else if にしない）
+      if (!hold_became_active && (single_tap_pressed || two_finger_tap_pressed)) {
         k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, button_code, 1, true, K_FOREVER);
         data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
         k_work_schedule(&data->button_release_work, K_MSEC(100));
-      } else if (scroll) {
+      } 
+      
+      if (scroll) {
         // スクロール: GESTURE_X/Yをスクロールデルタとして使用
         // (REL_X/REL_Yはスクロール中はゼロ)
         int16_t gx = (int16_t)stream.gesture_x;
