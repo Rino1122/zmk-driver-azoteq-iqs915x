@@ -406,12 +406,13 @@ static void iqs915x_init_step_handler(const struct device *dev) {
   }
 
   case INIT_SINGLE_FINGER_GESTURES: {
+    // ソフトウェアによるTap-and-Drag実装のため、ハードウェアのPRESS_AND_HOLDは常にクリアする
     uint16_t clear_mask = IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD;
     uint16_t set_mask = 0;
     if (config->one_finger_tap)
       set_mask |= IQS915X_SINGLE_TAP;
-    if (config->press_and_hold)
-      set_mask |= IQS915X_PRESS_AND_HOLD;
+    // config->press_and_hold が true の場合でも、ハードウェア機能は有効化しない
+    // （ドライバ側ソフトウェアでTap-and-Dragとしてエミュレートするため）
 
     ret = iqs915x_modify_reg16(dev, IQS915X_SINGLE_FINGER_GESTURES_ENABLE,
                                clear_mask, set_mask);
@@ -419,13 +420,14 @@ static void iqs915x_init_step_handler(const struct device *dev) {
       LOG_ERR("Failed to configure single finger gestures: %d", ret);
       return;
     }
+    // ハードウェアのPRESS_AND_HOLDフラグの状態に関わらず、DTS設定の値をログ出力する
     if (ret > 0 && config->init_data_len > 0) {
       LOG_WRN("Init: SF_GESTURES_ENABLE (0x%04x) overridden from init-data "
-              "value by DTS (one_finger_tap=%d, press_and_hold=%d)",
+              "value by DTS (one_finger_tap=%d, press_and_hold=%d [SW Emulated])",
               IQS915X_SINGLE_FINGER_GESTURES_ENABLE, config->one_finger_tap,
               config->press_and_hold);
     }
-    LOG_DBG("Init: Single finger gestures configured");
+    LOG_DBG("Init: Single finger gestures configured (HW Hold disabled for SW Tap-and-Drag)");
     data->init_step = INIT_HOLD_TIME;
     break;
   }
@@ -746,29 +748,65 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
 
       // タップジェスチャー判定
       uint16_t button_code;
-      bool button_pressed = false;
+      bool single_tap_pressed = false;
+      bool two_finger_tap_pressed = false;
       if (stream.gesture_sf & IQS915X_SINGLE_TAP) {
-        button_pressed = true;
+        single_tap_pressed = true;
         button_code = INPUT_BTN_0;
       } else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP) {
-        button_pressed = true;
+        two_finger_tap_pressed = true;
         button_code = INPUT_BTN_1;
       }
 
-      // プレス＆ホールドの状態遷移
-      bool hold_became_active =
-          (stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && !data->active_hold;
-      bool hold_released =
-          !(stream.gesture_sf & IQS915X_PRESS_AND_HOLD) && data->active_hold;
+      // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移
+      int64_t now_ms = k_uptime_get();
+      bool is_touching = (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
+      bool hold_became_active = false;
+      bool hold_released = false;
+
+      // 現在タッチしていない場合、待機時間窓をリセット
+      if (!is_touching) {
+          data->tap_drag_window_exp = 0;
+      }
+
+      if (config->press_and_hold) {
+          if (data->active_hold) {
+              // 既にドラッグ状態の場合、指が離れたら解除
+              if (!is_touching) {
+                  hold_released = true;
+                  data->active_hold = false;
+              }
+          } else {
+              // ドラッグ状態でない場合
+              if (single_tap_pressed) {
+                  // シングルタップが来たので、ここから300ms以内ならドラッグ開始
+                  data->tap_drag_window_exp = now_ms + 300;
+              } else if (is_touching && data->tap_drag_window_exp > 0 && now_ms <= data->tap_drag_window_exp) {
+                  // 300msの時間窓内に再度タッチされた場合、ドラッグ開始
+                  hold_became_active = true;
+                  data->active_hold = true;
+                  data->tap_drag_window_exp = 0; // 条件を満たしたので窓を閉じる
+              }
+
+              // 時間窓の有効期限切れをチェック
+              if (data->tap_drag_window_exp > 0 && now_ms > data->tap_drag_window_exp) {
+                  data->tap_drag_window_exp = 0;
+              }
+          }
+      } else {
+          // タップ＆ドラッグ機能が無効な場合は、不要な変数をクリアしておく
+          data->tap_drag_window_exp = 0;
+      }
 
       // 移動とジェスチャーの処理
       if (hold_became_active) {
+        // ドラッグ開始: タップイベント解放の遅延ワークキューをキャンセルして左ボタン押し下げ
+        k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-        data->active_hold = true;
       } else if (hold_released) {
+        // ドラッグ終了: 左ボタン離上
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-        data->active_hold = false;
-      } else if (button_pressed) {
+      } else if (single_tap_pressed || two_finger_tap_pressed) {
         k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, button_code, 1, true, K_FOREVER);
         data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);

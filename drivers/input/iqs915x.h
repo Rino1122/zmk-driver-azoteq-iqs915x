@@ -364,8 +364,11 @@ struct iqs915x_data {
 
     // 直前のサイクルで押されたボタンのビットマスク
     uint8_t buttons_pressed;
-    // プレス＆ホールドが有効かどうか
+    // プレス＆ホールドが有効かどうか（ドラッグ状態）
     bool active_hold;
+    // Tap-and-Dragの待機時間窓 (Uptimeのミリ秒、0は非アクティブ)
+    int64_t tap_drag_window_exp;
+
     // スクロールアキュムレータ
     int16_t scroll_x_acc;
     int16_t scroll_y_acc;
