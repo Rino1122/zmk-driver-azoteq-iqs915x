@@ -56,6 +56,27 @@ properties:
       Scroll sensitivity divisor. Smaller values = more sensitive scrolling.
       Default: 8. Increase for slower scrolling, decrease for faster.
 
+  kinetic-scroll:
+    type: boolean
+    description: |
+      Enable kinetic (inertial) scroll. When enabled, scrolling continues
+      with momentum after releasing fingers, gradually decelerating.
+
+  kinetic-friction:
+    type: int
+    default: 85
+    description: |
+      Kinetic scroll friction (0-100). Each tick, velocity is multiplied by
+      this percentage. Lower values = more friction (faster stop).
+      Default: 85. Typical range: 70 (heavy friction) to 95 (very smooth).
+
+  kinetic-interval-ms:
+    type: int
+    default: 15
+    description: |
+      Interval in ms between kinetic scroll ticks. Default: 15 (~67Hz).
+      Lower values = smoother deceleration but higher CPU usage.
+
   tap-time:
     type: int
     description: |
