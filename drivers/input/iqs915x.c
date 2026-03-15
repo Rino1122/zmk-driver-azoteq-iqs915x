@@ -230,16 +230,16 @@ static void iqs915x_button_release_work_handler(struct k_work *work) {
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, button_release_work);
 
-  // データレースによるボタンスタック（永遠に押しっぱなしになる症状）を防ぐため、
-  // buttons_pressedマスクに依存せず、確実に0(リリース)を送信する
-  if (!data->active_hold) {
-    input_report_key(data->dev, INPUT_BTN_0, 0, true, K_FOREVER);
-    data->buttons_pressed &= ~BIT(0);
+  for (int i = 0; i < 3; i++) {
+    if (data->buttons_pressed & BIT(i)) {
+      // ドラッグ中（active_hold）の場合は左クリック(i=0)の離上をスキップ
+      if (i == 0 && data->active_hold) {
+        continue;
+      }
+      input_report_key(data->dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
+      data->buttons_pressed &= ~BIT(i);
+    }
   }
-  
-  // 2本指タップ(右クリック)など、左ボタン以外も確実にリリース
-  input_report_key(data->dev, INPUT_BTN_1, 0, true, K_FOREVER);
-  data->buttons_pressed &= ~BIT(1);
 }
 
 /* ============================================================
