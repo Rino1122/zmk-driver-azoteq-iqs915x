@@ -26,7 +26,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "iqs915x.h"
+#include <iqs915x.h>
+#include "iqs915x_regs.h"
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
