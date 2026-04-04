@@ -181,10 +181,12 @@
 #define IQS915X_MODE_IDLE 0x02              // アイドルモード
 #define IQS915X_MODE_LP1 0x03               // 低消費電力モード1
 #define IQS915X_MODE_LP2 0x04               // 低消費電力モード2
+#define IQS915X_TP_RESEED BIT(3)            // トラックパッドリシード
 #define IQS915X_REATI_TP BIT(5)             // トラックパッド再ATI
 #define IQS915X_REATI_ALP BIT(6)            // ALP再ATI
 #define IQS915X_ACK_RESET BIT(7)            // リセットフラグクリア
 #define IQS915X_SW_RESET BIT(9)             // ソフトウェアリセット実行
+#define IQS915X_SUSPEND BIT(11)             // Suspend（処理停止、<3µA）
 
 // Config Settings (2 bytes)
 #define IQS915X_CONFIG_SETTINGS 0x11BE
@@ -194,9 +196,11 @@
 // TERMINATE_COMMSを設定せず、1トランザクション/RDYで動作する。
 #define IQS915X_FORCE_COMMS_METHOD BIT(4)    // 0: クロックストレッチ, 1: コマンド要求方式
 #define IQS915X_TERMINATE_COMMS BIT(6)      // 1: 手動終了（0xEEEE書込み必要）
+#define IQS915X_MANUAL_CONTROL BIT(7)       // 手動モード制御
 #define IQS915X_EVENT_MODE BIT(8)           // 0: ストリーミング, 1: イベントモード
 #define IQS915X_GESTURE_EVENT BIT(9)        // ジェスチャーイベント有効化
-#define IQS915X_TP_EVENT BIT(13)            // トラックパッドイベント有効化
+#define IQS915X_TP_EVENT BIT(10)            // トラックパッドイベント有効化
+#define IQS915X_TP_TOUCH_EVENT BIT(13)      // トラックパッドタッチイベント有効化
 
 // Trackpad Settings (1 byte)
 // XYのフリップ・スワップ設定
@@ -341,6 +345,9 @@ struct iqs915x_config {
     bool switch_xy;
     bool flip_x;
     bool flip_y;
+
+    // Suspend制御
+    bool disabled_by_default;  // 起動時にトラックパッドを無効（Suspend）状態で開始
 };
 
 // ランタイムデータ（実行時に変化する状態）
@@ -391,6 +398,35 @@ struct iqs915x_data {
     uint8_t scroll_vel_idx;          // リングバッファ書き込み位置
     uint8_t scroll_vel_count;        // 有効サンプル数
     bool was_scrolling;              // 前回スクロール中だったか
+
+    // Suspend制御
+    bool enabled;                    // トラックパッド有効フラグ（falseでイベント破棄）
+    bool suspend_pending;            // IQS915xへのSuspend送信待ち
+    bool resume_pending;             // IQS915xからのSuspend解除待ち
 };
+
+/* ============================================================
+ * 公開API
+ * ============================================================ */
+
+/**
+ * @brief トラックパッドの有効/無効を設定する
+ *
+ * enabled=false: イベント破棄を即座に開始し、IQS915xをSuspendに遷移させる
+ * enabled=true:  イベント処理を再開し、IQS915xのSuspendを解除する
+ *
+ * @param dev  IQS915xデバイスインスタンス
+ * @param enabled  true=有効, false=無効(Suspend)
+ * @return 0 on success, negative errno on failure
+ */
+int iqs915x_set_enabled(const struct device *dev, bool enabled);
+
+/**
+ * @brief トラックパッドの現在の有効/無効状態を取得する
+ *
+ * @param dev  IQS915xデバイスインスタンス
+ * @return true=有効, false=無効(Suspend中)
+ */
+bool iqs915x_get_enabled(const struct device *dev);
 
 #endif /* IQS915X_H_ */

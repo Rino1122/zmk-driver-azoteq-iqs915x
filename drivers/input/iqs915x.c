@@ -223,6 +223,31 @@ static int iqs915x_read_stream(const struct device *dev,
 }
 
 /* ============================================================
+ * Force Communication（Suspend解除用）
+ *
+ * IQS915xがSuspend中はRDYがトグルされないため、ホスト側から
+ * Force CommsでI2C通信を開始する必要がある。
+ * デフォルト設定（Force Comms Method = 0）では、RDYがHIGHの
+ * 状態でI2C STARTを発行するとICがクロックストレッチで応答する。
+ * ============================================================ */
+
+// Suspend解除: Force CommsでSystem ControlのSuspendビットをクリアする
+static int iqs915x_force_resume(const struct device *dev) {
+  int ret;
+
+  // Force Comms（クロックストレッチ方式）でSuspendビットをクリアする
+  // ICはクロックストレッチ後に通信ウィンドウを開き、書き込みを受け付ける
+  ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, 0x0000);
+  if (ret < 0) {
+    LOG_ERR("Force resume: failed to clear Suspend bit: %d", ret);
+    return ret;
+  }
+
+  LOG_INF("Force resume: Suspend bit cleared via Force Comms");
+  return 0;
+}
+
+/* ============================================================
  * ボタンリリース遅延処理
  * ============================================================ */
 static void iqs915x_button_release_work_handler(struct k_work *work) {
@@ -781,6 +806,50 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3) {
       continue;
     }
 
+    // ===== Suspend/Resume pending処理 =====
+    // iqs915x_set_enabled()から設定されたpendingフラグを処理する
+
+    if (data->resume_pending) {
+      // Suspend解除: Force CommsでSuspendビットをクリア
+      ret = iqs915x_force_resume(dev);
+      if (ret == 0) {
+        data->resume_pending = false;
+        LOG_INF("Trackpad resumed from suspend");
+      } else {
+        LOG_ERR("Failed to resume from suspend, will retry");
+        // リトライのためにセマフォをgiveして即座に再試行
+        k_sem_give(&data->rdy_sem);
+      }
+      // Resume後は次のRDYを待つ（自動リシードの完了を待機）
+      k_sem_take(&data->rdy_sem, K_FOREVER);
+      continue;
+    }
+
+    if (data->suspend_pending) {
+      // Suspend送信: 次のRDYでSystem ControlにSuspendビットを書き込む
+      // RDYを待ってから書き込む（通信ウィンドウが必要）
+      k_sem_take(&data->rdy_sem, K_FOREVER);
+      ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
+                                IQS915X_SUSPEND);
+      if (ret == 0) {
+        data->suspend_pending = false;
+        LOG_INF("Trackpad suspended");
+      } else {
+        LOG_ERR("Failed to send Suspend: %d, will retry", ret);
+        // リトライのためpendingは維持
+      }
+      continue;
+    }
+
+    // ===== トラックパッド無効時はRDYを待つだけで何もしない =====
+    if (!data->enabled) {
+      // Suspend中でもRDYが来る可能性（SHOW_RESETなど）があるため、
+      // セマフォをタイムアウト付きで待ち、起き上がったら再度ループ先頭で
+      // resume_pendingをチェックする
+      k_sem_take(&data->rdy_sem, K_MSEC(500));
+      continue;
+    }
+
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
 
@@ -1058,6 +1127,10 @@ static int iqs915x_init(const struct device *dev) {
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->work_state = WORK_READ_DATA;
   data->initialized = false;
+  // disabled-by-defaultの場合は起動直後から無効、そうでなければ有効
+  data->enabled = !config->disabled_by_default;
+  data->suspend_pending = config->disabled_by_default;
+  data->resume_pending = false;
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
@@ -1152,9 +1225,83 @@ static int iqs915x_init(const struct device *dev) {
       .switch_xy = DT_INST_PROP(n, switch_xy),                                 \
       .flip_x = DT_INST_PROP(n, flip_x),                                       \
       .flip_y = DT_INST_PROP(n, flip_y),                                       \
+      .disabled_by_default = DT_INST_PROP(n, disabled_by_default),             \
   };                                                                           \
   DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,              \
                         &iqs915x_config_##n, POST_KERNEL,                      \
                         CONFIG_INPUT_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)
+
+/* ============================================================
+ * 公開API: Suspend制御
+ * ============================================================ */
+
+int iqs915x_set_enabled(const struct device *dev, bool enabled) {
+  struct iqs915x_data *data = dev->data;
+
+  if (data->enabled == enabled) {
+    return 0; // 既に同じ状態
+  }
+
+  if (!enabled) {
+    // ===== 無効化: 即座にイベント破棄を開始 =====
+    data->enabled = false;
+
+    // 進行中の操作を安全に解除
+    // ドラッグ中の場合はボタンリリースを送信
+    if (data->active_hold) {
+      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+      data->active_hold = false;
+    }
+
+    // 押下中のボタンをすべてリリース
+    for (int i = 0; i < 3; i++) {
+      if (data->buttons_pressed & BIT(i)) {
+        input_report_key(dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
+      }
+    }
+    data->buttons_pressed = 0;
+    k_work_cancel_delayable(&data->button_release_work);
+
+    // 慣性スクロールをキャンセル
+    iqs915x_cancel_kinetic_scroll(data);
+    iqs915x_reset_scroll_velocity(data);
+    data->was_scrolling = false;
+
+    // タッチ状態をリセット
+    data->is_touching = false;
+    data->last_touch_down_time = 0;
+    data->last_touch_up_time = 0;
+    data->scroll_x_acc = 0;
+    data->scroll_y_acc = 0;
+
+    // IQS915xへのSuspendコマンド送信を予約
+    data->suspend_pending = true;
+    data->resume_pending = false;
+
+    // メインスレッドを起こしてsuspend_pendingを処理させる
+    k_sem_give(&data->rdy_sem);
+
+    LOG_INF("Trackpad disabled (suspend pending)");
+  } else {
+    // ===== 有効化: Resume開始 =====
+    data->enabled = true;
+
+    // IQS915xからのSuspend解除を予約
+    data->resume_pending = true;
+    data->suspend_pending = false;
+
+    // メインスレッドを起こしてresume_pendingを処理させる
+    k_sem_give(&data->rdy_sem);
+
+    LOG_INF("Trackpad enabled (resume pending)");
+  }
+
+  return 0;
+}
+
+bool iqs915x_get_enabled(const struct device *dev) {
+  struct iqs915x_data *data = dev->data;
+  return data->enabled;
+}

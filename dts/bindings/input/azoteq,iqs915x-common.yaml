@@ -102,3 +102,10 @@ properties:
       When both init-data and individual DTS properties (e.g. tap-time,
       report-rate-ms) are specified, init-data is written first, then
       individual properties override the corresponding registers.
+
+  disabled-by-default:
+    type: boolean
+    description: |
+      Start with trackpad disabled (in Suspend mode) at boot.
+      Use iqs915x_set_enabled() API to enable/disable the trackpad
+      at runtime, e.g. from a ZMK behavior or key binding.
