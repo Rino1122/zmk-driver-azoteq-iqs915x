@@ -1076,6 +1076,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool touch_state_changed = touch_down || touch_up;
     bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
     bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
+    uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
     data->is_touching = is_touching_now;
 
     bool has_tp_event = is_touching_now || touch_state_changed;
@@ -1089,6 +1090,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool suppress_pointer_tail =
           !gesture_active && data->gesture_pointer_suppress_ticks > 0;
       bool suppress_pointer = gesture_active || suppress_pointer_tail;
+      bool single_finger_pointer = num_fingers == 1;
+      bool allow_pointer_report = !suppress_pointer && single_finger_pointer;
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
 
       if (gesture_active)
@@ -1279,13 +1282,24 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           iqs915x_reset_absolute_tracking(data);
         }
-        else if (suppress_pointer)
+        else if (!allow_pointer_report)
         {
+          if (!suppress_pointer && (touch_down || tp_movement))
+          {
+            iqs915x_cancel_kinetic_scroll(data);
+          }
+
+          if (!single_finger_pointer)
+          {
+            iqs915x_reset_absolute_tracking(data);
+          }
+
           if (touch_down || tp_movement)
           {
-            LOG_DBG("tp_absolute suppressed: sf=0x%04x tf=0x%04x x=%u y=%u",
-                    stream.gesture_sf, stream.gesture_tf, stream.abs_x,
-                    stream.abs_y);
+            LOG_DBG(
+                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u x=%u y=%u",
+                stream.gesture_sf, stream.gesture_tf, num_fingers,
+                stream.abs_x, stream.abs_y);
           }
         }
         else
@@ -1312,11 +1326,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else if (tp_movement)
       {
-        if (suppress_pointer)
+        if (!allow_pointer_report)
         {
-          LOG_DBG("tp_movement suppressed: sf=0x%04x tf=0x%04x rel_x=%d rel_y=%d",
-                  stream.gesture_sf, stream.gesture_tf, stream.rel_x,
-                  stream.rel_y);
+          if (!suppress_pointer)
+          {
+            iqs915x_cancel_kinetic_scroll(data);
+          }
+
+          LOG_DBG(
+              "tp_movement suppressed: sf=0x%04x tf=0x%04x fingers=%u rel_x=%d rel_y=%d",
+              stream.gesture_sf, stream.gesture_tf, num_fingers,
+              stream.rel_x, stream.rel_y);
         }
         else
         {
