@@ -113,6 +113,6 @@ properties:
   disabled-by-default:
     type: boolean
     description: |
-      Start with trackpad disabled (in Suspend mode) at boot.
+      Start with trackpad disabled (enter LP2 after initialization) at boot.
       Use iqs915x_set_enabled() API to enable/disable the trackpad
       at runtime, e.g. from a ZMK behavior or key binding.

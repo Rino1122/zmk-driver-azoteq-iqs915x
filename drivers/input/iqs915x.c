@@ -256,29 +256,24 @@ static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
 }
 
 /* ============================================================
- * Force Communication（Suspend解除用）
+ * Power mode control
  *
- * IQS915xがSuspend中はRDYがトグルされないため、ホスト側から
- * Force CommsでI2C通信を開始する必要がある。
- * デフォルト設定（Force Comms Method = 0）では、RDYがHIGHの
- * 状態でI2C STARTを発行するとICがクロックストレッチで応答する。
+ * Manual Control有効時は、ホストがSystem ControlのMode Selectで
+ * Active/LP2を切り替える。イベントモード中はRDY待ちのない期間も
+ * あるため、power API由来のモード変更はForce Comms前提で
+ * i2c_writeを発行する。power APIの遷移ではTP Reseedは行わない。
  * ============================================================ */
 
-// Suspend解除: Force CommsでSystem ControlのSuspendビットをクリアする
-static int iqs915x_force_resume(const struct device *dev)
+static int iqs915x_write_power_mode(const struct device *dev, uint16_t mode)
 {
-  int ret;
+  int ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, mode);
 
-  // Force Comms（クロックストレッチ方式）でSuspendビットをクリアする
-  // ICはクロックストレッチ後に通信ウィンドウを開き、書き込みを受け付ける
-  ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, 0x0000);
   if (ret < 0)
   {
-    LOG_ERR("Force resume: failed to clear Suspend bit: %d", ret);
+    LOG_ERR("Failed to set power mode 0x%04x: %d", mode, ret);
     return ret;
   }
 
-  LOG_INF("Force resume: Suspend bit cleared via Force Comms");
   return 0;
 }
 
@@ -579,8 +574,9 @@ static void iqs915x_init_step_handler(const struct device *dev)
         else if (current_addr == IQS915X_CONFIG_SETTINGS)
         {
           // TERMINATE_COMMS(bit6), FORCE_COMMS_METHOD(bit4) は
-          // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアする
-          buffer[i] &= ~0x50;
+          // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアし、
+          // MANUAL_CONTROL(bit7) は常に有効化する
+          buffer[i] = (buffer[i] & ~0x50) | 0x80;
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
@@ -785,7 +781,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_VERIFY_EVENT_MODE:
   {
-    // DTS設定完了後、Event Modeが有効になっているかを確認する。
+    // DTS設定完了後、Event ModeとManual Controlが有効になっているかを確認する。
     // init-dataバッファパッチやDTS設定で設定済のはずだが、
     // 実際にレジスタを読み返して確認する。
     uint16_t cfg = 0;
@@ -795,21 +791,24 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
       return;
     }
-    if (cfg & IQS915X_EVENT_MODE)
+    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
+        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
     {
-      LOG_DBG("Init: Event Mode confirmed (CONFIG_SETTINGS=0x%04x)", cfg);
+      LOG_DBG("Init: Event Mode + Manual Control confirmed (CONFIG_SETTINGS=0x%04x)",
+              cfg);
     }
     else
     {
-      // Event Modeが無効な場合は警告を出して強制設定する
-      LOG_WRN("Init: Event Mode NOT set (CONFIG_SETTINGS=0x%04x). "
-              "Forcing Event Mode on.",
+      // 必須ビットが欠けている場合は警告を出して強制設定する
+      LOG_WRN("Init: CONFIG_SETTINGS missing required bits (0x%04x). "
+              "Forcing Event Mode + Manual Control.",
               cfg);
       ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                                cfg | IQS915X_EVENT_MODE);
+                                cfg | IQS915X_EVENT_MODE |
+                                    IQS915X_MANUAL_CONTROL);
       if (ret < 0)
       {
-        LOG_ERR("Failed to force Event Mode: %d", ret);
+        LOG_ERR("Failed to force Event Mode + Manual Control: %d", ret);
         return;
       }
     }
@@ -929,45 +928,38 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // ===== Suspend/Resume pending処理 =====
+    // ===== Active/LP2 pending処理 =====
     // iqs915x_set_enabled()から設定されたpendingフラグを処理する
 
-    if (data->resume_pending)
+    if (data->active_pending)
     {
-      // Suspend解除: Force CommsでSuspendビットをクリア
-      ret = iqs915x_force_resume(dev);
+      ret = iqs915x_write_power_mode(dev, IQS915X_MODE_ACTIVE);
       if (ret == 0)
       {
-        data->resume_pending = false;
-        LOG_INF("Trackpad resumed from suspend");
+        data->active_pending = false;
+        LOG_INF("Trackpad entered Active mode");
       }
       else
       {
-        LOG_ERR("Failed to resume from suspend, will retry");
+        LOG_ERR("Failed to enter Active mode, will retry");
         // リトライのためにセマフォをgiveして即座に再試行
         k_sem_give(&data->rdy_sem);
       }
-      // Resume後は次のRDYを待つ（自動リシードの完了を待機）
-      k_sem_take(&data->rdy_sem, K_FOREVER);
       continue;
     }
 
-    if (data->suspend_pending)
+    if (data->lp2_pending)
     {
-      // Suspend送信: 次のRDYでSystem ControlにSuspendビットを書き込む
-      // RDYを待ってから書き込む（通信ウィンドウが必要）
-      k_sem_take(&data->rdy_sem, K_FOREVER);
-      ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
-                                IQS915X_SUSPEND);
+      ret = iqs915x_write_power_mode(dev, IQS915X_MODE_LP2);
       if (ret == 0)
       {
-        data->suspend_pending = false;
-        LOG_INF("Trackpad suspended");
+        data->lp2_pending = false;
+        LOG_INF("Trackpad entered LP2 mode");
       }
       else
       {
-        LOG_ERR("Failed to send Suspend: %d, will retry", ret);
-        // リトライのためpendingは維持
+        LOG_ERR("Failed to enter LP2 mode: %d, will retry", ret);
+        k_sem_give(&data->rdy_sem);
       }
       continue;
     }
@@ -977,7 +969,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       // Suspend中でもRDYが来る可能性（SHOW_RESETなど）があるため、
       // セマフォをタイムアウト付きで待ち、起き上がったら再度ループ先頭で
-      // resume_pendingをチェックする
+      // active_pending/lp2_pendingをチェックする
       k_sem_take(&data->rdy_sem, K_MSEC(500));
       continue;
     }
@@ -1390,10 +1382,10 @@ static int iqs915x_init(const struct device *dev)
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->work_state = WORK_READ_DATA;
   data->initialized = false;
-  // disabled-by-defaultの場合は起動直後から無効、そうでなければ有効
+  // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、そうでなければ有効
   data->enabled = !config->disabled_by_default;
-  data->suspend_pending = config->disabled_by_default;
-  data->resume_pending = false;
+  data->lp2_pending = config->disabled_by_default;
+  data->active_pending = false;
   iqs915x_reset_absolute_tracking(data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
@@ -1506,7 +1498,7 @@ static int iqs915x_init(const struct device *dev)
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)
 
 /* ============================================================
- * 公開API: Suspend制御
+ * 公開API: power mode制御
  * ============================================================ */
 
 int iqs915x_set_enabled(const struct device *dev, bool enabled)
@@ -1520,7 +1512,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
 
   if (!enabled)
   {
-    // ===== 無効化: 即座にイベント破棄を開始 =====
+    // ===== 無効化: 即座にイベント破棄を開始し、LP2へ遷移 =====
     data->enabled = false;
 
     // 進行中の操作を安全に解除
@@ -1556,29 +1548,29 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->scroll_x_acc = 0;
     data->scroll_y_acc = 0;
 
-    // IQS915xへのSuspendコマンド送信を予約
-    data->suspend_pending = true;
-    data->resume_pending = false;
+    // IQS915xへのLP2遷移を予約
+    data->lp2_pending = true;
+    data->active_pending = false;
 
-    // メインスレッドを起こしてsuspend_pendingを処理させる
+    // メインスレッドを起こしてlp2_pendingを処理させる
     k_sem_give(&data->rdy_sem);
 
-    LOG_INF("Trackpad disabled (suspend pending)");
+    LOG_INF("Trackpad disabled (LP2 pending)");
   }
   else
   {
-    // ===== 有効化: Resume開始 =====
+    // ===== 有効化: Active modeへの復帰開始 =====
     data->enabled = true;
     data->gesture_pointer_suppress_ticks = 0;
 
-    // IQS915xからのSuspend解除を予約
-    data->resume_pending = true;
-    data->suspend_pending = false;
+    // IQS915xのActive mode復帰を予約
+    data->active_pending = true;
+    data->lp2_pending = false;
 
-    // メインスレッドを起こしてresume_pendingを処理させる
+    // メインスレッドを起こしてactive_pendingを処理させる
     k_sem_give(&data->rdy_sem);
 
-    LOG_INF("Trackpad enabled (resume pending)");
+    LOG_INF("Trackpad enabled (Active pending)");
   }
 
   return 0;

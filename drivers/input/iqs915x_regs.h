@@ -353,8 +353,8 @@ struct iqs915x_config
     bool flip_x;
     bool flip_y;
 
-    // Suspend制御
-    bool disabled_by_default; // 起動時にトラックパッドを無効（Suspend）状態で開始
+    // Power mode制御
+    bool disabled_by_default; // 起動時にトラックパッドを無効（初期化完了後にLP2）状態で開始
 };
 
 // ランタイムデータ（実行時に変化する状態）
@@ -411,10 +411,10 @@ struct iqs915x_data
     bool was_scrolling;                          // 前回スクロール中だったか
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
-    // Suspend制御
-    bool enabled;         // トラックパッド有効フラグ（falseでイベント破棄）
-    bool suspend_pending; // IQS915xへのSuspend送信待ち
-    bool resume_pending;  // IQS915xからのSuspend解除待ち
+    // Power mode制御
+    bool enabled;        // トラックパッド有効フラグ（falseでイベント破棄）
+    bool lp2_pending;    // IQS915xへのLP2遷移待ち
+    bool active_pending; // IQS915xのActive mode復帰待ち
 };
 
 #endif /* IQS915X_REGS_H_ */
