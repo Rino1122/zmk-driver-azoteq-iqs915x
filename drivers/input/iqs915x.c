@@ -32,6 +32,8 @@
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
+#define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
+
 /* ============================================================
  * I2C通信関数
  *
@@ -1046,6 +1048,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       iqs915x_cancel_kinetic_scroll(data);
       iqs915x_reset_scroll_velocity(data);
       data->was_scrolling = false;
+      data->gesture_pointer_suppress_ticks = 0;
       continue;
     }
 
@@ -1072,20 +1075,39 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool touch_up = !is_touching_now && was_touching;
     bool touch_state_changed = touch_down || touch_up;
     bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
+    bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
     data->is_touching = is_touching_now;
 
     bool has_tp_event = is_touching_now || touch_state_changed;
-    if (stream.gesture_sf != 0 || stream.gesture_tf != 0 || tp_movement)
+    if (gesture_active || tp_movement)
     {
       has_tp_event = true;
     }
 
     if (has_tp_event)
     {
+      bool suppress_pointer_tail =
+          !gesture_active && data->gesture_pointer_suppress_ticks > 0;
+      bool suppress_pointer = gesture_active || suppress_pointer_tail;
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
 
+      if (gesture_active)
+      {
+        data->gesture_pointer_suppress_ticks =
+            GESTURE_POINTER_SUPPRESS_TAIL_TICKS;
+      }
+      else if (suppress_pointer_tail)
+      {
+        data->gesture_pointer_suppress_ticks--;
+      }
+
+      if (touch_up)
+      {
+        data->gesture_pointer_suppress_ticks = 0;
+      }
+
       // 診断: ジェスチャーフラグが非ゼロのときにログ出力
-      if (stream.gesture_sf || stream.gesture_tf)
+      if (gesture_active)
       {
         LOG_DBG(
             "gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
@@ -1257,6 +1279,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           iqs915x_reset_absolute_tracking(data);
         }
+        else if (suppress_pointer)
+        {
+          if (touch_down || tp_movement)
+          {
+            LOG_DBG("tp_absolute suppressed: sf=0x%04x tf=0x%04x x=%u y=%u",
+                    stream.gesture_sf, stream.gesture_tf, stream.abs_x,
+                    stream.abs_y);
+          }
+        }
         else
         {
           // 通常のポインタ操作が再開したら慣性スクロールを止める
@@ -1281,15 +1312,26 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else if (tp_movement)
       {
-        // カーソル移動中は慣性スクロールを打ち切る
-        iqs915x_cancel_kinetic_scroll(data);
-
-        if (stream.rel_x != 0 || stream.rel_y != 0)
+        if (suppress_pointer)
         {
-          LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x,
+          LOG_DBG("tp_movement suppressed: sf=0x%04x tf=0x%04x rel_x=%d rel_y=%d",
+                  stream.gesture_sf, stream.gesture_tf, stream.rel_x,
                   stream.rel_y);
-          input_report_rel(dev, INPUT_REL_X, stream.rel_x, false, K_FOREVER);
-          input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true, K_FOREVER);
+        }
+        else
+        {
+          // カーソル移動中は慣性スクロールを打ち切る
+          iqs915x_cancel_kinetic_scroll(data);
+
+          if (stream.rel_x != 0 || stream.rel_y != 0)
+          {
+            LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x,
+                    stream.rel_y);
+            input_report_rel(dev, INPUT_REL_X, stream.rel_x, false,
+                             K_FOREVER);
+            input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true,
+                             K_FOREVER);
+          }
         }
       }
     }
@@ -1484,6 +1526,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     iqs915x_cancel_kinetic_scroll(data);
     iqs915x_reset_scroll_velocity(data);
     data->was_scrolling = false;
+    data->gesture_pointer_suppress_ticks = 0;
 
     // タッチ状態をリセット
     data->is_touching = false;
@@ -1506,6 +1549,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
   {
     // ===== 有効化: Resume開始 =====
     data->enabled = true;
+    data->gesture_pointer_suppress_ticks = 0;
 
     // IQS915xからのSuspend解除を予約
     data->resume_pending = true;

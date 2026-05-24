@@ -409,6 +409,7 @@ struct iqs915x_data
     uint8_t scroll_vel_idx;                      // リングバッファ書き込み位置
     uint8_t scroll_vel_count;                    // 有効サンプル数
     bool was_scrolling;                          // 前回スクロール中だったか
+    uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Suspend制御
     bool enabled;         // トラックパッド有効フラグ（falseでイベント破棄）
