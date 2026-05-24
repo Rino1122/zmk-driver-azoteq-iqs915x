@@ -90,10 +90,10 @@
 #define IQS915X_TRIPLE_TAP BIT(2)
 #define IQS915X_PRESS_AND_HOLD BIT(3)
 #define IQS915X_PALM_GESTURE BIT(4)
-#define IQS915X_SWIPE_X_POS BIT(8)   // 右スワイプ
-#define IQS915X_SWIPE_X_NEG BIT(9)   // 左スワイプ
-#define IQS915X_SWIPE_Y_POS BIT(10)  // 下スワイプ
-#define IQS915X_SWIPE_Y_NEG BIT(11)  // 上スワイプ
+#define IQS915X_SWIPE_X_POS BIT(8)       // 右スワイプ
+#define IQS915X_SWIPE_X_NEG BIT(9)       // 左スワイプ
+#define IQS915X_SWIPE_Y_POS BIT(10)      // 下スワイプ
+#define IQS915X_SWIPE_Y_NEG BIT(11)      // 上スワイプ
 #define IQS915X_SWIPE_HOLD_X_POS BIT(12) // 右スワイプ＆ホールド
 #define IQS915X_SWIPE_HOLD_X_NEG BIT(13) // 左スワイプ＆ホールド
 #define IQS915X_SWIPE_HOLD_Y_POS BIT(14) // 下スワイプ＆ホールド
@@ -109,8 +109,8 @@
 #define IQS915X_TWO_FINGER_PRESS_AND_HOLD BIT(3)
 #define IQS915X_ZOOM_IN BIT(4)
 #define IQS915X_ZOOM_OUT BIT(5)
-#define IQS915X_SCROLL_V BIT(6)  // 縦スクロール
-#define IQS915X_SCROLL_H BIT(7)  // 横スクロール
+#define IQS915X_SCROLL_V BIT(6) // 縦スクロール
+#define IQS915X_SCROLL_H BIT(7) // 横スクロール
 // スクロール判定用の複合マスク
 #define IQS915X_SCROLL (IQS915X_SCROLL_V | IQS915X_SCROLL_H)
 
@@ -119,45 +119,45 @@
  * データシート Section 15: INFO_FLAGS レジスタ定義
  * ============================================================ */
 // Bit 2-0: 現在の動作モード
-#define IQS915X_CHARGING_MODE_MASK  0x0007
-#define IQS915X_MODE_ACTIVE         0x0000  // Activeモード
-#define IQS915X_MODE_IDLE_TOUCH     0x0001  // Idle-Touchモード
-#define IQS915X_MODE_IDLE           0x0002  // Idleモード
-#define IQS915X_MODE_LP1            0x0003  // LP1モード
-#define IQS915X_MODE_LP2            0x0004  // LP2モード
+#define IQS915X_CHARGING_MODE_MASK 0x0007
+#define IQS915X_MODE_ACTIVE 0x0000     // Activeモード
+#define IQS915X_MODE_IDLE_TOUCH 0x0001 // Idle-Touchモード
+#define IQS915X_MODE_IDLE 0x0002       // Idleモード
+#define IQS915X_MODE_LP1 0x0003        // LP1モード
+#define IQS915X_MODE_LP2 0x0004        // LP2モード
 // Bit 3: ATI Error - トラックパッドATIエラー
-#define IQS915X_ATI_ERROR           BIT(3)
+#define IQS915X_ATI_ERROR BIT(3)
 // Bit 4: Re-ATI Occurred - トラックパッドRe-ATI完了
-#define IQS915X_REATI_OCCURRED      BIT(4)
+#define IQS915X_REATI_OCCURRED BIT(4)
 // Bit 5: ALP ATI Error - ALPチャネルATIエラー
-#define IQS915X_ALP_ATI_ERROR       BIT(5)
+#define IQS915X_ALP_ATI_ERROR BIT(5)
 // Bit 6: ALP Re-ATI Occurred - ALPチャネルRe-ATI完了
-#define IQS915X_ALP_REATI_OCCURRED  BIT(6)
+#define IQS915X_ALP_REATI_OCCURRED BIT(6)
 // Bit 7: Show Reset - リセット発生通知（ACK Resetで解除）
-#define IQS915X_SHOW_RESET          BIT(7)
+#define IQS915X_SHOW_RESET BIT(7)
 // Bit 8: ALP Prox Status - ALPチャネルのProx/Touch検出状態
-#define IQS915X_ALP_PROX_STATUS     BIT(8)
+#define IQS915X_ALP_PROX_STATUS BIT(8)
 // Bit 9: Global TP Touch - いずれかのTPチャネルでタッチ検出中
-#define IQS915X_GLOBAL_TP_TOUCH     BIT(9)
+#define IQS915X_GLOBAL_TP_TOUCH BIT(9)
 // Bit 10: Switch Pressed - スイッチ押下検出中
-#define IQS915X_SWITCH_PRESSED      BIT(10)
+#define IQS915X_SWITCH_PRESSED BIT(10)
 // Bit 11: Global Snap - いずれかのSnapチャネルでスナップ検出中
-#define IQS915X_GLOBAL_SNAP         BIT(11)
+#define IQS915X_GLOBAL_SNAP BIT(11)
 // Bit 12: ALP Prox Toggled - ALPチャネルProx状態変化
-#define IQS915X_ALP_PROX_TOGGLED    BIT(12)
+#define IQS915X_ALP_PROX_TOGGLED BIT(12)
 // Bit 13: TP Touch Toggled - TPチャネルタッチ状態変化
-#define IQS915X_TP_TOUCH_TOGGLED    BIT(13)
+#define IQS915X_TP_TOUCH_TOGGLED BIT(13)
 // Bit 14: Switch Toggled - スイッチ状態変化
-#define IQS915X_SWITCH_TOGGLED      BIT(14)
+#define IQS915X_SWITCH_TOGGLED BIT(14)
 // Bit 15: Snap Toggled - Snapチャネル状態変化
-#define IQS915X_SNAP_TOGGLED        BIT(15)
+#define IQS915X_SNAP_TOGGLED BIT(15)
 
 /* ============================================================
  * Trackpad Flags ビットフラグ (0x1022)
  * ============================================================ */
 // 下位バイト: 指の数と状態
-#define IQS915X_NUM_FINGERS_MASK 0x000F     // Bit 0-3: アクティブな指の数(0-7)
-#define IQS915X_TP_MOVEMENT BIT(4)          // 指の移動を検知
+#define IQS915X_NUM_FINGERS_MASK 0x000F // Bit 0-3: アクティブな指の数(0-7)
+#define IQS915X_TP_MOVEMENT BIT(4)      // 指の移動を検知
 // 上位バイト: 各指の信頼度フラグ
 #define IQS915X_FINGER1_CONFIDENCE BIT(8)
 #define IQS915X_FINGER2_CONFIDENCE BIT(9)
@@ -175,18 +175,18 @@
 // 注意: ACK Resetは Bit 7 で行う
 #define IQS915X_SYSTEM_CONTROL 0x11BC
 // System Control ビットフラグ
-#define IQS915X_MODE_SELECT_MASK 0x0007     // Bit 2-0: モード選択
-#define IQS915X_MODE_ACTIVE 0x00            // アクティブモード
-#define IQS915X_MODE_IDLE_TOUCH 0x01        // アイドルタッチモード
-#define IQS915X_MODE_IDLE 0x02              // アイドルモード
-#define IQS915X_MODE_LP1 0x03               // 低消費電力モード1
-#define IQS915X_MODE_LP2 0x04               // 低消費電力モード2
-#define IQS915X_TP_RESEED BIT(3)            // トラックパッドリシード
-#define IQS915X_REATI_TP BIT(5)             // トラックパッド再ATI
-#define IQS915X_REATI_ALP BIT(6)            // ALP再ATI
-#define IQS915X_ACK_RESET BIT(7)            // リセットフラグクリア
-#define IQS915X_SW_RESET BIT(9)             // ソフトウェアリセット実行
-#define IQS915X_SUSPEND BIT(11)             // Suspend（処理停止、<3µA）
+#define IQS915X_MODE_SELECT_MASK 0x0007 // Bit 2-0: モード選択
+#define IQS915X_MODE_ACTIVE 0x00        // アクティブモード
+#define IQS915X_MODE_IDLE_TOUCH 0x01    // アイドルタッチモード
+#define IQS915X_MODE_IDLE 0x02          // アイドルモード
+#define IQS915X_MODE_LP1 0x03           // 低消費電力モード1
+#define IQS915X_MODE_LP2 0x04           // 低消費電力モード2
+#define IQS915X_TP_RESEED BIT(3)        // トラックパッドリシード
+#define IQS915X_REATI_TP BIT(5)         // トラックパッド再ATI
+#define IQS915X_REATI_ALP BIT(6)        // ALP再ATI
+#define IQS915X_ACK_RESET BIT(7)        // リセットフラグクリア
+#define IQS915X_SW_RESET BIT(9)         // ソフトウェアリセット実行
+#define IQS915X_SUSPEND BIT(11)         // Suspend（処理停止、<3µA）
 
 // Config Settings (2 bytes)
 #define IQS915X_CONFIG_SETTINGS 0x11BE
@@ -194,13 +194,13 @@
 // 注意: TERMINATE_COMMS=0（デフォルト）ではI2C STOPで通信ウィンドウが閉じる。
 // データシート推奨はI2C STOPでの自動終了のため、本ドライバでは
 // TERMINATE_COMMSを設定せず、1トランザクション/RDYで動作する。
-#define IQS915X_FORCE_COMMS_METHOD BIT(4)    // 0: クロックストレッチ, 1: コマンド要求方式
-#define IQS915X_TERMINATE_COMMS BIT(6)      // 1: 手動終了（0xEEEE書込み必要）
-#define IQS915X_MANUAL_CONTROL BIT(7)       // 手動モード制御
-#define IQS915X_EVENT_MODE BIT(8)           // 0: ストリーミング, 1: イベントモード
-#define IQS915X_GESTURE_EVENT BIT(9)        // ジェスチャーイベント有効化
-#define IQS915X_TP_EVENT BIT(10)            // トラックパッドイベント有効化
-#define IQS915X_TP_TOUCH_EVENT BIT(13)      // トラックパッドタッチイベント有効化
+#define IQS915X_FORCE_COMMS_METHOD BIT(4) // 0: クロックストレッチ, 1: コマンド要求方式
+#define IQS915X_TERMINATE_COMMS BIT(6)    // 1: 手動終了（0xEEEE書込み必要）
+#define IQS915X_MANUAL_CONTROL BIT(7)     // 手動モード制御
+#define IQS915X_EVENT_MODE BIT(8)         // 0: ストリーミング, 1: イベントモード
+#define IQS915X_GESTURE_EVENT BIT(9)      // ジェスチャーイベント有効化
+#define IQS915X_TP_EVENT BIT(10)          // トラックパッドイベント有効化
+#define IQS915X_TP_TOUCH_EVENT BIT(13)    // トラックパッドタッチイベント有効化
 
 // Trackpad Settings (1 byte)
 // XYのフリップ・スワップ設定
@@ -223,20 +223,20 @@
 #define IQS915X_TWO_FINGER_GESTURES_ENABLE 0x11F8
 
 // ジェスチャータイミング設定 (各2 bytes, ms単位)
-#define IQS915X_TAP_TIME 0x11FA             // タップ判定時間
-#define IQS915X_HOLD_TIME 0x1200            // プレス＆ホールド判定時間
+#define IQS915X_TAP_TIME 0x11FA  // タップ判定時間
+#define IQS915X_HOLD_TIME 0x1200 // プレス＆ホールド判定時間
 
 // スクロール設定 (各2 bytes)
-#define IQS915X_SCROLL_INITIAL_DIST 0x1212  // スクロール開始に必要な移動量
-#define IQS915X_SCROLL_CONS_DIST 0x1214     // 連続スクロール判定の移動量
+#define IQS915X_SCROLL_INITIAL_DIST 0x1212 // スクロール開始に必要な移動量
+#define IQS915X_SCROLL_CONS_DIST 0x1214    // 連続スクロール判定の移動量
 
 // サンプリング周期レジスタ (各2 bytes, ms単位)
 // データシート Section 6.1 参照
-#define IQS915X_ACTIVE_MODE_REPORT_RATE  0x11A2  // Active Mode (デフォルト: ~10ms)
-#define IQS915X_IDLE_TOUCH_REPORT_RATE   0x11A4  // Idle-Touch Mode
-#define IQS915X_IDLE_MODE_REPORT_RATE    0x11A6  // Idle Mode
-#define IQS915X_LP1_MODE_REPORT_RATE     0x11A8  // LP1 Mode
-#define IQS915X_LP2_MODE_REPORT_RATE     0x11AA  // LP2 Mode
+#define IQS915X_ACTIVE_MODE_REPORT_RATE 0x11A2 // Active Mode (デフォルト: ~10ms)
+#define IQS915X_IDLE_TOUCH_REPORT_RATE 0x11A4  // Idle-Touch Mode
+#define IQS915X_IDLE_MODE_REPORT_RATE 0x11A6   // Idle Mode
+#define IQS915X_LP1_MODE_REPORT_RATE 0x11A8    // LP1 Mode
+#define IQS915X_LP2_MODE_REPORT_RATE 0x11AA    // LP2 Mode
 
 /* ============================================================
  * 初期化データ（init-data）メモリマップ定数
@@ -247,20 +247,20 @@
  * ============================================================ */
 
 // メイン領域: 0x115C〜0x15EB（ALP補償〜仮想ホイール）
-#define IQS915X_INIT_DATA_BASE_ADDR    0x115C
-#define IQS915X_INIT_DATA_MAIN_SIZE    1168   // 0x15EB - 0x115C + 1 = 0x0490
+#define IQS915X_INIT_DATA_BASE_ADDR 0x115C
+#define IQS915X_INIT_DATA_MAIN_SIZE 1168 // 0x15EB - 0x115C + 1 = 0x0490
 
 // エンジニアリング領域: 0x2000〜0x2005
-#define IQS915X_INIT_DATA_ENG_ADDR     0x2000
-#define IQS915X_INIT_DATA_ENG_SIZE     6
+#define IQS915X_INIT_DATA_ENG_ADDR 0x2000
+#define IQS915X_INIT_DATA_ENG_SIZE 6
 
 // init-dataの合計サイズ（バイト）
-#define IQS915X_INIT_DATA_TOTAL_SIZE   (IQS915X_INIT_DATA_MAIN_SIZE + IQS915X_INIT_DATA_ENG_SIZE)
+#define IQS915X_INIT_DATA_TOTAL_SIZE (IQS915X_INIT_DATA_MAIN_SIZE + IQS915X_INIT_DATA_ENG_SIZE)
 
 // 1回のRDYサイクルで書き込むチャンクサイズ（バイト）
 // nRF52のTWIM EasyDMAバッファ上限（255バイト）以内で、
 // 2バイトのレジスタアドレスを考慮した保守的な値
-#define IQS915X_INIT_WRITE_CHUNK_SIZE  128
+#define IQS915X_INIT_WRITE_CHUNK_SIZE 128
 
 /* ============================================================
  * マウスボタンヘルパー
@@ -282,30 +282,32 @@
  * ============================================================ */
 
 // 初期化ステップ: iqs915x_setup中に1ステップずつ進行
-enum iqs915x_init_step {
-    INIT_CHECK_SHOW_RESET,         // SHOW_RESETフラグ確認
-    INIT_SOFTWARE_RESET,           // ソフトウェアリセット発行
-    INIT_WAIT_SOFTWARE_RESET,      // ソフトウェアリセット完了待機
-    INIT_ACK_RESET,                // リセットACK
-    INIT_WRITE_INIT_DATA,          // init-dataブロック書き込み（複数RDYサイクル）
-    INIT_SINGLE_FINGER_GESTURES,   // 1本指ジェスチャー有効化
-    INIT_HOLD_TIME,                // プレス＆ホールド判定時間
-    INIT_TWO_FINGER_GESTURES,      // 2本指ジェスチャー有効化
-    INIT_TRACKPAD_SETTINGS,        // 軸設定（FlipX/Y, SwitchXY）
-    INIT_TAP_TIME,                 // タップ判定時間（オプション）
-    INIT_ACTIVE_REPORT_RATE,       // レポートレート（Activeモードのみ）
-    INIT_VERIFY_EVENT_MODE,        // Event Mode有効確認（未設定なら強制設定）
-    INIT_VERIFY_RESET,             // リセット状態確認（ダミー読み取り）
-    INIT_FINAL_ACK_RESET,          // 最終リセットACK（Show Resetフラグクリア）
-    INIT_WAIT_REATI,               // Re-ATI完了待機（SHOW_RESETクリアを確認）
-    INIT_COMPLETE,                 // 初期化完了
+enum iqs915x_init_step
+{
+    INIT_CHECK_SHOW_RESET,       // SHOW_RESETフラグ確認
+    INIT_SOFTWARE_RESET,         // ソフトウェアリセット発行
+    INIT_WAIT_SOFTWARE_RESET,    // ソフトウェアリセット完了待機
+    INIT_ACK_RESET,              // リセットACK
+    INIT_WRITE_INIT_DATA,        // init-dataブロック書き込み（複数RDYサイクル）
+    INIT_SINGLE_FINGER_GESTURES, // 1本指ジェスチャー有効化
+    INIT_HOLD_TIME,              // プレス＆ホールド判定時間
+    INIT_TWO_FINGER_GESTURES,    // 2本指ジェスチャー有効化
+    INIT_TRACKPAD_SETTINGS,      // 軸設定（FlipX/Y, SwitchXY）
+    INIT_TAP_TIME,               // タップ判定時間（オプション）
+    INIT_ACTIVE_REPORT_RATE,     // レポートレート（Activeモードのみ）
+    INIT_VERIFY_EVENT_MODE,      // Event Mode有効確認（未設定なら強制設定）
+    INIT_VERIFY_RESET,           // リセット状態確認（ダミー読み取り）
+    INIT_FINAL_ACK_RESET,        // 最終リセットACK（Show Resetフラグクリア）
+    INIT_WAIT_REATI,             // Re-ATI完了待機（SHOW_RESETクリアを確認）
+    INIT_COMPLETE,               // 初期化完了
 };
 
 // 通常動作時のワークハンドラステート
-enum iqs915x_work_state {
-    WORK_READ_INFO_FLAGS,          // Info Flags読み取り（リセット検知）
-    WORK_ACK_RESET,                // リセットACK書き込み
-    WORK_READ_DATA,                // トラックパッドデータ一括読み取り
+enum iqs915x_work_state
+{
+    WORK_READ_INFO_FLAGS, // Info Flags読み取り（リセット検知）
+    WORK_ACK_RESET,       // リセットACK書き込み
+    WORK_READ_DATA,       // トラックパッドデータ一括読み取り
 };
 
 /* ============================================================
@@ -313,14 +315,15 @@ enum iqs915x_work_state {
  * ============================================================ */
 
 // デバイス設定（DTSから読み込まれる定数値）
-struct iqs915x_config {
+struct iqs915x_config
+{
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec rdy_gpio;
     struct gpio_dt_spec reset_gpio;
 
     // 初期化データ（NVM非搭載デバイス用）
-    const uint8_t *init_data;     // DTSから読み込んだバイト配列（NULLの場合はスキップ）
-    uint16_t init_data_len;       // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE想定）
+    const uint8_t *init_data; // DTSから読み込んだバイト配列（NULLの場合はスキップ）
+    uint16_t init_data_len;   // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE想定）
 
     // ジェスチャー設定
     bool one_finger_tap;
@@ -330,16 +333,19 @@ struct iqs915x_config {
 
     // スクロール設定
     bool scroll;
-    uint16_t scroll_divisor;  // スクロール感度除数
+    uint16_t scroll_divisor; // スクロール感度除数
 
     // 慣性スクロール設定
-    bool kinetic_scroll;          // 慣性スクロール有効フラグ
-    uint8_t kinetic_friction;     // 減衰率 (0-100, デフォルト85)
-    uint8_t kinetic_interval_ms;  // 慣性ティック間隔 (ms, デフォルト15)
+    bool kinetic_scroll;         // 慣性スクロール有効フラグ
+    uint8_t kinetic_friction;    // 減衰率 (0-100, デフォルト85)
+    uint8_t kinetic_interval_ms; // 慣性ティック間隔 (ms, デフォルト15)
 
     // タイミング設定
-    uint16_t tap_time;        // タップ判定時間(ms), 0=NVMデフォルト
-    uint16_t report_rate_ms;  // Active Modeサンプリング周期(ms), 0=NVMデフォルト
+    uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
+    uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
+
+    // 座標報告モード
+    bool report_absolute; // true=FINGER1_X/YをINPUT_ABS_X/Yで報告
 
     // 軸設定
     bool switch_xy;
@@ -347,14 +353,15 @@ struct iqs915x_config {
     bool flip_y;
 
     // Suspend制御
-    bool disabled_by_default;  // 起動時にトラックパッドを無効（Suspend）状態で開始
+    bool disabled_by_default; // 起動時にトラックパッドを無効（Suspend）状態で開始
 };
 
 // ランタイムデータ（実行時に変化する状態）
-struct iqs915x_data {
+struct iqs915x_data
+{
     const struct device *dev;
     struct gpio_callback rdy_cb;
-    
+
     // 専用スレッド用
     struct k_sem rdy_sem;
     struct k_thread thread;
@@ -363,11 +370,11 @@ struct iqs915x_data {
     struct k_work_delayable button_release_work;
 
     // ステートマシン
-    enum iqs915x_init_step init_step;    // 初期化進行状態
-    enum iqs915x_work_state work_state;  // 通常動作ステート
-    bool initialized;                    // 初期化完了フラグ
-    uint16_t init_data_offset;           // init-data書き込み進捗（バイトオフセット）
-    uint8_t wait_count;                  // SW ResetやRe-ATIなどの待機リトライカウンタ
+    enum iqs915x_init_step init_step;   // 初期化進行状態
+    enum iqs915x_work_state work_state; // 通常動作ステート
+    bool initialized;                   // 初期化完了フラグ
+    uint16_t init_data_offset;          // init-data書き込み進捗（バイトオフセット）
+    uint8_t wait_count;                 // SW ResetやRe-ATIなどの待機リトライカウンタ
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;
@@ -383,26 +390,29 @@ struct iqs915x_data {
     bool is_touching;
     int64_t last_touch_down_time;
     int64_t last_touch_up_time;
+    uint16_t last_abs_x; // 直前に報告したabsolute X座標
+    uint16_t last_abs_y; // 直前に報告したabsolute Y座標
+    bool last_abs_valid; // absolute座標の直前報告値が有効か
 
     // スクロールアキュムレータ
     int16_t scroll_x_acc;
     int16_t scroll_y_acc;
 
     // 慣性スクロール用
-    struct k_work_delayable kinetic_scroll_work;  // 慣性スクロールタイマー
-    int16_t kinetic_vel_x;           // 現在のX方向慣性速度
-    int16_t kinetic_vel_y;           // 現在のY方向慣性速度
-    bool kinetic_active;             // 慣性スクロール実行中フラグ
-    int16_t scroll_vel_x_samples[4]; // 直近4サンプルのX速度リングバッファ
-    int16_t scroll_vel_y_samples[4]; // 直近4サンプルのY速度リングバッファ
-    uint8_t scroll_vel_idx;          // リングバッファ書き込み位置
-    uint8_t scroll_vel_count;        // 有効サンプル数
-    bool was_scrolling;              // 前回スクロール中だったか
+    struct k_work_delayable kinetic_scroll_work; // 慣性スクロールタイマー
+    int16_t kinetic_vel_x;                       // 現在のX方向慣性速度
+    int16_t kinetic_vel_y;                       // 現在のY方向慣性速度
+    bool kinetic_active;                         // 慣性スクロール実行中フラグ
+    int16_t scroll_vel_x_samples[4];             // 直近4サンプルのX速度リングバッファ
+    int16_t scroll_vel_y_samples[4];             // 直近4サンプルのY速度リングバッファ
+    uint8_t scroll_vel_idx;                      // リングバッファ書き込み位置
+    uint8_t scroll_vel_count;                    // 有効サンプル数
+    bool was_scrolling;                          // 前回スクロール中だったか
 
     // Suspend制御
-    bool enabled;                    // トラックパッド有効フラグ（falseでイベント破棄）
-    bool suspend_pending;            // IQS915xへのSuspend送信待ち
-    bool resume_pending;             // IQS915xからのSuspend解除待ち
+    bool enabled;         // トラックパッド有効フラグ（falseでイベント破棄）
+    bool suspend_pending; // IQS915xへのSuspend送信待ち
+    bool resume_pending;  // IQS915xからのSuspend解除待ち
 };
 
 #endif /* IQS915X_REGS_H_ */

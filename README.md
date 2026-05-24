@@ -9,6 +9,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 ## Supported features
 
 - Trackpad movement (relative coordinates).
+- Optional absolute X/Y reporting from FINGER1_X/Y.
 - Single finger tap: Reported as a left click.
 - Two finger tap: Reported as a right click.
 - Press and hold: Reported as a continuous left click (allows click and drag).
@@ -54,6 +55,9 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         kinetic-friction = <85>;     /* 0-100% velocity retention per tick */
         kinetic-interval-ms = <15>;  /* Time between kinetic updates */
 
+        /* Report raw FINGER1_X/Y as INPUT_ABS_X/Y instead of REL_X/Y */
+        report-absolute;
+
         switch-xy;
 
         /* Init data for IQS9150 (no NVM) - see section below */
@@ -61,6 +65,11 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
     };
 };
 ```
+
+When `report-absolute` is enabled, the driver emits raw IQS9150 finger 1
+coordinates from registers `0x1024` and `0x1026` as `INPUT_ABS_X` and
+`INPUT_ABS_Y`. Relative reporting remains the default when the property is
+omitted.
 
 ## Initialization data (IQS9150/IQS9151)
 

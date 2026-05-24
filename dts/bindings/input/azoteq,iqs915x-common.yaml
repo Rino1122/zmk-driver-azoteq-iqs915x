@@ -86,6 +86,13 @@ properties:
       higher power consumption. If not set, IQS9150 NVM default is used.
       Typical: 10 (100Hz default), 5 (200Hz), 2 (500Hz).
 
+  report-absolute:
+    type: boolean
+    description: |
+      Report raw finger 1 coordinates from registers 0x1024/0x1026 using
+      INPUT_ABS_X and INPUT_ABS_Y instead of relative deltas from REL_X/REL_Y.
+      If unset, the driver keeps reporting relative movement.
+
   azoteq,init-data:
     type: uint8-array
     required: true
