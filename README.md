@@ -68,8 +68,9 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 When `report-absolute` is enabled, the driver emits raw IQS9150 finger 1
 coordinates from registers `0x1024` and `0x1026` as `INPUT_ABS_X` and
-`INPUT_ABS_Y`. Relative reporting remains the default when the property is
-omitted.
+`INPUT_ABS_Y`. The driver sends an initial coordinate sample on touch-down,
+then sends updates while `TP Movement` is asserted. Relative reporting remains
+the default when the property is omitted.
 
 ## Initialization data (IQS9150/IQS9151)
 

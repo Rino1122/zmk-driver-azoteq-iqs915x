@@ -1002,7 +1002,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
 
       LOG_DBG(
-          "info_flags=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          "info_flags=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
           stream.info_flags, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
@@ -1016,7 +1016,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
           (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
           (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
-          (stream.info_flags & IQS915X_TP_TOUCH_TOGGLED) ? " TP_TOUCH_TOG" : "",
           (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
           (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
     }
@@ -1052,9 +1051,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // =========================================================
     // ドラッグ解除チェック: has_tp_event に依存せず毎フレーム実行
-    // has_tp_event が false のフレームでも確実にドラッグを解除する
+    // Global TP Touchの立下がりを使って確実にドラッグを解除する
     // =========================================================
-    bool is_touching_now = (stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK) > 0;
+    bool is_touching_now =
+        (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
     bool drag_just_released = false;
 
     if (config->press_and_hold && data->active_hold && !is_touching_now)
@@ -1066,21 +1066,22 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
     }
 
-    // data->is_touching は常に最新の状態を反映する（has_tp_eventの外で更新）
+    // Global TP Touchの現在値と前回値からtrackpad-wideのtouch遷移を合成する
     bool was_touching = data->is_touching;
+    bool touch_down = is_touching_now && !was_touching;
+    bool touch_up = !is_touching_now && was_touching;
+    bool touch_state_changed = touch_down || touch_up;
+    bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
     data->is_touching = is_touching_now;
 
-    bool has_tp_event =
-        (stream.info_flags & (IQS915X_TP_TOUCH_TOGGLED | BIT(9))) != 0;
-    if (stream.gesture_sf != 0 || stream.gesture_tf != 0 ||
-        (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0)
+    bool has_tp_event = is_touching_now || touch_state_changed;
+    if (stream.gesture_sf != 0 || stream.gesture_tf != 0 || tp_movement)
     {
       has_tp_event = true;
     }
 
     if (has_tp_event)
     {
-      bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
 
       // 診断: ジェスチャーフラグが非ゼロのときにログ出力
@@ -1141,14 +1142,13 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
       // 注: ドラッグ解除は上で has_tp_event の外で処理済み
       int64_t now_ms = k_uptime_get();
-      bool is_touching = is_touching_now;
 
       bool hold_became_active = false;
 
       if (config->press_and_hold && !data->active_hold)
       {
         // ----- 生のTouch Down / Up イベントによる高速判定 -----
-        if (is_touching && !was_touching)
+        if (touch_down)
         {
           // Touch Down (指が触れた瞬間)
           data->last_touch_down_time = now_ms;
@@ -1161,7 +1161,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
             data->last_touch_up_time = 0; // 消費したため窓を閉じる
           }
         }
-        else if (!is_touching && was_touching)
+        else if (touch_up)
         {
           // Touch Up (指が離れた瞬間)
           // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
@@ -1253,7 +1253,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else if (config->report_absolute)
       {
-        if (!is_touching_now)
+        if (touch_up)
         {
           iqs915x_reset_absolute_tracking(data);
         }
@@ -1262,16 +1262,20 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           // 通常のポインタ操作が再開したら慣性スクロールを止める
           iqs915x_cancel_kinetic_scroll(data);
 
-          if (!data->last_abs_valid || stream.abs_x != data->last_abs_x ||
-              stream.abs_y != data->last_abs_y)
+          if (touch_down || tp_movement)
           {
-            LOG_DBG("tp_absolute: x=%u, y=%u", stream.abs_x, stream.abs_y);
-            input_report_abs(dev, INPUT_ABS_X, stream.abs_x, false,
-                             K_FOREVER);
-            input_report_abs(dev, INPUT_ABS_Y, stream.abs_y, true, K_FOREVER);
-            data->last_abs_x = stream.abs_x;
-            data->last_abs_y = stream.abs_y;
-            data->last_abs_valid = true;
+            if (!data->last_abs_valid || stream.abs_x != data->last_abs_x ||
+                stream.abs_y != data->last_abs_y)
+            {
+              LOG_DBG("tp_absolute: x=%u, y=%u", stream.abs_x, stream.abs_y);
+              input_report_abs(dev, INPUT_ABS_X, stream.abs_x, false,
+                               K_FOREVER);
+              input_report_abs(dev, INPUT_ABS_Y, stream.abs_y, true,
+                               K_FOREVER);
+              data->last_abs_x = stream.abs_x;
+              data->last_abs_y = stream.abs_y;
+              data->last_abs_valid = true;
+            }
           }
         }
       }

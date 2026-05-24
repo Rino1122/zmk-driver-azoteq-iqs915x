@@ -145,7 +145,8 @@
 #define IQS915X_GLOBAL_SNAP BIT(11)
 // Bit 12: ALP Prox Toggled - ALPチャネルProx状態変化
 #define IQS915X_ALP_PROX_TOGGLED BIT(12)
-// Bit 13: TP Touch Toggled - TPチャネルタッチ状態変化
+// Bit 13: TP Touch Toggled - TPチャネルごとのタッチ状態変化
+// ドライバの挙動判定には使わず、レジスタ定義としてのみ保持する。
 #define IQS915X_TP_TOUCH_TOGGLED BIT(13)
 // Bit 14: Switch Toggled - スイッチ状態変化
 #define IQS915X_SWITCH_TOGGLED BIT(14)
