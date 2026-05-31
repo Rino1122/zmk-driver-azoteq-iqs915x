@@ -219,6 +219,10 @@
 #define IQS915X_FLIP_Y BIT(1)
 #define IQS915X_SWITCH_XY_AXIS BIT(2)
 
+// トラックパッド矩形サイズ (各1 byte)
+#define IQS915X_TOTAL_RXS 0x11E3
+#define IQS915X_TOTAL_TXS 0x11E4
+
 // 最大同時タッチ数 (1 byte, 1-7)
 #define IQS915X_MAX_MULTI_TOUCHES 0x11E5
 
@@ -425,6 +429,8 @@ struct iqs915x_data
     bool active_pending;                         // IQS915xのActive mode復帰待ち
     bool active_readback_pending;                // Active復帰直後の設定readback待ち
     bool active_tp_channel_disable_read_pending; // Active復帰直後にTP disable readbackを行う
+    uint8_t active_total_rxs;                    // Active復帰直後のreadbackで確認したTotal Rxs
+    uint8_t active_total_txs;                    // Active復帰直後のreadbackで確認したTotal Txs
     uint8_t active_touch_status_frames;          // Active復帰直後にTouch Statusを読む残りフレーム数
     uint8_t active_debug_frames;                 // Active復帰直後に無条件ログする残りフレーム数
 };
