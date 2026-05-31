@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_ALL_FINGER_DATA_SIZE \
   (IQS915X_MAX_FINGERS * IQS915X_FINGER_DATA_SIZE)
 #define IQS915X_MAX_TRACKPAD_ROW_BYTES (26 * 2)
+#define IQS915X_DIAG_FORCE_RELATIVE_WHEN_ABSOLUTE 1
 
 /* ============================================================
  * I2C通信関数
@@ -1768,10 +1769,22 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 stream.abs_y != data->last_abs_y)
             {
               LOG_DBG("tp_absolute: x=%u, y=%u", stream.abs_x, stream.abs_y);
+#if IQS915X_DIAG_FORCE_RELATIVE_WHEN_ABSOLUTE
+              if (stream.rel_x != 0 || stream.rel_y != 0)
+              {
+                LOG_DBG("tp_absolute rel-fallback: rel_x=%d, rel_y=%d",
+                        stream.rel_x, stream.rel_y);
+                input_report_rel(dev, INPUT_REL_X, stream.rel_x, false,
+                                 K_FOREVER);
+                input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true,
+                                 K_FOREVER);
+              }
+#else
               input_report_abs(dev, INPUT_ABS_X, stream.abs_x, false,
                                K_FOREVER);
               input_report_abs(dev, INPUT_ABS_Y, stream.abs_y, true,
                                K_FOREVER);
+#endif
               data->last_abs_x = stream.abs_x;
               data->last_abs_y = stream.abs_y;
               data->last_abs_valid = true;
