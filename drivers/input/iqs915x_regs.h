@@ -412,9 +412,10 @@ struct iqs915x_data
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
-    bool enabled;        // トラックパッド有効フラグ（falseでイベント破棄）
-    bool lp2_pending;    // IQS915xへのLP2遷移待ち
-    bool active_pending; // IQS915xのActive mode復帰待ち
+    bool enabled;                 // トラックパッド有効フラグ（falseでイベント破棄）
+    bool lp2_pending;             // IQS915xへのLP2遷移待ち
+    bool active_pending;          // IQS915xのActive mode復帰待ち
+    bool active_readback_pending; // Active復帰直後の設定readback待ち
 };
 
 #endif /* IQS915X_REGS_H_ */

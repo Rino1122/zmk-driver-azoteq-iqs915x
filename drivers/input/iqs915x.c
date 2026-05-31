@@ -90,6 +90,35 @@ static int iqs915x_read_reg8(const struct device *dev, uint16_t reg,
   return i2c_write_read_dt(&config->i2c, reg_addr, 2, val, 1);
 }
 
+struct iqs915x_active_readback
+{
+  uint16_t active_report_rate;
+  uint16_t config_settings;
+};
+
+static int iqs915x_read_active_readback(
+    const struct device *dev,
+    struct iqs915x_active_readback *readback)
+{
+  const struct iqs915x_config *config = dev->config;
+  uint8_t reg_addr[2] = {IQS915X_ACTIVE_MODE_REPORT_RATE & 0xFF,
+                         IQS915X_ACTIVE_MODE_REPORT_RATE >> 8};
+  uint8_t buf[(IQS915X_CONFIG_SETTINGS - IQS915X_ACTIVE_MODE_REPORT_RATE) + 2];
+  const size_t cfg_offset =
+      IQS915X_CONFIG_SETTINGS - IQS915X_ACTIVE_MODE_REPORT_RATE;
+  int ret = i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, sizeof(buf));
+
+  if (ret < 0)
+  {
+    return ret;
+  }
+
+  readback->active_report_rate = (buf[1] << 8) | buf[0];
+  readback->config_settings = (buf[cfg_offset + 1] << 8) | buf[cfg_offset];
+
+  return 0;
+}
+
 // 16bitレジスタを読み出し、値が異なる場合のみ書き込む
 // 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
@@ -946,6 +975,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->active_pending = false;
+        data->active_readback_pending = true;
         LOG_INF("Trackpad entered Active mode");
       }
       else
@@ -985,6 +1015,24 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
+
+    if (data->active_readback_pending)
+    {
+      struct iqs915x_active_readback readback;
+
+      ret = iqs915x_read_active_readback(dev, &readback);
+      data->active_readback_pending = false;
+      if (ret < 0)
+      {
+        LOG_ERR("Failed active resume readback: %d", ret);
+      }
+      else
+      {
+        LOG_DBG("Active resume readback: ACTIVE_REPORT_RATE=%u ms CONFIG_SETTINGS=0x%04x",
+                readback.active_report_rate, readback.config_settings);
+      }
+      continue;
+    }
 
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
@@ -1399,6 +1447,7 @@ static int iqs915x_init(const struct device *dev)
   data->enabled = !config->disabled_by_default;
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
+  data->active_readback_pending = false;
   iqs915x_reset_absolute_tracking(data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
@@ -1564,6 +1613,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     // IQS915xへのLP2遷移を予約
     data->lp2_pending = true;
     data->active_pending = false;
+    data->active_readback_pending = false;
 
     // メインスレッドを起こしてlp2_pendingを処理させる
     k_sem_give(&data->rdy_sem);
