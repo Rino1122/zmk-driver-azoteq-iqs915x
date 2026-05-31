@@ -1130,6 +1130,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         data->active_delta_dump_remaining_rows = 0;
         data->active_touch_status_frames = 0;
         data->active_debug_frames = 0;
+        while (k_sem_take(&data->rdy_sem, K_NO_WAIT) == 0)
+        {
+        }
         LOG_INF("Trackpad entered Active mode");
       }
       else
@@ -1147,6 +1150,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->lp2_pending = false;
+        while (k_sem_take(&data->rdy_sem, K_NO_WAIT) == 0)
+        {
+        }
         LOG_INF("Trackpad entered LP2 mode");
       }
       else
@@ -1169,19 +1175,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
-
-    int rdy_active = gpio_pin_get_dt(&config->rdy_gpio);
-    if (rdy_active < 0)
-    {
-      LOG_ERR("Failed to sample RDY GPIO: %d", rdy_active);
-      continue;
-    }
-
-    if (rdy_active == 0)
-    {
-      LOG_DBG("Ignoring wake while RDY inactive");
-      continue;
-    }
 
     if (data->active_readback_pending)
     {
