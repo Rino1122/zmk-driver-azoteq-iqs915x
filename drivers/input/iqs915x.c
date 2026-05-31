@@ -578,10 +578,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
-          // 1要因実験: Event Mode は維持しつつ Re-ATI Event(bit11) のみを無効化する。
-          // 通常の gesture/touch/movement event は残したまま、自動 Re-ATI が
-          // Active 中の RDY storm を再開しているかどうかだけを切り分ける。
-          buffer[i] = (buffer[i] | 0x01) & (uint8_t)~0x08;
+          // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
+          buffer[i] |= 0x01;
         }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
@@ -996,8 +994,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
 
       LOG_DBG(
-          "info_flags=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
-          stream.info_flags, mode_str,
+          "info_flags=0x%04x trackpad_flags=0x%04x gesture_sf=0x%04x "
+          "gesture_tf=0x%04x rel=(%d,%d) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
+          stream.gesture_tf, stream.rel_x, stream.rel_y, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
           (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
