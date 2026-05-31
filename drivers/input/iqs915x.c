@@ -983,6 +983,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         data->active_pending = false;
         data->active_readback_pending = true;
+        data->active_debug_frames = 6;
         LOG_INF("Trackpad entered Active mode");
       }
       else
@@ -1048,6 +1049,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       LOG_ERR("Failed to read stream: %d", ret);
       continue;
+    }
+
+    if (data->active_debug_frames > 0)
+    {
+      LOG_DBG("Active frame: info=0x%04x tp=0x%04x sf=0x%04x tf=0x%04x rel=(%d,%d) abs=(%u,%u)",
+              stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
+              stream.gesture_tf, stream.rel_x, stream.rel_y, stream.abs_x,
+              stream.abs_y);
+      data->active_debug_frames--;
     }
 
     // info_flagsに立っているビットを個別にDBGログ出力する（連続RDY原因調査用）
@@ -1455,6 +1465,7 @@ static int iqs915x_init(const struct device *dev)
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   data->active_readback_pending = false;
+  data->active_debug_frames = 0;
   iqs915x_reset_absolute_tracking(data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
@@ -1621,6 +1632,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->lp2_pending = true;
     data->active_pending = false;
     data->active_readback_pending = false;
+    data->active_debug_frames = 0;
 
     // メインスレッドを起こしてlp2_pendingを処理させる
     k_sem_give(&data->rdy_sem);

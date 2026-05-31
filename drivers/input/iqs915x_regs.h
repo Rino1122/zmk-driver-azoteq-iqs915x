@@ -416,6 +416,7 @@ struct iqs915x_data
     bool lp2_pending;             // IQS915xへのLP2遷移待ち
     bool active_pending;          // IQS915xのActive mode復帰待ち
     bool active_readback_pending; // Active復帰直後の設定readback待ち
+    uint8_t active_debug_frames;  // Active復帰直後に無条件ログする残りフレーム数
 };
 
 #endif /* IQS915X_REGS_H_ */
