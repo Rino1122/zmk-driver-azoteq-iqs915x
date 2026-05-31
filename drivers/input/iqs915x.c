@@ -607,10 +607,9 @@ static void iqs915x_init_step_handler(const struct device *dev)
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
-          // EVENT_MODE(bit8) は必須機能のため強制セットし、
-          // TP_EVENT(bit10) は診断のため一時的に強制クリアする
-          buffer[i] = (buffer[i] & ~(uint8_t)(IQS915X_TP_EVENT >> 8)) |
-                      (uint8_t)(IQS915X_EVENT_MODE >> 8);
+          // 診断のため、高位バイトのevent enableはすべて落とし、
+          // EVENT_MODE(bit8) のみを残す
+          buffer[i] = (uint8_t)(IQS915X_EVENT_MODE >> 8);
         }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
