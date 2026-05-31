@@ -971,12 +971,13 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (data->active_pending)
     {
-      ret = iqs915x_write_power_mode(dev, IQS915X_MODE_ACTIVE);
+      ret = iqs915x_write_power_mode(dev,
+                                     IQS915X_MODE_ACTIVE | IQS915X_TP_RESEED);
       if (ret == 0)
       {
         data->active_pending = false;
         data->active_readback_pending = true;
-        LOG_INF("Trackpad entered Active mode");
+        LOG_INF("Trackpad entered Active mode (TP reseed queued)");
       }
       else
       {
