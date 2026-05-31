@@ -73,6 +73,9 @@
 #define IQS915X_TOUCH_STATUS 0x105C
 #define IQS915X_TOUCH_STATUS_SIZE 88
 
+// トラックパッド生データ行列
+#define IQS915X_TRACKPAD_DELTA_VALUES 0xC000
+
 // トラックパッドチャネルの個別無効化ビット列
 #define IQS915X_TP_CHANNEL_DISABLE 0x1246
 #define IQS915X_TP_CHANNEL_DISABLE_SIZE 88
@@ -432,6 +435,8 @@ struct iqs915x_data
     bool active_finger_dump_pending;             // Active復帰直後にfinger slotを読む
     uint8_t active_total_rxs;                    // Active復帰直後のreadbackで確認したTotal Rxs
     uint8_t active_total_txs;                    // Active復帰直後のreadbackで確認したTotal Txs
+    uint8_t active_delta_dump_row;               // Active復帰直後に読むdelta行番号
+    uint8_t active_delta_dump_remaining_rows;    // Active復帰直後に読むdelta残り行数
     uint8_t active_touch_status_frames;          // Active復帰直後にTouch Statusを読む残りフレーム数
     uint8_t active_debug_frames;                 // Active復帰直後に無条件ログする残りフレーム数
 };

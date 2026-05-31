@@ -41,6 +41,7 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_DIAG_STUCK_ROW_BYTES (IQS915X_DIAG_STUCK_ROW_COUNT * 4)
 #define IQS915X_ALL_FINGER_DATA_SIZE \
   (IQS915X_MAX_FINGERS * IQS915X_FINGER_DATA_SIZE)
+#define IQS915X_MAX_TRACKPAD_ROW_BYTES (26 * 2)
 
 /* ============================================================
  * I2C通信関数
@@ -165,6 +166,18 @@ static int iqs915x_read_all_finger_data(const struct device *dev,
   return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
 }
 
+static int iqs915x_read_trackpad_delta_row(const struct device *dev,
+                                           uint8_t row, uint8_t total_rxs,
+                                           uint8_t *buf, size_t len)
+{
+  const struct iqs915x_config *config = dev->config;
+  uint16_t reg = IQS915X_TRACKPAD_DELTA_VALUES +
+                 ((uint16_t)row * (uint16_t)total_rxs * 2U);
+  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
+
+  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
+}
+
 static void iqs915x_append_touch_status_detail(char *detail, size_t detail_size,
                                                size_t *detail_len,
                                                uint8_t *logged_entries,
@@ -180,6 +193,39 @@ static void iqs915x_append_touch_status_detail(char *detail, size_t detail_size,
                          "%sr%ub%u=%02x",
                          (*logged_entries == 0) ? "" : " ",
                          (unsigned int)row, (unsigned int)byte, value);
+
+  if (written > 0)
+  {
+    size_t remaining = detail_size - *detail_len;
+    size_t consumed = (size_t)written;
+
+    if (consumed >= remaining)
+    {
+      *detail_len = detail_size - 1;
+    }
+    else
+    {
+      *detail_len += consumed;
+    }
+  }
+
+  (*logged_entries)++;
+}
+
+static void iqs915x_append_delta_detail(char *detail, size_t detail_size,
+                                        size_t *detail_len,
+                                        uint8_t *logged_entries, size_t col,
+                                        int16_t delta)
+{
+  if (*logged_entries >= 6 || *detail_len >= detail_size)
+  {
+    return;
+  }
+
+  int written = snprintf(detail + *detail_len, detail_size - *detail_len,
+                         "%sc%u=%d",
+                         (*logged_entries == 0) ? "" : " ",
+                         (unsigned int)col, delta);
 
   if (written > 0)
   {
@@ -1140,6 +1186,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         data->active_total_rxs = readback.total_rxs;
         data->active_total_txs = readback.total_txs;
+        data->active_delta_dump_row = 0;
+        data->active_delta_dump_remaining_rows = readback.total_txs;
         LOG_DBG("Active resume readback: ACTIVE_REPORT_RATE=%u ms CONFIG_SETTINGS=0x%04x TOTAL_RXS=%u TOTAL_TXS=%u",
                 readback.active_report_rate, readback.config_settings,
                 readback.total_rxs, readback.total_txs);
@@ -1312,6 +1360,66 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 (finger_detail[0] != '\0') ? finger_detail : "all_default",
                 (nondefault_slots > logged_slots) ? " ..." : "");
       }
+      continue;
+    }
+
+    if (data->active_delta_dump_remaining_rows > 0)
+    {
+      uint8_t delta_row[IQS915X_MAX_TRACKPAD_ROW_BYTES];
+      char delta_detail[160] = {0};
+      size_t delta_detail_len = 0;
+      uint8_t logged_deltas = 0;
+      uint8_t nonzero_cols = 0;
+      int max_abs_delta = 0;
+      uint8_t row = data->active_delta_dump_row;
+      uint8_t total_rxs = data->active_total_rxs;
+      size_t row_len = (size_t)total_rxs * 2U;
+
+      if (total_rxs == 0 || row_len > sizeof(delta_row))
+      {
+        LOG_ERR("Invalid active delta dimensions: row=%u total_rxs=%u",
+                (unsigned int)row, (unsigned int)total_rxs);
+        data->active_delta_dump_remaining_rows = 0;
+        continue;
+      }
+
+      ret = iqs915x_read_trackpad_delta_row(dev, row, total_rxs, delta_row,
+                                            row_len);
+      if (ret < 0)
+      {
+        LOG_ERR("Failed active delta row read %u: %d", (unsigned int)row, ret);
+      }
+      else
+      {
+        for (uint8_t col = 0; col < total_rxs; col++)
+        {
+          size_t offset = (size_t)col * 2U;
+          int16_t delta = (int16_t)((delta_row[offset + 1] << 8) |
+                                    delta_row[offset]);
+          int abs_delta = (delta < 0) ? -delta : delta;
+
+          if (abs_delta > max_abs_delta)
+          {
+            max_abs_delta = abs_delta;
+          }
+
+          if (delta != 0)
+          {
+            nonzero_cols++;
+            iqs915x_append_delta_detail(delta_detail, sizeof(delta_detail),
+                                        &delta_detail_len, &logged_deltas, col,
+                                        delta);
+          }
+        }
+
+        LOG_DBG("Active delta row %u: nonzero_cols=%u max_abs=%d %s%s",
+                (unsigned int)row, (unsigned int)nonzero_cols, max_abs_delta,
+                (delta_detail[0] != '\0') ? delta_detail : "all_zero",
+                (nonzero_cols > logged_deltas) ? " ..." : "");
+      }
+
+      data->active_delta_dump_row++;
+      data->active_delta_dump_remaining_rows--;
       continue;
     }
 
@@ -1742,6 +1850,8 @@ static int iqs915x_init(const struct device *dev)
   data->active_finger_dump_pending = false;
   data->active_total_rxs = 0;
   data->active_total_txs = 0;
+  data->active_delta_dump_row = 0;
+  data->active_delta_dump_remaining_rows = 0;
   data->active_touch_status_frames = 0;
   data->active_debug_frames = 0;
   iqs915x_reset_absolute_tracking(data);
@@ -1914,6 +2024,8 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->active_finger_dump_pending = false;
     data->active_total_rxs = 0;
     data->active_total_txs = 0;
+    data->active_delta_dump_row = 0;
+    data->active_delta_dump_remaining_rows = 0;
     data->active_touch_status_frames = 0;
     data->active_debug_frames = 0;
 
