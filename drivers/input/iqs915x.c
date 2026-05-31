@@ -17,6 +17,7 @@
 
 #define DT_DRV_COMPAT azoteq_iqs915x
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zephyr/device.h>
@@ -1057,6 +1058,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       uint8_t touch_status[IQS915X_TOUCH_STATUS_SIZE];
       size_t nonzero_bytes = 0;
+      char nonzero_detail[160] = {0};
+      size_t nonzero_detail_len = 0;
+      uint8_t logged_nonzero_bytes = 0;
 
       ret = iqs915x_read_touch_status(dev, touch_status, sizeof(touch_status));
       if (ret < 0)
@@ -1070,13 +1074,38 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           if (touch_status[i] != 0)
           {
             nonzero_bytes++;
+            if (logged_nonzero_bytes < 12 && nonzero_detail_len < sizeof(nonzero_detail))
+            {
+              int written = snprintf(nonzero_detail + nonzero_detail_len,
+                                     sizeof(nonzero_detail) - nonzero_detail_len,
+                                     "%sr%ub%u=%02x",
+                                     (logged_nonzero_bytes == 0) ? "" : " ",
+                                     (unsigned int)(i / 4),
+                                     (unsigned int)(i % 4),
+                                     touch_status[i]);
+
+              if (written > 0)
+              {
+                size_t remaining = sizeof(nonzero_detail) - nonzero_detail_len;
+                size_t consumed = (size_t)written;
+
+                if (consumed >= remaining)
+                {
+                  nonzero_detail_len = sizeof(nonzero_detail) - 1;
+                }
+                else
+                {
+                  nonzero_detail_len += consumed;
+                }
+              }
+              logged_nonzero_bytes++;
+            }
           }
         }
-        LOG_DBG(
-            "Active touch-status: nonzero_bytes=%u b0..7=%02x %02x %02x %02x %02x %02x %02x %02x",
-            (unsigned int)nonzero_bytes, touch_status[0], touch_status[1],
-            touch_status[2], touch_status[3], touch_status[4],
-            touch_status[5], touch_status[6], touch_status[7]);
+        LOG_DBG("Active touch-status: nonzero_bytes=%u %s%s",
+                (unsigned int)nonzero_bytes,
+                (nonzero_detail[0] != '\0') ? nonzero_detail : "all_zero",
+                (nonzero_bytes > logged_nonzero_bytes) ? " ..." : "");
       }
       data->active_touch_status_frames--;
       continue;
