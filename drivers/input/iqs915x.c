@@ -1108,6 +1108,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
 
+    if (gpio_pin_get_dt(&config->rdy_gpio) > 0)
+    {
+      LOG_DBG("Ignoring wake while RDY inactive");
+      continue;
+    }
+
     if (data->active_readback_pending)
     {
       struct iqs915x_active_readback readback;
