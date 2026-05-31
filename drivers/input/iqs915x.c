@@ -581,6 +581,13 @@ static void iqs915x_init_step_handler(const struct device *dev)
           // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
           buffer[i] |= 0x01;
         }
+        else if (current_addr == (0x11C2 + 3))
+        {
+          // 1要因実験: ALP Setup の Bit31(ALP Enable) のみをクリアする。
+          // CONFIG_SETTINGS の event bit 群には触れず、ALP 回路の活動自体が
+          // Active 中の RDY 再開要因かどうかだけを切り分ける。
+          buffer[i] &= (uint8_t)~0x80;
+        }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
         {
