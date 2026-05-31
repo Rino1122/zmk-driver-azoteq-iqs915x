@@ -1866,10 +1866,12 @@ static int iqs915x_init(const struct device *dev)
   k_work_init_delayable(&data->kinetic_scroll_work,
                         iqs915x_kinetic_scroll_work_handler);
 
-  // 専用スレッドの起動 (優先度: 高め K_PRIO_COOP(2))
+  // 専用スレッドの起動。
+  // input_report_* の下流で別スレッドが動く経路と競合しないよう、
+  // cooperative ではなく preemptive priority を使う。
   k_thread_create(&data->thread, data->thread_stack,
                   K_KERNEL_STACK_SIZEOF(data->thread_stack),
-                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_COOP(2), 0,
+                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_PREEMPT(2), 0,
                   K_NO_WAIT);
   k_thread_name_set(&data->thread, "iqs915x");
 
