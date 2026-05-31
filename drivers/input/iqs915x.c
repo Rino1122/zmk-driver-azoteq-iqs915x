@@ -738,9 +738,9 @@ static void iqs915x_init_step_handler(const struct device *dev)
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
-          // 診断のため、高位バイトのevent enableはすべて落とし、
-          // EVENT_MODE(bit8) のみを残す
-          buffer[i] = (uint8_t)(IQS915X_EVENT_MODE >> 8);
+          // 診断でstale wakeを抑えたため、通常のトラックパッド応答を戻すため
+          // EVENT_MODE(bit8) に加えて TP_EVENT(bit10) を有効化する。
+          buffer[i] = (uint8_t)((IQS915X_EVENT_MODE | IQS915X_TP_EVENT) >> 8);
         }
         else if (current_addr == (0x11C2 + 3))
         {
@@ -1121,11 +1121,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->active_pending = false;
-        data->active_readback_pending = true;
-        data->active_tp_channel_disable_read_pending = true;
-        data->active_finger_dump_pending = true;
-        data->active_touch_status_frames = 2;
-        data->active_debug_frames = 6;
+        data->active_readback_pending = false;
+        data->active_tp_channel_disable_read_pending = false;
+        data->active_finger_dump_pending = false;
+        data->active_total_rxs = 0;
+        data->active_total_txs = 0;
+        data->active_delta_dump_row = 0;
+        data->active_delta_dump_remaining_rows = 0;
+        data->active_touch_status_frames = 0;
+        data->active_debug_frames = 0;
         LOG_INF("Trackpad entered Active mode");
       }
       else
