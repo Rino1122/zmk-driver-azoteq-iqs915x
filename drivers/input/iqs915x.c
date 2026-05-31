@@ -579,6 +579,13 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_WRITE_INIT_DATA:
   {
+    const uint16_t diag_disable_row_start = 12;
+    const uint16_t diag_disable_row_end = 14;
+    const uint16_t diag_disable_addr_start =
+        IQS915X_TP_CHANNEL_DISABLE + (diag_disable_row_start * 4);
+    const uint16_t diag_disable_addr_end =
+        IQS915X_TP_CHANNEL_DISABLE + ((diag_disable_row_end + 1) * 4);
+
     if (!config->init_data || config->init_data_len == 0)
     {
       // init-dataは必須。YAMLバインディングでrequired: trueとしているため
@@ -627,6 +634,14 @@ static void iqs915x_init_step_handler(const struct device *dev)
           // 診断のためALP SetupのALP Enable(bit31)を一時的にクリアする
           // レジスタ0x11C2は32bit little-endianなのでMSBは0x11C5に配置される
           buffer[i] &= (uint8_t)~0x80;
+        }
+        else if (current_addr >= diag_disable_addr_start &&
+                 current_addr < diag_disable_addr_end)
+        {
+          // 診断のため、Touch Statusで全面touch化していたrow 12-14を一時的に無効化する
+          uint8_t byte_in_row =
+              (uint8_t)((current_addr - diag_disable_addr_start) % 4);
+          buffer[i] = (byte_in_row == 3) ? 0x03 : 0xFF;
         }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)

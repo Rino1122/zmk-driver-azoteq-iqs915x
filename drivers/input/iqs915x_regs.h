@@ -73,6 +73,10 @@
 #define IQS915X_TOUCH_STATUS 0x105C
 #define IQS915X_TOUCH_STATUS_SIZE 88
 
+// トラックパッドチャネルの個別無効化ビット列
+#define IQS915X_TP_CHANNEL_DISABLE 0x1246
+#define IQS915X_TP_CHANNEL_DISABLE_SIZE 88
+
 // 指Nの座標データを算出するためのマクロ
 // finger_num: 1〜7
 #define IQS915X_FINGER_X(finger_num) (0x1024 + ((finger_num) - 1) * 8)
