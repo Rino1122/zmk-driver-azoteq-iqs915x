@@ -311,6 +311,74 @@ enum iqs915x_work_state
     WORK_READ_DATA,       // トラックパッドデータ一括読み取り
 };
 
+#define IQS915X_INERTIA_MOTION_HISTORY_SIZE 12
+
+enum iqs915x_two_finger_mode
+{
+    IQS915X_2F_MODE_NONE = 0,
+    IQS915X_2F_MODE_SCROLL,
+    IQS915X_2F_MODE_PINCH,
+};
+
+struct iqs915x_inertia_profile
+{
+    bool enabled;
+    uint16_t interval_ms;
+    uint16_t decay_x1000;
+    uint16_t recent_window_ms;
+    uint16_t stale_gap_ms;
+    uint8_t min_samples;
+    uint16_t min_avg_speed;
+};
+
+struct iqs915x_motion_sample
+{
+    int64_t ms;
+    int16_t x;
+    int16_t y;
+};
+
+struct iqs915x_motion_history
+{
+    struct iqs915x_motion_sample samples[IQS915X_INERTIA_MOTION_HISTORY_SIZE];
+    uint8_t head;
+    uint8_t count;
+};
+
+struct iqs915x_inertia_state
+{
+    bool active;
+    int32_t velocity_x_fp;
+    int32_t velocity_y_fp;
+    int32_t accum_x_fp;
+    int32_t accum_y_fp;
+    int64_t last_ms;
+    uint32_t elapsed_ms;
+};
+
+struct iqs915x_finger_tracker
+{
+    uint8_t current_count;
+    uint8_t previous_count;
+    uint8_t stable_count;
+    uint8_t pending_count;
+    uint8_t debounce_count;
+    bool tail_suppressed;
+};
+
+struct iqs915x_two_finger_session
+{
+    bool active;
+    enum iqs915x_two_finger_mode mode;
+    int32_t centroid_dx;
+    int32_t centroid_dy;
+    int32_t distance_delta;
+    int32_t centroid_last_x;
+    int32_t centroid_last_y;
+    int32_t distance_last;
+    int32_t pinch_wheel_remainder;
+};
+
 /* ============================================================
  * データ構造体
  * ============================================================ */
@@ -340,6 +408,10 @@ struct iqs915x_config
     bool kinetic_scroll;         // 慣性スクロール有効フラグ
     uint8_t kinetic_friction;    // 減衰率 (0-100, デフォルト85)
     uint8_t kinetic_interval_ms; // 慣性ティック間隔 (ms, デフォルト15)
+
+    struct iqs915x_inertia_profile scroll_inertia;
+    struct iqs915x_inertia_profile pinch_inertia;
+    uint8_t finger_debounce_frames;
 
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
@@ -398,6 +470,13 @@ struct iqs915x_data
     // スクロールアキュムレータ
     int16_t scroll_x_acc;
     int16_t scroll_y_acc;
+
+    struct iqs915x_finger_tracker finger_tracker;
+    struct iqs915x_two_finger_session two_finger;
+    struct iqs915x_motion_history scroll_motion_history;
+    struct iqs915x_motion_history pinch_motion_history;
+    struct iqs915x_inertia_state scroll_inertia_state;
+    struct iqs915x_inertia_state pinch_inertia_state;
 
     // 慣性スクロール用
     struct k_work_delayable kinetic_scroll_work; // 慣性スクロールタイマー

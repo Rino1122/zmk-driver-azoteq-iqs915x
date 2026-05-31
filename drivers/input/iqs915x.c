@@ -10,7 +10,7 @@
  *   - RESTART方式の読み取り（i2c_write_read）は非対応
  *     → レジスタアドレスなしのraw読み取り（i2c_read）を使用
  *   - ストリーミング出力はREL_X (0x1014) から開始、
- *     本ドライバではFINGER1_X/Yまで含めて24バイトを読む
+ *     本ドライバではFINGER2_X/Yまで含めて28バイトを読む
  *   - 書き込みは通常のi2c_write（アドレス+データ）で動作
  *   - 1回のRDY期間中に1つのI2Cトランザクションのみ実行可能
  */
@@ -185,9 +185,9 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
  * ストリーミングデータの読み取り
  *
  * IQS9150はRDY信号後にレジスタアドレスなしでI2C読み取りを行うと、
- * REL_X(0x1014)から24バイトのストリーミングデータを返す。
+ * REL_X(0x1014)から28バイトのストリーミングデータを返す。
  *
- * メモリレイアウト (24 bytes, リトルエンディアン):
+ * メモリレイアウト (28 bytes, リトルエンディアン):
  *   [0-1]:   REL_X (signed int16)
  *   [2-3]:   REL_Y (signed int16)
  *   [4-5]:   GESTURE_X (uint16)
@@ -200,6 +200,8 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
  *   [18-19]: FINGER1_Y (uint16)
  *   [20-21]: FINGER1_STRENGTH (uint16)
  *   [22-23]: FINGER1_AREA (uint16)
+ *   [24-25]: FINGER2_X (uint16)
+ *   [26-27]: FINGER2_Y (uint16)
  * ============================================================ */
 
 // ストリーミングデータ構造体
@@ -215,6 +217,8 @@ struct iqs915x_stream_data
   uint16_t trackpad_flags;
   uint16_t abs_x;
   uint16_t abs_y;
+  uint16_t finger2_x;
+  uint16_t finger2_y;
 };
 
 // ストリーミングデータを読み取る
@@ -223,7 +227,7 @@ static int iqs915x_read_stream(const struct device *dev,
 {
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_REL_X & 0xFF, IQS915X_REL_X >> 8};
-  uint8_t buf[24];
+  uint8_t buf[28];
   int ret;
 
   // アドレスを指定してRESTARTで読み取る
@@ -244,6 +248,8 @@ static int iqs915x_read_stream(const struct device *dev,
   data->trackpad_flags = (buf[15] << 8) | buf[14];
   data->abs_x = (buf[17] << 8) | buf[16];
   data->abs_y = (buf[19] << 8) | buf[18];
+  data->finger2_x = (buf[25] << 8) | buf[24];
+  data->finger2_y = (buf[27] << 8) | buf[26];
 
   return 0;
 }
@@ -253,6 +259,89 @@ static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
   data->last_abs_x = 0;
   data->last_abs_y = 0;
   data->last_abs_valid = false;
+}
+
+static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
+{
+  memset(&data->two_finger, 0, sizeof(data->two_finger));
+  memset(&data->pinch_motion_history, 0, sizeof(data->pinch_motion_history));
+  memset(&data->pinch_inertia_state, 0, sizeof(data->pinch_inertia_state));
+}
+
+static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
+{
+  memset(&data->finger_tracker, 0, sizeof(data->finger_tracker));
+  memset(&data->scroll_motion_history, 0, sizeof(data->scroll_motion_history));
+  memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
+  iqs915x_reset_two_finger_session(data);
+}
+
+static void iqs915x_update_finger_state(const struct iqs915x_config *config,
+                                        struct iqs915x_data *data,
+                                        const struct iqs915x_stream_data *stream)
+{
+  struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
+  struct iqs915x_two_finger_session *two_finger = &data->two_finger;
+  uint8_t raw_count = stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
+  uint8_t debounce_frames =
+      config->finger_debounce_frames > 0 ? config->finger_debounce_frames : 1;
+  uint8_t stable_before = tracker->stable_count;
+
+  tracker->current_count = raw_count;
+  tracker->previous_count = stable_before;
+
+  if (raw_count == stable_before)
+  {
+    tracker->pending_count = raw_count;
+    tracker->debounce_count = 0;
+  }
+  else if (raw_count != tracker->pending_count)
+  {
+    tracker->pending_count = raw_count;
+    tracker->debounce_count = 1;
+  }
+  else if (tracker->debounce_count < UINT8_MAX)
+  {
+    tracker->debounce_count++;
+  }
+
+  if (tracker->pending_count != stable_before &&
+      tracker->debounce_count >= debounce_frames)
+  {
+    tracker->stable_count = tracker->pending_count;
+  }
+
+  tracker->tail_suppressed =
+      stable_before == 2 && tracker->stable_count == 1;
+
+  if (tracker->stable_count != 2 || raw_count < 2)
+  {
+    iqs915x_reset_two_finger_session(data);
+    return;
+  }
+
+  int32_t centroid_x = ((int32_t)stream->abs_x + (int32_t)stream->finger2_x) / 2;
+  int32_t centroid_y = ((int32_t)stream->abs_y + (int32_t)stream->finger2_y) / 2;
+  int32_t finger_dx = (int32_t)stream->abs_x - (int32_t)stream->finger2_x;
+  int32_t finger_dy = (int32_t)stream->abs_y - (int32_t)stream->finger2_y;
+  int32_t distance = abs(finger_dx) + abs(finger_dy);
+
+  if (!two_finger->active)
+  {
+    two_finger->active = true;
+    two_finger->mode = IQS915X_2F_MODE_NONE;
+    two_finger->centroid_last_x = centroid_x;
+    two_finger->centroid_last_y = centroid_y;
+    two_finger->distance_last = distance;
+    return;
+  }
+
+  two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
+  two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
+  two_finger->distance_delta = distance - two_finger->distance_last;
+  two_finger->centroid_last_x = centroid_x;
+  two_finger->centroid_last_y = centroid_y;
+  two_finger->distance_last = distance;
 }
 
 /* ============================================================
@@ -1038,6 +1127,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->last_touch_up_time = 0;
       data->last_touch_down_time = 0;
       iqs915x_reset_absolute_tracking(data);
+      iqs915x_reset_runtime_gesture_state(data);
       data->buttons_pressed = 0;
       // 慣性スクロールもキャンセル
       iqs915x_cancel_kinetic_scroll(data);
@@ -1073,6 +1163,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
     uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
     data->is_touching = is_touching_now;
+    iqs915x_update_finger_state(config, data, &stream);
 
     bool has_tp_event = is_touching_now || touch_state_changed;
     if (gesture_active || tp_movement)
@@ -1390,6 +1481,7 @@ static int iqs915x_init(const struct device *dev)
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   iqs915x_reset_absolute_tracking(data);
+  iqs915x_reset_runtime_gesture_state(data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
@@ -1465,37 +1557,67 @@ static int iqs915x_init(const struct device *dev)
 /* ============================================================
  * デバイスインスタンスマクロ
  * ============================================================ */
-#define IQS915X_INIT(n)                                                    \
-  static const uint8_t iqs915x_init_data_##n[] =                           \
-      DT_INST_PROP_OR(n, azoteq_init_data, {0});                           \
-  static struct iqs915x_data iqs915x_data_##n;                             \
-  static const struct iqs915x_config iqs915x_config_##n = {                \
-      .i2c = I2C_DT_SPEC_INST_GET(n),                                      \
-      .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                     \
-      .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),         \
-      .init_data = iqs915x_init_data_##n,                                  \
-      .init_data_len =                                                     \
-          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),          \
-                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),       \
-      .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                   \
-      .press_and_hold = DT_INST_PROP(n, press_and_hold),                   \
-      .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                   \
-      .scroll = DT_INST_PROP(n, scroll),                                   \
-      .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                   \
-      .kinetic_scroll = DT_INST_PROP(n, kinetic_scroll),                   \
-      .kinetic_friction = DT_INST_PROP_OR(n, kinetic_friction, 85),        \
-      .kinetic_interval_ms = DT_INST_PROP_OR(n, kinetic_interval_ms, 15),  \
-      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                         \
-      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),             \
-      .report_absolute = DT_INST_PROP(n, report_absolute),                 \
-      .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250), \
-      .switch_xy = DT_INST_PROP(n, switch_xy),                             \
-      .flip_x = DT_INST_PROP(n, flip_x),                                   \
-      .flip_y = DT_INST_PROP(n, flip_y),                                   \
-      .disabled_by_default = DT_INST_PROP(n, disabled_by_default),         \
-  };                                                                       \
-  DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,          \
-                        &iqs915x_config_##n, POST_KERNEL,                  \
+#define IQS915X_INIT(n)                                                               \
+  static const uint8_t iqs915x_init_data_##n[] =                                      \
+      DT_INST_PROP_OR(n, azoteq_init_data, {0});                                      \
+  static struct iqs915x_data iqs915x_data_##n;                                        \
+  static const struct iqs915x_config iqs915x_config_##n = {                           \
+      .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
+      .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                \
+      .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                    \
+      .init_data = iqs915x_init_data_##n,                                             \
+      .init_data_len =                                                                \
+          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),                     \
+                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),                  \
+      .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                              \
+      .press_and_hold = DT_INST_PROP(n, press_and_hold),                              \
+      .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                              \
+      .scroll = DT_INST_PROP(n, scroll),                                              \
+      .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                              \
+      .kinetic_scroll = DT_INST_PROP(n, kinetic_scroll),                              \
+      .kinetic_friction = DT_INST_PROP_OR(n, kinetic_friction, 85),                   \
+      .kinetic_interval_ms = DT_INST_PROP_OR(n, kinetic_interval_ms, 15),             \
+      .scroll_inertia = {                                                             \
+          .enabled = COND_CODE_1(DT_INST_NODE_HAS_PROP(n, scroll_inertia),            \
+                                 (DT_INST_PROP(n, scroll_inertia)),                   \
+                                 (DT_INST_PROP(n, kinetic_scroll))),                  \
+          .interval_ms =                                                              \
+              DT_INST_PROP_OR(n, scroll_inertia_interval_ms,                          \
+                              DT_INST_PROP_OR(n, kinetic_interval_ms, 15)),           \
+          .decay_x1000 = COND_CODE_1(                                                 \
+              DT_INST_NODE_HAS_PROP(n, scroll_inertia_decay),                         \
+              (DT_INST_PROP(n, scroll_inertia_decay)),                                \
+              (DT_INST_PROP_OR(n, kinetic_friction, 85) * 10)),                       \
+          .recent_window_ms =                                                         \
+              DT_INST_PROP_OR(n, scroll_inertia_recent_window_ms, 60),                \
+          .stale_gap_ms =                                                             \
+              DT_INST_PROP_OR(n, scroll_inertia_stale_gap_ms, 35),                    \
+          .min_samples =                                                              \
+              DT_INST_PROP_OR(n, scroll_inertia_min_samples, 1),                      \
+          .min_avg_speed =                                                            \
+              DT_INST_PROP_OR(n, scroll_inertia_min_avg_speed, 4),                    \
+      },                                                                              \
+      .pinch_inertia = {                                                              \
+          .enabled = DT_INST_PROP(n, pinch_inertia),                                  \
+          .interval_ms = DT_INST_PROP_OR(n, pinch_inertia_interval_ms, 10),           \
+          .decay_x1000 = DT_INST_PROP_OR(n, pinch_inertia_decay, 980),                \
+          .recent_window_ms = DT_INST_PROP_OR(n, pinch_inertia_recent_window_ms, 60), \
+          .stale_gap_ms = DT_INST_PROP_OR(n, pinch_inertia_stale_gap_ms, 35),         \
+          .min_samples = DT_INST_PROP_OR(n, pinch_inertia_min_samples, 1),            \
+          .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),        \
+      },                                                                              \
+      .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),        \
+      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                    \
+      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                        \
+      .report_absolute = DT_INST_PROP(n, report_absolute),                            \
+      .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),            \
+      .switch_xy = DT_INST_PROP(n, switch_xy),                                        \
+      .flip_x = DT_INST_PROP(n, flip_x),                                              \
+      .flip_y = DT_INST_PROP(n, flip_y),                                              \
+      .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                    \
+  };                                                                                  \
+  DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,                     \
+                        &iqs915x_config_##n, POST_KERNEL,                             \
                         CONFIG_INPUT_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)
@@ -1548,6 +1670,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->last_touch_down_time = 0;
     data->last_touch_up_time = 0;
     iqs915x_reset_absolute_tracking(data);
+    iqs915x_reset_runtime_gesture_state(data);
     data->scroll_x_acc = 0;
     data->scroll_y_acc = 0;
 

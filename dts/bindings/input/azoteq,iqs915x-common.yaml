@@ -73,6 +73,102 @@ properties:
       Interval in ms between kinetic scroll ticks. Default: 15 (~67Hz).
       Lower values = smoother deceleration but higher CPU usage.
 
+  scroll-inertia:
+    type: boolean
+    description: |
+      Enable the next-generation scroll inertia engine. If unset, the
+      driver currently falls back to the legacy kinetic scroll path.
+
+  scroll-inertia-decay:
+    type: int
+    default: 850
+    description: |
+      Scroll inertia decay in x/1000 units. Larger values decay more
+      slowly. Default: 850.
+
+  scroll-inertia-interval-ms:
+    type: int
+    default: 15
+    description: |
+      Interval in ms between scroll inertia ticks. Default: 15.
+
+  scroll-inertia-recent-window-ms:
+    type: int
+    default: 60
+    description: |
+      Recent motion window in ms used to seed scroll inertia.
+
+  scroll-inertia-stale-gap-ms:
+    type: int
+    default: 35
+    description: |
+      Maximum allowed time in ms between the last scroll sample and
+      release when seeding scroll inertia.
+
+  scroll-inertia-min-samples:
+    type: int
+    default: 1
+    description: |
+      Minimum number of recent scroll samples required to seed
+      scroll inertia.
+
+  scroll-inertia-min-avg-speed:
+    type: int
+    default: 4
+    description: |
+      Minimum average recent scroll speed required to seed scroll inertia.
+
+  pinch-inertia:
+    type: boolean
+    description: |
+      Enable pinch wheel inertia. This remains disabled by default until
+      coordinate-based pinch output is fully wired.
+
+  pinch-inertia-decay:
+    type: int
+    default: 980
+    description: |
+      Pinch inertia decay in x/1000 units. Larger values decay more slowly.
+
+  pinch-inertia-interval-ms:
+    type: int
+    default: 10
+    description: |
+      Interval in ms between pinch inertia ticks. Default: 10.
+
+  pinch-inertia-recent-window-ms:
+    type: int
+    default: 60
+    description: |
+      Recent motion window in ms used to seed pinch inertia.
+
+  pinch-inertia-stale-gap-ms:
+    type: int
+    default: 35
+    description: |
+      Maximum allowed time in ms between the last pinch sample and
+      release when seeding pinch inertia.
+
+  pinch-inertia-min-samples:
+    type: int
+    default: 1
+    description: |
+      Minimum number of recent pinch samples required to seed
+      pinch inertia.
+
+  pinch-inertia-min-avg-speed:
+    type: int
+    default: 4
+    description: |
+      Minimum average recent pinch speed required to seed pinch inertia.
+
+  finger-debounce-frames:
+    type: int
+    default: 2
+    description: |
+      Number of consecutive frames required before a new finger count is
+      treated as stable by the software finger-count state machine.
+
   tap-time:
     type: int
     description: |
