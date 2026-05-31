@@ -429,6 +429,7 @@ struct iqs915x_data
     bool active_pending;                         // IQS915xのActive mode復帰待ち
     bool active_readback_pending;                // Active復帰直後の設定readback待ち
     bool active_tp_channel_disable_read_pending; // Active復帰直後にTP disable readbackを行う
+    bool active_finger_dump_pending;             // Active復帰直後にfinger slotを読む
     uint8_t active_total_rxs;                    // Active復帰直後のreadbackで確認したTotal Rxs
     uint8_t active_total_txs;                    // Active復帰直後のreadbackで確認したTotal Txs
     uint8_t active_touch_status_frames;          // Active復帰直後にTouch Statusを読む残りフレーム数

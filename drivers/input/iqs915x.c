@@ -39,6 +39,8 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_DIAG_STUCK_ROW_COUNT \
   (IQS915X_DIAG_STUCK_ROW_END - IQS915X_DIAG_STUCK_ROW_START + 1)
 #define IQS915X_DIAG_STUCK_ROW_BYTES (IQS915X_DIAG_STUCK_ROW_COUNT * 4)
+#define IQS915X_ALL_FINGER_DATA_SIZE \
+  (IQS915X_MAX_FINGERS * IQS915X_FINGER_DATA_SIZE)
 
 /* ============================================================
  * I2C通信関数
@@ -150,6 +152,15 @@ static int iqs915x_read_diag_tp_channel_disable(const struct device *dev,
   const uint16_t reg =
       IQS915X_TP_CHANNEL_DISABLE + (IQS915X_DIAG_STUCK_ROW_START * 4);
   uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
+
+  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
+}
+
+static int iqs915x_read_all_finger_data(const struct device *dev,
+                                        uint8_t *buf, size_t len)
+{
+  const struct iqs915x_config *config = dev->config;
+  uint8_t reg_addr[2] = {IQS915X_FINGER1_X & 0xFF, IQS915X_FINGER1_X >> 8};
 
   return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
 }
@@ -1066,6 +1077,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         data->active_pending = false;
         data->active_readback_pending = true;
         data->active_tp_channel_disable_read_pending = true;
+        data->active_finger_dump_pending = true;
         data->active_touch_status_frames = 2;
         data->active_debug_frames = 6;
         LOG_INF("Trackpad entered Active mode");
@@ -1232,6 +1244,73 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
             disable_status[3], disable_status[4], disable_status[5],
             disable_status[6], disable_status[7], disable_status[8],
             disable_status[9], disable_status[10], disable_status[11]);
+      }
+      continue;
+    }
+
+    if (data->active_finger_dump_pending)
+    {
+      uint8_t finger_data[IQS915X_ALL_FINGER_DATA_SIZE];
+      char finger_detail[224] = {0};
+      size_t finger_detail_len = 0;
+      uint8_t logged_slots = 0;
+      uint8_t nondefault_slots = 0;
+
+      ret = iqs915x_read_all_finger_data(dev, finger_data, sizeof(finger_data));
+      data->active_finger_dump_pending = false;
+      if (ret < 0)
+      {
+        LOG_ERR("Failed active finger dump: %d", ret);
+      }
+      else
+      {
+        for (uint8_t finger = 0; finger < IQS915X_MAX_FINGERS; finger++)
+        {
+          const uint8_t *slot =
+              &finger_data[finger * IQS915X_FINGER_DATA_SIZE];
+          uint16_t x = (slot[1] << 8) | slot[0];
+          uint16_t y = (slot[3] << 8) | slot[2];
+          uint16_t strength = (slot[5] << 8) | slot[4];
+          uint16_t area = (slot[7] << 8) | slot[6];
+
+          if (x == 0xFFFF && y == 0xFFFF && strength == 0 && area == 0)
+          {
+            continue;
+          }
+
+          nondefault_slots++;
+          if (logged_slots < IQS915X_MAX_FINGERS &&
+              finger_detail_len < sizeof(finger_detail))
+          {
+            int written = snprintf(finger_detail + finger_detail_len,
+                                   sizeof(finger_detail) - finger_detail_len,
+                                   "%sf%u=(%u,%u,s=%u,a=%u)",
+                                   (logged_slots == 0) ? "" : " ",
+                                   (unsigned int)(finger + 1), x, y, strength,
+                                   area);
+
+            if (written > 0)
+            {
+              size_t remaining = sizeof(finger_detail) - finger_detail_len;
+              size_t consumed = (size_t)written;
+
+              if (consumed >= remaining)
+              {
+                finger_detail_len = sizeof(finger_detail) - 1;
+              }
+              else
+              {
+                finger_detail_len += consumed;
+              }
+            }
+            logged_slots++;
+          }
+        }
+
+        LOG_DBG("Active finger dump: nondefault_slots=%u %s%s",
+                (unsigned int)nondefault_slots,
+                (finger_detail[0] != '\0') ? finger_detail : "all_default",
+                (nondefault_slots > logged_slots) ? " ..." : "");
       }
       continue;
     }
@@ -1660,6 +1739,7 @@ static int iqs915x_init(const struct device *dev)
   data->active_pending = false;
   data->active_readback_pending = false;
   data->active_tp_channel_disable_read_pending = false;
+  data->active_finger_dump_pending = false;
   data->active_total_rxs = 0;
   data->active_total_txs = 0;
   data->active_touch_status_frames = 0;
@@ -1831,6 +1911,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->active_pending = false;
     data->active_readback_pending = false;
     data->active_tp_channel_disable_read_pending = false;
+    data->active_finger_dump_pending = false;
     data->active_total_rxs = 0;
     data->active_total_txs = 0;
     data->active_touch_status_frames = 0;
