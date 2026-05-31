@@ -34,6 +34,11 @@
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
+#define IQS915X_DIAG_STUCK_ROW_START 12
+#define IQS915X_DIAG_STUCK_ROW_END 14
+#define IQS915X_DIAG_STUCK_ROW_COUNT \
+  (IQS915X_DIAG_STUCK_ROW_END - IQS915X_DIAG_STUCK_ROW_START + 1)
+#define IQS915X_DIAG_STUCK_ROW_BYTES (IQS915X_DIAG_STUCK_ROW_COUNT * 4)
 
 /* ============================================================
  * I2C通信関数
@@ -126,6 +131,17 @@ static int iqs915x_read_touch_status(const struct device *dev,
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_TOUCH_STATUS & 0xFF,
                          IQS915X_TOUCH_STATUS >> 8};
+
+  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
+}
+
+static int iqs915x_read_diag_tp_channel_disable(const struct device *dev,
+                                                uint8_t *buf, size_t len)
+{
+  const struct iqs915x_config *config = dev->config;
+  const uint16_t reg =
+      IQS915X_TP_CHANNEL_DISABLE + (IQS915X_DIAG_STUCK_ROW_START * 4);
+  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
 
   return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
 }
@@ -579,12 +595,10 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_WRITE_INIT_DATA:
   {
-    const uint16_t diag_disable_row_start = 12;
-    const uint16_t diag_disable_row_end = 14;
     const uint16_t diag_disable_addr_start =
-        IQS915X_TP_CHANNEL_DISABLE + (diag_disable_row_start * 4);
+        IQS915X_TP_CHANNEL_DISABLE + (IQS915X_DIAG_STUCK_ROW_START * 4);
     const uint16_t diag_disable_addr_end =
-        IQS915X_TP_CHANNEL_DISABLE + ((diag_disable_row_end + 1) * 4);
+        IQS915X_TP_CHANNEL_DISABLE + ((IQS915X_DIAG_STUCK_ROW_END + 1) * 4);
 
     if (!config->init_data || config->init_data_len == 0)
     {
@@ -1009,6 +1023,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         data->active_pending = false;
         data->active_readback_pending = true;
+        data->active_tp_channel_disable_read_pending = true;
         data->active_touch_status_frames = 2;
         data->active_debug_frames = 6;
         LOG_INF("Trackpad entered Active mode");
@@ -1123,6 +1138,29 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 (nonzero_bytes > logged_nonzero_bytes) ? " ..." : "");
       }
       data->active_touch_status_frames--;
+      continue;
+    }
+
+    if (data->active_tp_channel_disable_read_pending)
+    {
+      uint8_t disable_status[IQS915X_DIAG_STUCK_ROW_BYTES];
+
+      ret = iqs915x_read_diag_tp_channel_disable(dev, disable_status,
+                                                 sizeof(disable_status));
+      data->active_tp_channel_disable_read_pending = false;
+      if (ret < 0)
+      {
+        LOG_ERR("Failed active TP disable readback: %d", ret);
+      }
+      else
+      {
+        LOG_DBG(
+            "Active TP disable readback: r12=%02x %02x %02x %02x r13=%02x %02x %02x %02x r14=%02x %02x %02x %02x",
+            disable_status[0], disable_status[1], disable_status[2],
+            disable_status[3], disable_status[4], disable_status[5],
+            disable_status[6], disable_status[7], disable_status[8],
+            disable_status[9], disable_status[10], disable_status[11]);
+      }
       continue;
     }
 
@@ -1549,6 +1587,7 @@ static int iqs915x_init(const struct device *dev)
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   data->active_readback_pending = false;
+  data->active_tp_channel_disable_read_pending = false;
   data->active_touch_status_frames = 0;
   data->active_debug_frames = 0;
   iqs915x_reset_absolute_tracking(data);
@@ -1717,6 +1756,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->lp2_pending = true;
     data->active_pending = false;
     data->active_readback_pending = false;
+    data->active_tp_channel_disable_read_pending = false;
     data->active_touch_status_frames = 0;
     data->active_debug_frames = 0;
 
