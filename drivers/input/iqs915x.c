@@ -607,8 +607,10 @@ static void iqs915x_init_step_handler(const struct device *dev)
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
-          // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
-          buffer[i] |= 0x01;
+          // EVENT_MODE(bit8) は必須機能のため強制セットし、
+          // TP_EVENT(bit10) は診断のため一時的に強制クリアする
+          buffer[i] = (buffer[i] & ~(uint8_t)(IQS915X_TP_EVENT >> 8)) |
+                      (uint8_t)(IQS915X_EVENT_MODE >> 8);
         }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
@@ -971,13 +973,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (data->active_pending)
     {
-      ret = iqs915x_write_power_mode(dev,
-                                     IQS915X_MODE_ACTIVE | IQS915X_TP_RESEED);
+      ret = iqs915x_write_power_mode(dev, IQS915X_MODE_ACTIVE);
       if (ret == 0)
       {
         data->active_pending = false;
         data->active_readback_pending = true;
-        LOG_INF("Trackpad entered Active mode (TP reseed queued)");
+        LOG_INF("Trackpad entered Active mode");
       }
       else
       {
