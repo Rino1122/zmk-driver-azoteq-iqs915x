@@ -69,17 +69,6 @@
 #define IQS915X_FINGER6_X 0x104C
 #define IQS915X_FINGER7_X 0x1054
 
-// トラックパッドチャネルごとのTouch Statusビット列
-#define IQS915X_TOUCH_STATUS 0x105C
-#define IQS915X_TOUCH_STATUS_SIZE 88
-
-// トラックパッド生データ行列
-#define IQS915X_TRACKPAD_DELTA_VALUES 0xC000
-
-// トラックパッドチャネルの個別無効化ビット列
-#define IQS915X_TP_CHANNEL_DISABLE 0x1246
-#define IQS915X_TP_CHANNEL_DISABLE_SIZE 88
-
 // 指Nの座標データを算出するためのマクロ
 // finger_num: 1〜7
 #define IQS915X_FINGER_X(finger_num) (0x1024 + ((finger_num) - 1) * 8)
@@ -221,10 +210,6 @@
 #define IQS915X_FLIP_X BIT(0)
 #define IQS915X_FLIP_Y BIT(1)
 #define IQS915X_SWITCH_XY_AXIS BIT(2)
-
-// トラックパッド矩形サイズ (各1 byte)
-#define IQS915X_TOTAL_RXS 0x11E3
-#define IQS915X_TOTAL_TXS 0x11E4
 
 // 最大同時タッチ数 (1 byte, 1-7)
 #define IQS915X_MAX_MULTI_TOUCHES 0x11E5
@@ -381,7 +366,7 @@ struct iqs915x_data
     // 専用スレッド用
     struct k_sem rdy_sem;
     struct k_thread thread;
-    K_KERNEL_STACK_MEMBER(thread_stack, 1024);
+    K_KERNEL_STACK_MEMBER(thread_stack, 2048);
 
     struct k_work_delayable button_release_work;
 
@@ -427,18 +412,9 @@ struct iqs915x_data
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
-    bool enabled;                                // トラックパッド有効フラグ（falseでイベント破棄）
-    bool lp2_pending;                            // IQS915xへのLP2遷移待ち
-    bool active_pending;                         // IQS915xのActive mode復帰待ち
-    bool active_readback_pending;                // Active復帰直後の設定readback待ち
-    bool active_tp_channel_disable_read_pending; // Active復帰直後にTP disable readbackを行う
-    bool active_finger_dump_pending;             // Active復帰直後にfinger slotを読む
-    uint8_t active_total_rxs;                    // Active復帰直後のreadbackで確認したTotal Rxs
-    uint8_t active_total_txs;                    // Active復帰直後のreadbackで確認したTotal Txs
-    uint8_t active_delta_dump_row;               // Active復帰直後に読むdelta行番号
-    uint8_t active_delta_dump_remaining_rows;    // Active復帰直後に読むdelta残り行数
-    uint8_t active_touch_status_frames;          // Active復帰直後にTouch Statusを読む残りフレーム数
-    uint8_t active_debug_frames;                 // Active復帰直後に無条件ログする残りフレーム数
+    bool enabled;        // トラックパッド有効フラグ（falseでイベント破棄）
+    bool lp2_pending;    // IQS915xへのLP2遷移待ち
+    bool active_pending; // IQS915xのActive mode復帰待ち
 };
 
 #endif /* IQS915X_REGS_H_ */

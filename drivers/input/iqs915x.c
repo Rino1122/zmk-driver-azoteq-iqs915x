@@ -17,7 +17,6 @@
 
 #define DT_DRV_COMPAT azoteq_iqs915x
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zephyr/device.h>
@@ -34,15 +33,6 @@
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
-#define IQS915X_DIAG_STUCK_ROW_START 12
-#define IQS915X_DIAG_STUCK_ROW_END 14
-#define IQS915X_DIAG_STUCK_ROW_COUNT \
-  (IQS915X_DIAG_STUCK_ROW_END - IQS915X_DIAG_STUCK_ROW_START + 1)
-#define IQS915X_DIAG_STUCK_ROW_BYTES (IQS915X_DIAG_STUCK_ROW_COUNT * 4)
-#define IQS915X_ALL_FINGER_DATA_SIZE \
-  (IQS915X_MAX_FINGERS * IQS915X_FINGER_DATA_SIZE)
-#define IQS915X_MAX_TRACKPAD_ROW_BYTES (26 * 2)
-#define IQS915X_DIAG_FORCE_RELATIVE_WHEN_ABSOLUTE 1
 
 /* ============================================================
  * I2C通信関数
@@ -98,152 +88,6 @@ static int iqs915x_read_reg8(const struct device *dev, uint16_t reg,
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
   return i2c_write_read_dt(&config->i2c, reg_addr, 2, val, 1);
-}
-
-struct iqs915x_active_readback
-{
-  uint16_t active_report_rate;
-  uint16_t config_settings;
-  uint8_t total_rxs;
-  uint8_t total_txs;
-};
-
-static int iqs915x_read_active_readback(
-    const struct device *dev,
-    struct iqs915x_active_readback *readback)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint8_t reg_addr[2] = {IQS915X_ACTIVE_MODE_REPORT_RATE & 0xFF,
-                         IQS915X_ACTIVE_MODE_REPORT_RATE >> 8};
-  uint8_t buf[(IQS915X_TOTAL_TXS - IQS915X_ACTIVE_MODE_REPORT_RATE) + 1];
-  const size_t cfg_offset =
-      IQS915X_CONFIG_SETTINGS - IQS915X_ACTIVE_MODE_REPORT_RATE;
-  const size_t total_rxs_offset =
-      IQS915X_TOTAL_RXS - IQS915X_ACTIVE_MODE_REPORT_RATE;
-  const size_t total_txs_offset =
-      IQS915X_TOTAL_TXS - IQS915X_ACTIVE_MODE_REPORT_RATE;
-  int ret = i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, sizeof(buf));
-
-  if (ret < 0)
-  {
-    return ret;
-  }
-
-  readback->active_report_rate = (buf[1] << 8) | buf[0];
-  readback->config_settings = (buf[cfg_offset + 1] << 8) | buf[cfg_offset];
-  readback->total_rxs = buf[total_rxs_offset];
-  readback->total_txs = buf[total_txs_offset];
-
-  return 0;
-}
-
-static int iqs915x_read_touch_status(const struct device *dev,
-                                     uint8_t *buf, size_t len)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint8_t reg_addr[2] = {IQS915X_TOUCH_STATUS & 0xFF,
-                         IQS915X_TOUCH_STATUS >> 8};
-
-  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
-}
-
-static int iqs915x_read_diag_tp_channel_disable(const struct device *dev,
-                                                uint8_t *buf, size_t len)
-{
-  const struct iqs915x_config *config = dev->config;
-  const uint16_t reg =
-      IQS915X_TP_CHANNEL_DISABLE + (IQS915X_DIAG_STUCK_ROW_START * 4);
-  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
-
-  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
-}
-
-static int iqs915x_read_all_finger_data(const struct device *dev,
-                                        uint8_t *buf, size_t len)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint8_t reg_addr[2] = {IQS915X_FINGER1_X & 0xFF, IQS915X_FINGER1_X >> 8};
-
-  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
-}
-
-static int iqs915x_read_trackpad_delta_row(const struct device *dev,
-                                           uint8_t row, uint8_t total_rxs,
-                                           uint8_t *buf, size_t len)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint16_t reg = IQS915X_TRACKPAD_DELTA_VALUES +
-                 ((uint16_t)row * (uint16_t)total_rxs * 2U);
-  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
-
-  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
-}
-
-static void iqs915x_append_touch_status_detail(char *detail, size_t detail_size,
-                                               size_t *detail_len,
-                                               uint8_t *logged_entries,
-                                               size_t row, size_t byte,
-                                               uint8_t value)
-{
-  if (*logged_entries >= 12 || *detail_len >= detail_size)
-  {
-    return;
-  }
-
-  int written = snprintf(detail + *detail_len, detail_size - *detail_len,
-                         "%sr%ub%u=%02x",
-                         (*logged_entries == 0) ? "" : " ",
-                         (unsigned int)row, (unsigned int)byte, value);
-
-  if (written > 0)
-  {
-    size_t remaining = detail_size - *detail_len;
-    size_t consumed = (size_t)written;
-
-    if (consumed >= remaining)
-    {
-      *detail_len = detail_size - 1;
-    }
-    else
-    {
-      *detail_len += consumed;
-    }
-  }
-
-  (*logged_entries)++;
-}
-
-static void iqs915x_append_delta_detail(char *detail, size_t detail_size,
-                                        size_t *detail_len,
-                                        uint8_t *logged_entries, size_t col,
-                                        int16_t delta)
-{
-  if (*logged_entries >= 6 || *detail_len >= detail_size)
-  {
-    return;
-  }
-
-  int written = snprintf(detail + *detail_len, detail_size - *detail_len,
-                         "%sc%u=%d",
-                         (*logged_entries == 0) ? "" : " ",
-                         (unsigned int)col, delta);
-
-  if (written > 0)
-  {
-    size_t remaining = detail_size - *detail_len;
-    size_t consumed = (size_t)written;
-
-    if (consumed >= remaining)
-    {
-      *detail_len = detail_size - 1;
-    }
-    else
-    {
-      *detail_len += consumed;
-    }
-  }
-
-  (*logged_entries)++;
 }
 
 // 16bitレジスタを読み出し、値が異なる場合のみ書き込む
@@ -695,11 +539,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_WRITE_INIT_DATA:
   {
-    const uint16_t diag_disable_addr_start =
-        IQS915X_TP_CHANNEL_DISABLE + (IQS915X_DIAG_STUCK_ROW_START * 4);
-    const uint16_t diag_disable_addr_end =
-        IQS915X_TP_CHANNEL_DISABLE + ((IQS915X_DIAG_STUCK_ROW_END + 1) * 4);
-
     if (!config->init_data || config->init_data_len == 0)
     {
       // init-dataは必須。YAMLバインディングでrequired: trueとしているため
@@ -739,23 +578,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
         }
         else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
         {
-          // 診断でstale wakeを抑えたため、通常のトラックパッド応答を戻すため
-          // EVENT_MODE(bit8) に加えて TP_EVENT(bit10) を有効化する。
-          buffer[i] = (uint8_t)((IQS915X_EVENT_MODE | IQS915X_TP_EVENT) >> 8);
-        }
-        else if (current_addr == (0x11C2 + 3))
-        {
-          // 診断のためALP SetupのALP Enable(bit31)を一時的にクリアする
-          // レジスタ0x11C2は32bit little-endianなのでMSBは0x11C5に配置される
-          buffer[i] &= (uint8_t)~0x80;
-        }
-        else if (current_addr >= diag_disable_addr_start &&
-                 current_addr < diag_disable_addr_end)
-        {
-          // 診断のため、Touch Statusで全面touch化していたrow 12-14を一時的に無効化する
-          uint8_t byte_in_row =
-              (uint8_t)((current_addr - diag_disable_addr_start) % 4);
-          buffer[i] = (byte_in_row == 3) ? 0x03 : 0xFF;
+          // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
+          buffer[i] |= 0x01;
         }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
@@ -935,8 +759,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
     // Idle-Touch/Idle/LP1/LP2モードのレポートレートはinit-dataの設定に委ねる。
     if (config->report_rate_ms > 0)
     {
-      uint16_t active_report_rate = 0;
-
       ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
                                  config->report_rate_ms);
       if (ret < 0)
@@ -951,15 +773,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
                 IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
       }
       LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
-
-      ret = iqs915x_read_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
-                               &active_report_rate);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed to read back active report rate: %d", ret);
-        return;
-      }
-      LOG_DBG("Init: ACTIVE_REPORT_RATE readback = %u ms", active_report_rate);
     }
     data->init_step = INIT_VERIFY_EVENT_MODE;
     break;
@@ -1122,18 +935,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->active_pending = false;
-        data->active_readback_pending = false;
-        data->active_tp_channel_disable_read_pending = false;
-        data->active_finger_dump_pending = false;
-        data->active_total_rxs = 0;
-        data->active_total_txs = 0;
-        data->active_delta_dump_row = 0;
-        data->active_delta_dump_remaining_rows = 0;
-        data->active_touch_status_frames = 0;
-        data->active_debug_frames = 0;
-        while (k_sem_take(&data->rdy_sem, K_NO_WAIT) == 0)
-        {
-        }
         LOG_INF("Trackpad entered Active mode");
       }
       else
@@ -1151,9 +952,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->lp2_pending = false;
-        while (k_sem_take(&data->rdy_sem, K_NO_WAIT) == 0)
-        {
-        }
         LOG_INF("Trackpad entered LP2 mode");
       }
       else
@@ -1177,257 +975,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
 
-    if (data->active_readback_pending)
-    {
-      struct iqs915x_active_readback readback;
-
-      ret = iqs915x_read_active_readback(dev, &readback);
-      data->active_readback_pending = false;
-      if (ret < 0)
-      {
-        LOG_ERR("Failed active resume readback: %d", ret);
-      }
-      else
-      {
-        data->active_total_rxs = readback.total_rxs;
-        data->active_total_txs = readback.total_txs;
-        data->active_delta_dump_row = 0;
-        data->active_delta_dump_remaining_rows = readback.total_txs;
-        LOG_DBG("Active resume readback: ACTIVE_REPORT_RATE=%u ms CONFIG_SETTINGS=0x%04x TOTAL_RXS=%u TOTAL_TXS=%u",
-                readback.active_report_rate, readback.config_settings,
-                readback.total_rxs, readback.total_txs);
-      }
-      continue;
-    }
-
-    if (data->active_touch_status_frames > 0)
-    {
-      uint8_t touch_status[IQS915X_TOUCH_STATUS_SIZE];
-      size_t valid_nonzero_bytes = 0;
-      size_t invalid_nonzero_bytes = 0;
-      char valid_detail[160] = {0};
-      char invalid_detail[160] = {0};
-      size_t valid_detail_len = 0;
-      size_t invalid_detail_len = 0;
-      uint8_t logged_valid_nonzero_bytes = 0;
-      uint8_t logged_invalid_nonzero_bytes = 0;
-      uint8_t total_rxs = data->active_total_rxs;
-      uint8_t total_txs = data->active_total_txs;
-
-      ret = iqs915x_read_touch_status(dev, touch_status, sizeof(touch_status));
-      if (ret < 0)
-      {
-        LOG_ERR("Failed active touch-status read: %d", ret);
-      }
-      else
-      {
-        for (size_t i = 0; i < sizeof(touch_status); i++)
-        {
-          const size_t row = i / 4;
-          const size_t byte = i % 4;
-          const size_t col_start = byte * 8;
-          uint8_t valid_mask = 0;
-
-          if (row < total_txs && col_start < total_rxs)
-          {
-            size_t valid_bits = (size_t)(total_rxs - col_start);
-
-            if (valid_bits >= 8)
-            {
-              valid_mask = 0xFF;
-            }
-            else if (valid_bits > 0)
-            {
-              valid_mask = (uint8_t)((1U << valid_bits) - 1U);
-            }
-          }
-
-          uint8_t valid_value = touch_status[i] & valid_mask;
-          uint8_t invalid_value = touch_status[i] & (uint8_t)~valid_mask;
-
-          if (valid_value != 0)
-          {
-            valid_nonzero_bytes++;
-            iqs915x_append_touch_status_detail(valid_detail,
-                                               sizeof(valid_detail),
-                                               &valid_detail_len,
-                                               &logged_valid_nonzero_bytes,
-                                               row, byte, valid_value);
-          }
-
-          if (invalid_value != 0)
-          {
-            invalid_nonzero_bytes++;
-            iqs915x_append_touch_status_detail(invalid_detail,
-                                               sizeof(invalid_detail),
-                                               &invalid_detail_len,
-                                               &logged_invalid_nonzero_bytes,
-                                               row, byte, invalid_value);
-          }
-        }
-        LOG_DBG("Active touch-status: valid_nonzero_bytes=%u invalid_nonzero_bytes=%u valid_rows=%u valid_cols=%u valid[%s%s] invalid[%s%s]",
-                (unsigned int)valid_nonzero_bytes,
-                (unsigned int)invalid_nonzero_bytes,
-                (unsigned int)total_txs, (unsigned int)total_rxs,
-                (valid_detail[0] != '\0') ? valid_detail : "all_zero",
-                (valid_nonzero_bytes > logged_valid_nonzero_bytes) ? " ..." : "",
-                (invalid_detail[0] != '\0') ? invalid_detail : "all_zero",
-                (invalid_nonzero_bytes > logged_invalid_nonzero_bytes) ? " ..." : "");
-      }
-      data->active_touch_status_frames--;
-      continue;
-    }
-
-    if (data->active_tp_channel_disable_read_pending)
-    {
-      uint8_t disable_status[IQS915X_DIAG_STUCK_ROW_BYTES];
-
-      ret = iqs915x_read_diag_tp_channel_disable(dev, disable_status,
-                                                 sizeof(disable_status));
-      data->active_tp_channel_disable_read_pending = false;
-      if (ret < 0)
-      {
-        LOG_ERR("Failed active TP disable readback: %d", ret);
-      }
-      else
-      {
-        LOG_DBG(
-            "Active TP disable readback: r12=%02x %02x %02x %02x r13=%02x %02x %02x %02x r14=%02x %02x %02x %02x",
-            disable_status[0], disable_status[1], disable_status[2],
-            disable_status[3], disable_status[4], disable_status[5],
-            disable_status[6], disable_status[7], disable_status[8],
-            disable_status[9], disable_status[10], disable_status[11]);
-      }
-      continue;
-    }
-
-    if (data->active_finger_dump_pending)
-    {
-      uint8_t finger_data[IQS915X_ALL_FINGER_DATA_SIZE];
-      char finger_detail[224] = {0};
-      size_t finger_detail_len = 0;
-      uint8_t logged_slots = 0;
-      uint8_t nondefault_slots = 0;
-
-      ret = iqs915x_read_all_finger_data(dev, finger_data, sizeof(finger_data));
-      data->active_finger_dump_pending = false;
-      if (ret < 0)
-      {
-        LOG_ERR("Failed active finger dump: %d", ret);
-      }
-      else
-      {
-        for (uint8_t finger = 0; finger < IQS915X_MAX_FINGERS; finger++)
-        {
-          const uint8_t *slot =
-              &finger_data[finger * IQS915X_FINGER_DATA_SIZE];
-          uint16_t x = (slot[1] << 8) | slot[0];
-          uint16_t y = (slot[3] << 8) | slot[2];
-          uint16_t strength = (slot[5] << 8) | slot[4];
-          uint16_t area = (slot[7] << 8) | slot[6];
-
-          if (x == 0xFFFF && y == 0xFFFF && strength == 0 && area == 0)
-          {
-            continue;
-          }
-
-          nondefault_slots++;
-          if (logged_slots < IQS915X_MAX_FINGERS &&
-              finger_detail_len < sizeof(finger_detail))
-          {
-            int written = snprintf(finger_detail + finger_detail_len,
-                                   sizeof(finger_detail) - finger_detail_len,
-                                   "%sf%u=(%u,%u,s=%u,a=%u)",
-                                   (logged_slots == 0) ? "" : " ",
-                                   (unsigned int)(finger + 1), x, y, strength,
-                                   area);
-
-            if (written > 0)
-            {
-              size_t remaining = sizeof(finger_detail) - finger_detail_len;
-              size_t consumed = (size_t)written;
-
-              if (consumed >= remaining)
-              {
-                finger_detail_len = sizeof(finger_detail) - 1;
-              }
-              else
-              {
-                finger_detail_len += consumed;
-              }
-            }
-            logged_slots++;
-          }
-        }
-
-        LOG_DBG("Active finger dump: nondefault_slots=%u %s%s",
-                (unsigned int)nondefault_slots,
-                (finger_detail[0] != '\0') ? finger_detail : "all_default",
-                (nondefault_slots > logged_slots) ? " ..." : "");
-      }
-      continue;
-    }
-
-    if (data->active_delta_dump_remaining_rows > 0)
-    {
-      uint8_t delta_row[IQS915X_MAX_TRACKPAD_ROW_BYTES];
-      char delta_detail[160] = {0};
-      size_t delta_detail_len = 0;
-      uint8_t logged_deltas = 0;
-      uint8_t nonzero_cols = 0;
-      int max_abs_delta = 0;
-      uint8_t row = data->active_delta_dump_row;
-      uint8_t total_rxs = data->active_total_rxs;
-      size_t row_len = (size_t)total_rxs * 2U;
-
-      if (total_rxs == 0 || row_len > sizeof(delta_row))
-      {
-        LOG_ERR("Invalid active delta dimensions: row=%u total_rxs=%u",
-                (unsigned int)row, (unsigned int)total_rxs);
-        data->active_delta_dump_remaining_rows = 0;
-        continue;
-      }
-
-      ret = iqs915x_read_trackpad_delta_row(dev, row, total_rxs, delta_row,
-                                            row_len);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed active delta row read %u: %d", (unsigned int)row, ret);
-      }
-      else
-      {
-        for (uint8_t col = 0; col < total_rxs; col++)
-        {
-          size_t offset = (size_t)col * 2U;
-          int16_t delta = (int16_t)((delta_row[offset + 1] << 8) |
-                                    delta_row[offset]);
-          int abs_delta = (delta < 0) ? -delta : delta;
-
-          if (abs_delta > max_abs_delta)
-          {
-            max_abs_delta = abs_delta;
-          }
-
-          if (delta != 0)
-          {
-            nonzero_cols++;
-            iqs915x_append_delta_detail(delta_detail, sizeof(delta_detail),
-                                        &delta_detail_len, &logged_deltas, col,
-                                        delta);
-          }
-        }
-
-        LOG_DBG("Active delta row %u: nonzero_cols=%u max_abs=%d %s%s",
-                (unsigned int)row, (unsigned int)nonzero_cols, max_abs_delta,
-                (delta_detail[0] != '\0') ? delta_detail : "all_zero",
-                (nonzero_cols > logged_deltas) ? " ..." : "");
-      }
-
-      data->active_delta_dump_row++;
-      data->active_delta_dump_remaining_rows--;
-      continue;
-    }
-
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
@@ -1435,15 +982,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       LOG_ERR("Failed to read stream: %d", ret);
       continue;
-    }
-
-    if (data->active_debug_frames > 0)
-    {
-      LOG_DBG("Active frame: info=0x%04x tp=0x%04x sf=0x%04x tf=0x%04x rel=(%d,%d) abs=(%u,%u)",
-              stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
-              stream.gesture_tf, stream.rel_x, stream.rel_y, stream.abs_x,
-              stream.abs_y);
-      data->active_debug_frames--;
     }
 
     // info_flagsに立っているビットを個別にDBGログ出力する（連続RDY原因調査用）
@@ -1456,10 +994,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
 
       LOG_DBG(
-          "info_flags=0x%04x trackpad_flags=0x%04x gesture_sf=0x%04x "
-          "gesture_tf=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
-          stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
-          stream.gesture_tf, mode_str,
+          "info_flags=0x%04x mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          stream.info_flags, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
           (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
@@ -1472,8 +1008,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
           (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
           (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
-          (stream.info_flags & IQS915X_TP_TOUCH_TOGGLED) ? " TP_TOUCH_TOG"
-                                                         : "",
           (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
           (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
     }
@@ -1769,22 +1303,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 stream.abs_y != data->last_abs_y)
             {
               LOG_DBG("tp_absolute: x=%u, y=%u", stream.abs_x, stream.abs_y);
-#if IQS915X_DIAG_FORCE_RELATIVE_WHEN_ABSOLUTE
-              if (stream.rel_x != 0 || stream.rel_y != 0)
-              {
-                LOG_DBG("tp_absolute rel-fallback: rel_x=%d, rel_y=%d",
-                        stream.rel_x, stream.rel_y);
-                input_report_rel(dev, INPUT_REL_X, stream.rel_x, false,
-                                 K_FOREVER);
-                input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true,
-                                 K_FOREVER);
-              }
-#else
               input_report_abs(dev, INPUT_ABS_X, stream.abs_x, false,
                                K_FOREVER);
               input_report_abs(dev, INPUT_ABS_Y, stream.abs_y, true,
                                K_FOREVER);
-#endif
               data->last_abs_x = stream.abs_x;
               data->last_abs_y = stream.abs_y;
               data->last_abs_valid = true;
@@ -1862,15 +1384,6 @@ static int iqs915x_init(const struct device *dev)
   data->enabled = !config->disabled_by_default;
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
-  data->active_readback_pending = false;
-  data->active_tp_channel_disable_read_pending = false;
-  data->active_finger_dump_pending = false;
-  data->active_total_rxs = 0;
-  data->active_total_txs = 0;
-  data->active_delta_dump_row = 0;
-  data->active_delta_dump_remaining_rows = 0;
-  data->active_touch_status_frames = 0;
-  data->active_debug_frames = 0;
   iqs915x_reset_absolute_tracking(data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
@@ -1879,12 +1392,10 @@ static int iqs915x_init(const struct device *dev)
   k_work_init_delayable(&data->kinetic_scroll_work,
                         iqs915x_kinetic_scroll_work_handler);
 
-  // 専用スレッドの起動。
-  // input_report_* の下流で別スレッドが動く経路と競合しないよう、
-  // cooperative ではなく preemptive priority を使う。
+  // 専用スレッドの起動 (優先度: 高め K_PRIO_COOP(2))
   k_thread_create(&data->thread, data->thread_stack,
                   K_KERNEL_STACK_SIZEOF(data->thread_stack),
-                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_PREEMPT(2), 0,
+                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_COOP(2), 0,
                   K_NO_WAIT);
   k_thread_name_set(&data->thread, "iqs915x");
 
@@ -2038,15 +1549,6 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     // IQS915xへのLP2遷移を予約
     data->lp2_pending = true;
     data->active_pending = false;
-    data->active_readback_pending = false;
-    data->active_tp_channel_disable_read_pending = false;
-    data->active_finger_dump_pending = false;
-    data->active_total_rxs = 0;
-    data->active_total_txs = 0;
-    data->active_delta_dump_row = 0;
-    data->active_delta_dump_remaining_rows = 0;
-    data->active_touch_status_frames = 0;
-    data->active_debug_frames = 0;
 
     // メインスレッドを起こしてlp2_pendingを処理させる
     k_sem_give(&data->rdy_sem);
