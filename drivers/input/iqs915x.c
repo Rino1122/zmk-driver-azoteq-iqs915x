@@ -759,6 +759,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
     // Idle-Touch/Idle/LP1/LP2モードのレポートレートはinit-dataの設定に委ねる。
     if (config->report_rate_ms > 0)
     {
+      uint16_t active_report_rate = 0;
+
       ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
                                  config->report_rate_ms);
       if (ret < 0)
@@ -773,6 +775,15 @@ static void iqs915x_init_step_handler(const struct device *dev)
                 IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
       }
       LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
+
+      ret = iqs915x_read_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
+                               &active_report_rate);
+      if (ret < 0)
+      {
+        LOG_ERR("Failed to read back active report rate: %d", ret);
+        return;
+      }
+      LOG_DBG("Init: ACTIVE_REPORT_RATE readback = %u ms", active_report_rate);
     }
     data->init_step = INIT_VERIFY_EVENT_MODE;
     break;
