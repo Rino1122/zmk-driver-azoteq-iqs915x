@@ -466,13 +466,11 @@ static void iqs915x_init_step_handler(const struct device *dev)
     }
     else
     {
-      // SHOW_RESETが立っていない場合は初期化データ書き込みをスキップする
-      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Skipping init-data write.",
+      // warm bootなどでSHOW_RESETが立っていない場合は、
+      // ソフトウェアリセットで既知の初期化シーケンスへ戻す
+      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Requesting software reset.",
               info_flags);
-      data->init_step = INIT_COMPLETE;
-      data->initialized = true;
-      data->work_state = WORK_READ_DATA;
-      data->last_info_flags = info_flags;
+      data->init_step = INIT_SOFTWARE_RESET;
     }
     break;
   }
