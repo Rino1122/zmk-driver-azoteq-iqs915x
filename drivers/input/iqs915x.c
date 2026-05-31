@@ -119,6 +119,16 @@ static int iqs915x_read_active_readback(
   return 0;
 }
 
+static int iqs915x_read_touch_status(const struct device *dev,
+                                     uint8_t *buf, size_t len)
+{
+  const struct iqs915x_config *config = dev->config;
+  uint8_t reg_addr[2] = {IQS915X_TOUCH_STATUS & 0xFF,
+                         IQS915X_TOUCH_STATUS >> 8};
+
+  return i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, len);
+}
+
 // 16bitレジスタを読み出し、値が異なる場合のみ書き込む
 // 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
 static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
@@ -983,6 +993,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         data->active_pending = false;
         data->active_readback_pending = true;
+        data->active_touch_status_frames = 2;
         data->active_debug_frames = 6;
         LOG_INF("Trackpad entered Active mode");
       }
@@ -1039,6 +1050,35 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         LOG_DBG("Active resume readback: ACTIVE_REPORT_RATE=%u ms CONFIG_SETTINGS=0x%04x",
                 readback.active_report_rate, readback.config_settings);
       }
+      continue;
+    }
+
+    if (data->active_touch_status_frames > 0)
+    {
+      uint8_t touch_status[IQS915X_TOUCH_STATUS_SIZE];
+      size_t nonzero_bytes = 0;
+
+      ret = iqs915x_read_touch_status(dev, touch_status, sizeof(touch_status));
+      if (ret < 0)
+      {
+        LOG_ERR("Failed active touch-status read: %d", ret);
+      }
+      else
+      {
+        for (size_t i = 0; i < sizeof(touch_status); i++)
+        {
+          if (touch_status[i] != 0)
+          {
+            nonzero_bytes++;
+          }
+        }
+        LOG_DBG(
+            "Active touch-status: nonzero_bytes=%u b0..7=%02x %02x %02x %02x %02x %02x %02x %02x",
+            (unsigned int)nonzero_bytes, touch_status[0], touch_status[1],
+            touch_status[2], touch_status[3], touch_status[4],
+            touch_status[5], touch_status[6], touch_status[7]);
+      }
+      data->active_touch_status_frames--;
       continue;
     }
 
@@ -1465,6 +1505,7 @@ static int iqs915x_init(const struct device *dev)
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   data->active_readback_pending = false;
+  data->active_touch_status_frames = 0;
   data->active_debug_frames = 0;
   iqs915x_reset_absolute_tracking(data);
 
@@ -1632,6 +1673,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     data->lp2_pending = true;
     data->active_pending = false;
     data->active_readback_pending = false;
+    data->active_touch_status_frames = 0;
     data->active_debug_frames = 0;
 
     // メインスレッドを起こしてlp2_pendingを処理させる

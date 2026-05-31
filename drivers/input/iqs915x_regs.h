@@ -69,6 +69,10 @@
 #define IQS915X_FINGER6_X 0x104C
 #define IQS915X_FINGER7_X 0x1054
 
+// トラックパッドチャネルごとのTouch Statusビット列
+#define IQS915X_TOUCH_STATUS 0x105C
+#define IQS915X_TOUCH_STATUS_SIZE 88
+
 // 指Nの座標データを算出するためのマクロ
 // finger_num: 1〜7
 #define IQS915X_FINGER_X(finger_num) (0x1024 + ((finger_num) - 1) * 8)
@@ -412,11 +416,12 @@ struct iqs915x_data
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
-    bool enabled;                 // トラックパッド有効フラグ（falseでイベント破棄）
-    bool lp2_pending;             // IQS915xへのLP2遷移待ち
-    bool active_pending;          // IQS915xのActive mode復帰待ち
-    bool active_readback_pending; // Active復帰直後の設定readback待ち
-    uint8_t active_debug_frames;  // Active復帰直後に無条件ログする残りフレーム数
+    bool enabled;                       // トラックパッド有効フラグ（falseでイベント破棄）
+    bool lp2_pending;                   // IQS915xへのLP2遷移待ち
+    bool active_pending;                // IQS915xのActive mode復帰待ち
+    bool active_readback_pending;       // Active復帰直後の設定readback待ち
+    uint8_t active_touch_status_frames; // Active復帰直後にTouch Statusを読む残りフレーム数
+    uint8_t active_debug_frames;        // Active復帰直後に無条件ログする残りフレーム数
 };
 
 #endif /* IQS915X_REGS_H_ */
