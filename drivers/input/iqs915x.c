@@ -995,9 +995,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       LOG_DBG(
           "info_flags=0x%04x trackpad_flags=0x%04x gesture_sf=0x%04x "
-          "gesture_tf=0x%04x rel=(%d,%d) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          "gesture_tf=0x%04x rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
           stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
-          stream.gesture_tf, stream.rel_x, stream.rel_y, mode_str,
+          stream.gesture_tf, stream.rel_x, stream.rel_y, stream.abs_x,
+          stream.abs_y, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
           (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
@@ -1010,6 +1011,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
           (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
           (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
+          (stream.info_flags & IQS915X_TP_TOUCH_TOGGLED) ? " TP_TOUCH_TOG"
+                                                         : "",
           (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
           (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
     }
