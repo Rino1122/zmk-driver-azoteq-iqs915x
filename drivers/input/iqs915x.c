@@ -611,6 +611,12 @@ static void iqs915x_init_step_handler(const struct device *dev)
           // EVENT_MODE(bit8) のみを残す
           buffer[i] = (uint8_t)(IQS915X_EVENT_MODE >> 8);
         }
+        else if (current_addr == (0x11C2 + 3))
+        {
+          // 診断のためALP SetupのALP Enable(bit31)を一時的にクリアする
+          // レジスタ0x11C2は32bit little-endianなのでMSBは0x11C5に配置される
+          buffer[i] &= (uint8_t)~0x80;
+        }
         // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
         if (buffer[i] != original)
         {
