@@ -391,52 +391,157 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
 }
 
 /* ============================================================
- * 慣性スクロール（Kinetic Scroll）処理
+ * スクロール慣性処理
  *
  * 指が離れた後、最後のスクロール速度に基づいて減衰しながら
  * スクロール信号を送り続ける。タイマーの各ティックで速度に
  * 減衰率（friction）を掛けて減速し、閾値未満になったら停止する。
  * ============================================================ */
 
-// 慣性スクロール停止の速度閾値（これ以下になったら停止）
-#define KINETIC_SCROLL_MIN_VEL 2
+#define IQS915X_SCROLL_INERTIA_FP_BITS 8
+#define IQS915X_SCROLL_INERTIA_FP_SCALE BIT(IQS915X_SCROLL_INERTIA_FP_BITS)
 
-static void iqs915x_kinetic_scroll_work_handler(struct k_work *work)
+static void iqs915x_reset_motion_history(struct iqs915x_motion_history *history)
+{
+  memset(history, 0, sizeof(*history));
+}
+
+static void iqs915x_stop_scroll_inertia(struct iqs915x_data *data)
+{
+  k_work_cancel_delayable(&data->scroll_inertia_work);
+  memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
+  data->scroll_x_acc = 0;
+  data->scroll_y_acc = 0;
+}
+
+static void iqs915x_reset_scroll_inertia(struct iqs915x_data *data)
+{
+  iqs915x_stop_scroll_inertia(data);
+  iqs915x_reset_motion_history(&data->scroll_motion_history);
+}
+
+static void iqs915x_record_scroll_sample(struct iqs915x_data *data, int64_t now_ms,
+                                         int16_t delta_x, int16_t delta_y)
+{
+  struct iqs915x_motion_history *history = &data->scroll_motion_history;
+  struct iqs915x_motion_sample *sample = &history->samples[history->head];
+
+  sample->ms = now_ms;
+  sample->x = delta_x;
+  sample->y = delta_y;
+  history->head = (history->head + 1) % ARRAY_SIZE(history->samples);
+  if (history->count < ARRAY_SIZE(history->samples))
+  {
+    history->count++;
+  }
+}
+
+static bool iqs915x_calc_scroll_inertia_seed(const struct iqs915x_config *config,
+                                             struct iqs915x_data *data,
+                                             int64_t now_ms, int32_t *seed_x_fp,
+                                             int32_t *seed_y_fp)
+{
+  const struct iqs915x_inertia_profile *profile = &config->scroll_inertia;
+  const struct iqs915x_motion_history *history = &data->scroll_motion_history;
+  int64_t newest_ms;
+  int32_t sum_x = 0;
+  int32_t sum_y = 0;
+  uint8_t used = 0;
+
+  *seed_x_fp = 0;
+  *seed_y_fp = 0;
+
+  if (!profile->enabled || history->count == 0)
+  {
+    return false;
+  }
+
+  newest_ms = history->samples[(history->head + ARRAY_SIZE(history->samples) - 1) %
+                               ARRAY_SIZE(history->samples)]
+                  .ms;
+  if ((now_ms - newest_ms) > profile->stale_gap_ms)
+  {
+    return false;
+  }
+
+  for (uint8_t offset = 0; offset < history->count; offset++)
+  {
+    uint8_t idx =
+        (history->head + ARRAY_SIZE(history->samples) - 1 - offset) %
+        ARRAY_SIZE(history->samples);
+    const struct iqs915x_motion_sample *sample = &history->samples[idx];
+
+    if ((now_ms - sample->ms) > profile->recent_window_ms)
+    {
+      break;
+    }
+
+    sum_x += sample->x;
+    sum_y += sample->y;
+    used++;
+  }
+
+  if (used < profile->min_samples)
+  {
+    return false;
+  }
+
+  sum_x /= used;
+  sum_y /= used;
+
+  if (abs(sum_x) < profile->min_avg_speed && abs(sum_y) < profile->min_avg_speed)
+  {
+    return false;
+  }
+
+  *seed_x_fp = sum_x * IQS915X_SCROLL_INERTIA_FP_SCALE;
+  *seed_y_fp = sum_y * IQS915X_SCROLL_INERTIA_FP_SCALE;
+  return true;
+}
+
+static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
 {
   struct k_work_delayable *dwork = k_work_delayable_from_work(work);
   struct iqs915x_data *data =
-      CONTAINER_OF(dwork, struct iqs915x_data, kinetic_scroll_work);
+      CONTAINER_OF(dwork, struct iqs915x_data, scroll_inertia_work);
   const struct device *dev = data->dev;
   const struct iqs915x_config *config = dev->config;
-
-  if (!data->kinetic_active)
-  {
-    return;
-  }
-
-  // 減衰を適用: vel = vel * friction / 100
-  data->kinetic_vel_x =
-      (int16_t)((int32_t)data->kinetic_vel_x * config->kinetic_friction / 100);
-  data->kinetic_vel_y =
-      (int16_t)((int32_t)data->kinetic_vel_y * config->kinetic_friction / 100);
-
-  // 速度が閾値未満なら停止
-  if (abs(data->kinetic_vel_x) < KINETIC_SCROLL_MIN_VEL &&
-      abs(data->kinetic_vel_y) < KINETIC_SCROLL_MIN_VEL)
-  {
-    data->kinetic_active = false;
-    data->scroll_x_acc = 0;
-    data->scroll_y_acc = 0;
-    LOG_DBG("Kinetic scroll stopped (velocity below threshold)");
-    return;
-  }
-
-  // スクロール信号の送信（通常のスクロールと同じdivisorベースのアキュムレータを使用）
+  const struct iqs915x_inertia_profile *profile = &config->scroll_inertia;
+  struct iqs915x_inertia_state *state = &data->scroll_inertia_state;
+  int32_t step_x;
+  int32_t step_y;
   int16_t scroll_div = config->scroll_divisor;
 
-  if (abs(data->kinetic_vel_x) >= KINETIC_SCROLL_MIN_VEL)
+  if (!state->active || !profile->enabled)
   {
-    data->scroll_x_acc += data->kinetic_vel_x;
+    return;
+  }
+
+  state->velocity_x_fp =
+      (state->velocity_x_fp * profile->decay_x1000) / 1000;
+  state->velocity_y_fp =
+      (state->velocity_y_fp * profile->decay_x1000) / 1000;
+
+  if (abs(state->velocity_x_fp) <
+          (profile->min_avg_speed * IQS915X_SCROLL_INERTIA_FP_SCALE) &&
+      abs(state->velocity_y_fp) <
+          (profile->min_avg_speed * IQS915X_SCROLL_INERTIA_FP_SCALE))
+  {
+    iqs915x_stop_scroll_inertia(data);
+    LOG_DBG("Scroll inertia stopped (velocity below threshold)");
+    return;
+  }
+
+  state->accum_x_fp += state->velocity_x_fp;
+  state->accum_y_fp += state->velocity_y_fp;
+  step_x = state->accum_x_fp / IQS915X_SCROLL_INERTIA_FP_SCALE;
+  step_y = state->accum_y_fp / IQS915X_SCROLL_INERTIA_FP_SCALE;
+  state->accum_x_fp -= step_x * IQS915X_SCROLL_INERTIA_FP_SCALE;
+  state->accum_y_fp -= step_y * IQS915X_SCROLL_INERTIA_FP_SCALE;
+
+  if (step_x != 0)
+  {
+    data->scroll_x_acc += step_x;
     if (abs(data->scroll_x_acc) >= scroll_div)
     {
       input_report_rel(dev, INPUT_REL_HWHEEL,
@@ -445,9 +550,9 @@ static void iqs915x_kinetic_scroll_work_handler(struct k_work *work)
     }
   }
 
-  if (abs(data->kinetic_vel_y) >= KINETIC_SCROLL_MIN_VEL)
+  if (step_y != 0)
   {
-    data->scroll_y_acc += data->kinetic_vel_y;
+    data->scroll_y_acc += step_y;
     if (abs(data->scroll_y_acc) >= scroll_div)
     {
       input_report_rel(dev, INPUT_REL_WHEEL,
@@ -457,63 +562,18 @@ static void iqs915x_kinetic_scroll_work_handler(struct k_work *work)
   }
 
   // 次のティックをスケジュール
-  k_work_schedule(&data->kinetic_scroll_work,
-                  K_MSEC(config->kinetic_interval_ms));
+  k_work_schedule(&data->scroll_inertia_work,
+                  K_MSEC(profile->interval_ms));
 }
 
-// 慣性スクロールを打ち切る（新しい操作が入った場合に呼ばれる）
-static void iqs915x_cancel_kinetic_scroll(struct iqs915x_data *data)
+// スクロール慣性を打ち切る（新しい操作が入った場合に呼ばれる）
+static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
 {
-  if (data->kinetic_active)
+  if (data->scroll_inertia_state.active)
   {
-    k_work_cancel_delayable(&data->kinetic_scroll_work);
-    data->kinetic_active = false;
-    data->scroll_x_acc = 0;
-    data->scroll_y_acc = 0;
-    LOG_DBG("Kinetic scroll cancelled by new input");
+    iqs915x_stop_scroll_inertia(data);
+    LOG_DBG("Scroll inertia cancelled by new input");
   }
-}
-
-// スクロール速度サンプルをリングバッファに記録する
-static void iqs915x_record_scroll_velocity(struct iqs915x_data *data,
-                                           int16_t vx, int16_t vy)
-{
-  data->scroll_vel_x_samples[data->scroll_vel_idx] = vx;
-  data->scroll_vel_y_samples[data->scroll_vel_idx] = vy;
-  data->scroll_vel_idx = (data->scroll_vel_idx + 1) % 4;
-  if (data->scroll_vel_count < 4)
-  {
-    data->scroll_vel_count++;
-  }
-}
-
-// リングバッファから平均速度を計算する
-static void iqs915x_calc_avg_scroll_velocity(struct iqs915x_data *data,
-                                             int16_t *avg_x, int16_t *avg_y)
-{
-  if (data->scroll_vel_count == 0)
-  {
-    *avg_x = 0;
-    *avg_y = 0;
-    return;
-  }
-  int32_t sum_x = 0, sum_y = 0;
-  for (int i = 0; i < data->scroll_vel_count; i++)
-  {
-    sum_x += data->scroll_vel_x_samples[i];
-    sum_y += data->scroll_vel_y_samples[i];
-  }
-  *avg_x = (int16_t)(sum_x / data->scroll_vel_count);
-  *avg_y = (int16_t)(sum_y / data->scroll_vel_count);
-}
-
-// スクロール速度サンプルバッファをクリアする
-static void iqs915x_reset_scroll_velocity(struct iqs915x_data *data)
-{
-  data->scroll_vel_idx = 0;
-  data->scroll_vel_count = 0;
-  memset(data->scroll_vel_x_samples, 0, sizeof(data->scroll_vel_x_samples));
-  memset(data->scroll_vel_y_samples, 0, sizeof(data->scroll_vel_y_samples));
 }
 
 /* ============================================================
@@ -1130,9 +1190,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       iqs915x_reset_runtime_gesture_state(data);
       data->buttons_pressed = 0;
       // 慣性スクロールもキャンセル
-      iqs915x_cancel_kinetic_scroll(data);
-      iqs915x_reset_scroll_velocity(data);
-      data->was_scrolling = false;
+      iqs915x_reset_scroll_inertia(data);
       data->gesture_pointer_suppress_ticks = 0;
       continue;
     }
@@ -1205,34 +1263,39 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
             stream.trackpad_flags);
       }
 
+      int64_t now_ms = k_uptime_get();
+
       if (!scroll)
       {
         // 慣性スクロール: スクロール中だったのに今回スクロールでなくなった場合
-        if (data->was_scrolling && config->kinetic_scroll)
+        if (data->scroll_inertia_state.elapsed_ms > 0)
         {
-          int16_t avg_vx, avg_vy;
-          iqs915x_calc_avg_scroll_velocity(data, &avg_vx, &avg_vy);
+          int32_t seed_x_fp = 0;
+          int32_t seed_y_fp = 0;
 
-          // natural_scroll方向補正は既にサンプリング時に適用済み
-          if (abs(avg_vx) >= KINETIC_SCROLL_MIN_VEL ||
-              abs(avg_vy) >= KINETIC_SCROLL_MIN_VEL)
+          if (iqs915x_calc_scroll_inertia_seed(config, data, now_ms, &seed_x_fp,
+                                               &seed_y_fp))
           {
-            data->kinetic_vel_x = avg_vx;
-            data->kinetic_vel_y = avg_vy;
-            data->kinetic_active = true;
-            k_work_schedule(&data->kinetic_scroll_work,
-                            K_MSEC(config->kinetic_interval_ms));
-            LOG_DBG("Kinetic scroll started: vx=%d vy=%d", avg_vx, avg_vy);
+            data->scroll_inertia_state.active = true;
+            data->scroll_inertia_state.velocity_x_fp = seed_x_fp;
+            data->scroll_inertia_state.velocity_y_fp = seed_y_fp;
+            data->scroll_inertia_state.accum_x_fp = 0;
+            data->scroll_inertia_state.accum_y_fp = 0;
+            data->scroll_inertia_state.last_ms = now_ms;
+            k_work_schedule(&data->scroll_inertia_work,
+                            K_MSEC(config->scroll_inertia.interval_ms));
+            LOG_DBG("Scroll inertia started: vx_fp=%d vy_fp=%d", seed_x_fp,
+                    seed_y_fp);
           }
         }
         // スクロール終了: アキュムレータとサンプルをリセット
-        if (!data->kinetic_active)
+        if (!data->scroll_inertia_state.active)
         {
           data->scroll_x_acc = 0;
           data->scroll_y_acc = 0;
         }
-        iqs915x_reset_scroll_velocity(data);
-        data->was_scrolling = false;
+        iqs915x_reset_motion_history(&data->scroll_motion_history);
+        data->scroll_inertia_state.elapsed_ms = 0;
       }
 
       // タップジェスチャー判定
@@ -1252,8 +1315,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
       // 注: ドラッグ解除は上で has_tp_event の外で処理済み
-      int64_t now_ms = k_uptime_get();
-
       bool hold_became_active = false;
 
       if (config->press_and_hold && !data->active_hold)
@@ -1330,7 +1391,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (scroll)
       {
         // 慣性スクロール中に通常スクロールが再開された場合は慣性を打ち切る
-        iqs915x_cancel_kinetic_scroll(data);
+        iqs915x_cancel_scroll_inertia(data);
 
         // スクロール: GESTURE_X/Yをスクロールデルタとして使用
         // (REL_X/REL_Yはスクロール中はゼロ)
@@ -1358,9 +1419,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           }
         }
 
-        // 慣性スクロール用: 方向補正済みの速度をサンプリング
-        iqs915x_record_scroll_velocity(data, gx, gy);
-        data->was_scrolling = true;
+        // 慣性スクロール用: 方向補正済みのデルタを時刻付きでサンプリング
+        iqs915x_record_scroll_sample(data, now_ms, gx, gy);
+        data->scroll_inertia_state.elapsed_ms++;
       }
       else if (config->report_absolute)
       {
@@ -1372,7 +1433,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           if (!suppress_pointer && (touch_down || tp_movement))
           {
-            iqs915x_cancel_kinetic_scroll(data);
+            iqs915x_cancel_scroll_inertia(data);
           }
 
           if (!single_finger_pointer)
@@ -1391,7 +1452,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         else
         {
           // 通常のポインタ操作が再開したら慣性スクロールを止める
-          iqs915x_cancel_kinetic_scroll(data);
+          iqs915x_cancel_scroll_inertia(data);
 
           if (touch_down || tp_movement)
           {
@@ -1416,7 +1477,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           if (!suppress_pointer)
           {
-            iqs915x_cancel_kinetic_scroll(data);
+            iqs915x_cancel_scroll_inertia(data);
           }
 
           LOG_DBG(
@@ -1427,7 +1488,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         else
         {
           // カーソル移動中は慣性スクロールを打ち切る
-          iqs915x_cancel_kinetic_scroll(data);
+          iqs915x_cancel_scroll_inertia(data);
 
           if (stream.rel_x != 0 || stream.rel_y != 0)
           {
@@ -1486,8 +1547,8 @@ static int iqs915x_init(const struct device *dev)
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
-  k_work_init_delayable(&data->kinetic_scroll_work,
-                        iqs915x_kinetic_scroll_work_handler);
+  k_work_init_delayable(&data->scroll_inertia_work,
+                        iqs915x_scroll_inertia_work_handler);
 
   // 専用スレッドの起動 (優先度: 高め K_PRIO_COOP(2))
   k_thread_create(&data->thread, data->thread_stack,
@@ -1574,20 +1635,10 @@ static int iqs915x_init(const struct device *dev)
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                              \
       .scroll = DT_INST_PROP(n, scroll),                                              \
       .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                              \
-      .kinetic_scroll = DT_INST_PROP(n, kinetic_scroll),                              \
-      .kinetic_friction = DT_INST_PROP_OR(n, kinetic_friction, 85),                   \
-      .kinetic_interval_ms = DT_INST_PROP_OR(n, kinetic_interval_ms, 15),             \
       .scroll_inertia = {                                                             \
-          .enabled = COND_CODE_1(DT_INST_NODE_HAS_PROP(n, scroll_inertia),            \
-                                 (DT_INST_PROP(n, scroll_inertia)),                   \
-                                 (DT_INST_PROP(n, kinetic_scroll))),                  \
-          .interval_ms =                                                              \
-              DT_INST_PROP_OR(n, scroll_inertia_interval_ms,                          \
-                              DT_INST_PROP_OR(n, kinetic_interval_ms, 15)),           \
-          .decay_x1000 = COND_CODE_1(                                                 \
-              DT_INST_NODE_HAS_PROP(n, scroll_inertia_decay),                         \
-              (DT_INST_PROP(n, scroll_inertia_decay)),                                \
-              (DT_INST_PROP_OR(n, kinetic_friction, 85) * 10)),                       \
+          .enabled = DT_INST_PROP(n, scroll_inertia),                                 \
+          .interval_ms = DT_INST_PROP_OR(n, scroll_inertia_interval_ms, 15),          \
+          .decay_x1000 = DT_INST_PROP_OR(n, scroll_inertia_decay, 850),               \
           .recent_window_ms =                                                         \
               DT_INST_PROP_OR(n, scroll_inertia_recent_window_ms, 60),                \
           .stale_gap_ms =                                                             \
@@ -1660,9 +1711,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     k_work_cancel_delayable(&data->button_release_work);
 
     // 慣性スクロールをキャンセル
-    iqs915x_cancel_kinetic_scroll(data);
-    iqs915x_reset_scroll_velocity(data);
-    data->was_scrolling = false;
+    iqs915x_reset_scroll_inertia(data);
     data->gesture_pointer_suppress_ticks = 0;
 
     // タッチ状態をリセット

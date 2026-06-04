@@ -404,11 +404,6 @@ struct iqs915x_config
     bool scroll;
     uint16_t scroll_divisor; // スクロール感度除数
 
-    // 慣性スクロール設定
-    bool kinetic_scroll;         // 慣性スクロール有効フラグ
-    uint8_t kinetic_friction;    // 減衰率 (0-100, デフォルト85)
-    uint8_t kinetic_interval_ms; // 慣性ティック間隔 (ms, デフォルト15)
-
     struct iqs915x_inertia_profile scroll_inertia;
     struct iqs915x_inertia_profile pinch_inertia;
     uint8_t finger_debounce_frames;
@@ -478,16 +473,8 @@ struct iqs915x_data
     struct iqs915x_inertia_state scroll_inertia_state;
     struct iqs915x_inertia_state pinch_inertia_state;
 
-    // 慣性スクロール用
-    struct k_work_delayable kinetic_scroll_work; // 慣性スクロールタイマー
-    int16_t kinetic_vel_x;                       // 現在のX方向慣性速度
-    int16_t kinetic_vel_y;                       // 現在のY方向慣性速度
-    bool kinetic_active;                         // 慣性スクロール実行中フラグ
-    int16_t scroll_vel_x_samples[4];             // 直近4サンプルのX速度リングバッファ
-    int16_t scroll_vel_y_samples[4];             // 直近4サンプルのY速度リングバッファ
-    uint8_t scroll_vel_idx;                      // リングバッファ書き込み位置
-    uint8_t scroll_vel_count;                    // 有効サンプル数
-    bool was_scrolling;                          // 前回スクロール中だったか
+    // スクロール慣性用
+    struct k_work_delayable scroll_inertia_work; // 慣性スクロールタイマー
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御

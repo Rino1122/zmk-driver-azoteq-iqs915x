@@ -15,7 +15,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 - Press and hold: Reported as a continuous left click (allows click and drag).
 - Vertical scroll.
 - Horizontal scroll.
-- Kinetic (inertial) scroll.
+- Scroll inertia.
 
 ## Usage
 
@@ -50,10 +50,14 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
         scroll;
 
-        /* Kinetic (inertial) scroll settings */
-        kinetic-scroll;
-        kinetic-friction = <85>;     /* 0-100% velocity retention per tick */
-        kinetic-interval-ms = <15>;  /* Time between kinetic updates */
+        /* Scroll inertia settings */
+        scroll-inertia;
+        scroll-inertia-decay = <850>;         /* x/1000 velocity retention per tick */
+        scroll-inertia-interval-ms = <15>;    /* Time between inertia updates */
+        scroll-inertia-recent-window-ms = <60>;
+        scroll-inertia-stale-gap-ms = <35>;
+        scroll-inertia-min-samples = <1>;
+        scroll-inertia-min-avg-speed = <4>;
 
         /* Report raw FINGER1_X/Y as INPUT_ABS_X/Y instead of REL_X/Y */
         report-absolute;
@@ -71,6 +75,11 @@ coordinates from registers `0x1024` and `0x1026` as `INPUT_ABS_X` and
 `INPUT_ABS_Y`. The driver sends an initial coordinate sample on touch-down,
 then sends updates while `TP Movement` is asserted. Relative reporting remains
 the default when the property is omitted.
+
+The scroll inertia settings replace the older kinetic-scroll settings.
+If you previously used a friction value such as `85`, the direct replacement
+is `scroll-inertia-decay = <850>;`. The old kinetic interval maps directly to
+`scroll-inertia-interval-ms`.
 
 ## Initialization data (IQS9150/IQS9151)
 
