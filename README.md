@@ -81,9 +81,6 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         four-finger-swipe-right-key = <INPUT_KEY_F20>;
 
         switch-xy;
-
-        /* Init data for IQS9150 (no NVM) - see section below */
-        azoteq,init-data = [ ... ];
     };
 };
 ```
@@ -131,61 +128,26 @@ is `scroll-inertia-decay = <850>;`. The old kinetic interval maps directly to
 
 ## Initialization data (IQS9150/IQS9151)
 
-The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot. The `azoteq,init-data` property provides this data.
+The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot.
+This driver now uses a built-in init-data profile and no longer accepts an `azoteq,init-data` DTS property.
 
-### How to generate init-data
+- Base profile source: `drivers/input/IQS9150_init.h` (Azoteq export format)
+- Generated array: build directory (`drivers/input` target binary dir under `generated/`)
+- Total length: 1174 bytes (`0x115C..0x15EB` + `0x2000..0x2005`)
 
-1. Use the **Azoteq GUI** to configure your trackpad and export `IQS9150_init.h`.
-2. Run the conversion script:
-   ```bash
-   python3 scripts/convert_init_header.py IQS9150_init.h
-   ```
-3. The script outputs a DTS snippet like this (abbreviated):
-   ```
-   azoteq,init-data = [
-       /* ALP ATI Compensation (0x115C, 26 bytes) */
-       00 00 00 00 00 00 00 00 ...
-       /* Rx/Tx Mapping (0x1218, 46 bytes) */
-       19 0C 18 0B 17 0A 16 09 ...
-       ...
-   ];
-   ```
-4. Copy the entire `azoteq,init-data = [ ... ];` block and paste it into your shield overlay inside the iqs915x node:
+### Updating the built-in init-data profile
 
-   ```dts
-   /* your_shield.overlay */
-   &i2c0 {
-       trackpad: iqs915x@56 {
-           compatible = "azoteq,iqs915x";
-           reg = <0x56>;
-           rdy-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+1. Use the **Azoteq GUI** to configure your trackpad and export a new `IQS9150_init.h`.
+2. Replace `drivers/input/IQS9150_init.h` with the exported header as-is.
+3. Build firmware. The array header is generated automatically before compiling `iqs915x.c`.
+4. Keep DTS tuning properties (`tap-time`, `report-rate-ms`, etc.) in your overlay as needed.
 
-           /* Paste the conversion script output here */
-           azoteq,init-data = [
-               /* ALP ATI Compensation (0x115C, 26 bytes) */
-               00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-               00 00 00 00 00 00 00 00 00 00
-               /* I2C Slave Address (0x1176, 2 bytes) */
-               FF FF
-               /* ... (remaining sections) ... */
-               /* Eng Settings (0x2000, 6 bytes) */
-               01 00 03 03 14 00
-           ];
-
-           /* These DTS properties override init-data values */
-           one-finger-tap;
-           scroll;
-           tap-time = <150>;
-           report-rate-ms = <10>;
-       };
-   };
-   ```
+The generated array header is a build artifact and does not need to be committed.
 
 ### Priority
 
-When both `azoteq,init-data` and individual DTS properties (e.g. `tap-time`, `report-rate-ms`) are specified, `init-data` is written first, then individual properties override the corresponding registers. This allows you to use the GUI for board-level settings (Rx/Tx mapping, ATI) while fine-tuning gesture behavior in the overlay.
-
-This priority is determined by the driver's initialization sequence in C code, **not** by the order of properties in the DTS file. You can place `azoteq,init-data` and other properties in any order within the node.
+The driver writes built-in init-data first, then applies individual DTS properties (e.g. `tap-time`, `report-rate-ms`) as register overrides.
+This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
 
 ## Key differences from IQS5xx driver
 

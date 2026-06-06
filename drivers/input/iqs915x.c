@@ -26,11 +26,16 @@
 #include <zephyr/input/input.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 
 #include <iqs915x.h>
+#include "iqs915x_init_data_bretagne_array.h"
 #include "iqs915x_regs.h"
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
+
+BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_SIZE,
+             "Built-in init-data size must match IQS915X_INIT_DATA_TOTAL_SIZE");
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
@@ -1883,17 +1888,13 @@ static int iqs915x_init(const struct device *dev)
  * デバイスインスタンスマクロ
  * ============================================================ */
 #define IQS915X_INIT(n)                                                                                                     \
-  static const uint8_t iqs915x_init_data_##n[] =                                                                            \
-      DT_INST_PROP_OR(n, azoteq_init_data, {0});                                                                            \
   static struct iqs915x_data iqs915x_data_##n;                                                                              \
   static const struct iqs915x_config iqs915x_config_##n = {                                                                 \
       .i2c = I2C_DT_SPEC_INST_GET(n),                                                                                       \
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                                                      \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                                                          \
-      .init_data = iqs915x_init_data_##n,                                                                                   \
-      .init_data_len =                                                                                                      \
-          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),                                                           \
-                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),                                                        \
+      .init_data = iqs915x_init_data_bretagne,                                                                              \
+      .init_data_len = IQS915X_INIT_DATA_TOTAL_SIZE,                                                                        \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                    \
       .press_and_hold = DT_INST_PROP(n, press_and_hold),                                                                    \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                    \

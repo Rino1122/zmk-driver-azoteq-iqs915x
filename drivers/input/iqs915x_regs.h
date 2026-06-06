@@ -384,7 +384,7 @@ struct iqs915x_two_finger_session
  * データ構造体
  * ============================================================ */
 
-// デバイス設定（DTSから読み込まれる定数値）
+// デバイス設定（DTS + ドライバ内固定値）
 struct iqs915x_config
 {
     struct i2c_dt_spec i2c;
@@ -392,8 +392,8 @@ struct iqs915x_config
     struct gpio_dt_spec reset_gpio;
 
     // 初期化データ（NVM非搭載デバイス用）
-    const uint8_t *init_data; // DTSから読み込んだバイト配列（NULLの場合はスキップ）
-    uint16_t init_data_len;   // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE想定）
+    const uint8_t *init_data; // ドライバ内蔵バイト配列
+    uint16_t init_data_len;   // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE固定）
 
     // ジェスチャー設定
     bool one_finger_tap;
