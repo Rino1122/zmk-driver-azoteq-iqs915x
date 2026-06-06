@@ -148,6 +148,25 @@ properties:
       Number of consecutive frames required before a new finger count is
       treated as stable by the software finger-count state machine.
 
+  three-finger-swipe:
+    type: boolean
+    description: |
+      Enable three-finger swipe as one-shot virtual key event generated from
+      multi-finger centroid motion.
+
+  four-finger-swipe:
+    type: boolean
+    description: |
+      Enable four-finger swipe as one-shot virtual key event generated from
+      multi-finger centroid motion.
+
+  swipe-step:
+    type: int
+    default: 32
+    description: |
+      Minimum centroid delta (in raw coordinate units) required to trigger
+      one swipe key event. Smaller values increase sensitivity.
+
   tap-time:
     type: int
     description: |

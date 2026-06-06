@@ -10,7 +10,7 @@
  *   - RESTART方式の読み取り（i2c_write_read）は非対応
  *     → レジスタアドレスなしのraw読み取り（i2c_read）を使用
  *   - ストリーミング出力はREL_X (0x1014) から開始、
- *     本ドライバではFINGER2_X/Yまで含めて28バイトを読む
+ *     本ドライバではFINGER4_X/Yまで含めて44バイトを読む
  *   - 書き込みは通常のi2c_write（アドレス+データ）で動作
  *   - 1回のRDY期間中に1つのI2Cトランザクションのみ実行可能
  */
@@ -34,6 +34,15 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
+#define IQS915X_3F_SWIPE_UP_KEY INPUT_KEY_F13
+#define IQS915X_3F_SWIPE_DOWN_KEY INPUT_KEY_F14
+#define IQS915X_3F_SWIPE_LEFT_KEY INPUT_KEY_F15
+#define IQS915X_3F_SWIPE_RIGHT_KEY INPUT_KEY_F16
+#define IQS915X_4F_SWIPE_UP_KEY INPUT_KEY_F17
+#define IQS915X_4F_SWIPE_DOWN_KEY INPUT_KEY_F18
+#define IQS915X_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
+#define IQS915X_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
+
 /* ============================================================
  * I2C通信関数
  *
@@ -41,7 +50,7 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
  * 読み取り: i2c_write_read（スレーブアドレス+Write -> レジスタアドレス ->
  * Repeated START -> スレーブアドレス+Read -> 読み出し -> STOP/NACK）
  *   Zephyrのi2c_write_read_dtでデータシート要件の読み取りシーケンスが完結する。
- * ストリーミング出力: 0x1014〜0x102B の24バイト
+ * ストリーミング出力: 0x1014〜0x103F の44バイト
  * ============================================================ */
 
 // 16bitレジスタに書き込む（リトルエンディアン: LSB first）
@@ -185,9 +194,9 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
  * ストリーミングデータの読み取り
  *
  * IQS9150はRDY信号後にレジスタアドレスなしでI2C読み取りを行うと、
- * REL_X(0x1014)から28バイトのストリーミングデータを返す。
+ * REL_X(0x1014)から44バイトのストリーミングデータを返す。
  *
- * メモリレイアウト (28 bytes, リトルエンディアン):
+ * メモリレイアウト (44 bytes, リトルエンディアン):
  *   [0-1]:   REL_X (signed int16)
  *   [2-3]:   REL_Y (signed int16)
  *   [4-5]:   GESTURE_X (uint16)
@@ -202,6 +211,10 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
  *   [22-23]: FINGER1_AREA (uint16)
  *   [24-25]: FINGER2_X (uint16)
  *   [26-27]: FINGER2_Y (uint16)
+ *   [32-33]: FINGER3_X (uint16)
+ *   [34-35]: FINGER3_Y (uint16)
+ *   [40-41]: FINGER4_X (uint16)
+ *   [42-43]: FINGER4_Y (uint16)
  * ============================================================ */
 
 // ストリーミングデータ構造体
@@ -219,6 +232,10 @@ struct iqs915x_stream_data
   uint16_t abs_y;
   uint16_t finger2_x;
   uint16_t finger2_y;
+  uint16_t finger3_x;
+  uint16_t finger3_y;
+  uint16_t finger4_x;
+  uint16_t finger4_y;
 };
 
 // ストリーミングデータを読み取る
@@ -227,7 +244,7 @@ static int iqs915x_read_stream(const struct device *dev,
 {
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_REL_X & 0xFF, IQS915X_REL_X >> 8};
-  uint8_t buf[28];
+  uint8_t buf[44];
   int ret;
 
   // アドレスを指定してRESTARTで読み取る
@@ -250,6 +267,10 @@ static int iqs915x_read_stream(const struct device *dev,
   data->abs_y = (buf[19] << 8) | buf[18];
   data->finger2_x = (buf[25] << 8) | buf[24];
   data->finger2_y = (buf[27] << 8) | buf[26];
+  data->finger3_x = (buf[33] << 8) | buf[32];
+  data->finger3_y = (buf[35] << 8) | buf[34];
+  data->finger4_x = (buf[41] << 8) | buf[40];
+  data->finger4_y = (buf[43] << 8) | buf[42];
 
   return 0;
 }
@@ -273,7 +294,54 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   memset(&data->finger_tracker, 0, sizeof(data->finger_tracker));
   memset(&data->scroll_motion_history, 0, sizeof(data->scroll_motion_history));
   memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
+  data->swipe_last_centroid_x = 0;
+  data->swipe_last_centroid_y = 0;
+  data->swipe_centroid_valid = false;
+  data->swipe_active_fingers = 0;
+  data->swipe_triggered = false;
   iqs915x_reset_two_finger_session(data);
+}
+
+static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
+{
+  data->swipe_last_centroid_x = 0;
+  data->swipe_last_centroid_y = 0;
+  data->swipe_centroid_valid = false;
+  data->swipe_active_fingers = 0;
+  data->swipe_triggered = false;
+}
+
+static uint16_t iqs915x_get_multifinger_swipe_key(uint8_t fingers, int32_t dx,
+                                                  int32_t dy)
+{
+  bool horizontal = abs(dx) >= abs(dy);
+
+  if (fingers == 3)
+  {
+    if (horizontal)
+    {
+      return dx > 0 ? IQS915X_3F_SWIPE_RIGHT_KEY : IQS915X_3F_SWIPE_LEFT_KEY;
+    }
+    return dy > 0 ? IQS915X_3F_SWIPE_DOWN_KEY : IQS915X_3F_SWIPE_UP_KEY;
+  }
+
+  if (fingers == 4)
+  {
+    if (horizontal)
+    {
+      return dx > 0 ? IQS915X_4F_SWIPE_RIGHT_KEY : IQS915X_4F_SWIPE_LEFT_KEY;
+    }
+    return dy > 0 ? IQS915X_4F_SWIPE_DOWN_KEY : IQS915X_4F_SWIPE_UP_KEY;
+  }
+
+  return 0;
+}
+
+static void iqs915x_emit_virtual_key_tap(const struct device *dev,
+                                         uint16_t key_code)
+{
+  input_report_key(dev, key_code, 1, false, K_FOREVER);
+  input_report_key(dev, key_code, 0, true, K_FOREVER);
 }
 
 static void iqs915x_update_finger_state(const struct iqs915x_config *config,
@@ -356,6 +424,78 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
   two_finger->centroid_last_x = centroid_x;
   two_finger->centroid_last_y = centroid_y;
   two_finger->distance_last = distance;
+}
+
+static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config,
+                                             struct iqs915x_data *data,
+                                             const struct iqs915x_stream_data *stream)
+{
+  uint8_t stable_fingers = data->finger_tracker.stable_count;
+  bool enabled = (stable_fingers == 3 && config->three_finger_swipe) ||
+                 (stable_fingers == 4 && config->four_finger_swipe);
+  int32_t centroid_x;
+  int32_t centroid_y;
+  int32_t dx;
+  int32_t dy;
+  int32_t step = config->swipe_step > 0 ? config->swipe_step : 1;
+  uint16_t key_code;
+
+  if (!enabled)
+  {
+    iqs915x_reset_multifinger_swipe_state(data);
+    return false;
+  }
+
+  centroid_x = (int32_t)stream->abs_x + (int32_t)stream->finger2_x +
+               (int32_t)stream->finger3_x;
+  centroid_y = (int32_t)stream->abs_y + (int32_t)stream->finger2_y +
+               (int32_t)stream->finger3_y;
+  if (stable_fingers == 4)
+  {
+    centroid_x += (int32_t)stream->finger4_x;
+    centroid_y += (int32_t)stream->finger4_y;
+  }
+  centroid_x /= stable_fingers;
+  centroid_y /= stable_fingers;
+
+  if (!data->swipe_centroid_valid || data->swipe_active_fingers != stable_fingers)
+  {
+    data->swipe_last_centroid_x = centroid_x;
+    data->swipe_last_centroid_y = centroid_y;
+    data->swipe_centroid_valid = true;
+    data->swipe_active_fingers = stable_fingers;
+    data->swipe_triggered = false;
+    return true;
+  }
+
+  if (data->swipe_triggered)
+  {
+    return true;
+  }
+
+  // スワイプ開始時の重心位置を基準に方向を判定し、
+  // 指を離すまで一度だけキーイベントを発火する。
+  dx = centroid_x - data->swipe_last_centroid_x;
+  dy = centroid_y - data->swipe_last_centroid_y;
+
+  if (abs(dx) < step && abs(dy) < step)
+  {
+    return true;
+  }
+
+  key_code = iqs915x_get_multifinger_swipe_key(stable_fingers, dx, dy);
+  if (key_code == 0)
+  {
+    return true;
+  }
+
+  iqs915x_cancel_scroll_inertia(data);
+  iqs915x_emit_virtual_key_tap(data->dev, key_code);
+  data->swipe_triggered = true;
+  LOG_DBG("mf_swipe(%u): key=%u dx=%d dy=%d", stable_fingers, key_code,
+          (int)dx, (int)dy);
+
+  return true;
 }
 
 /* ============================================================
@@ -1438,6 +1578,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         iqs915x_record_scroll_sample(data, now_ms, gx, gy);
         data->scroll_inertia_state.elapsed_ms++;
       }
+      else if (iqs915x_handle_multifinger_swipe(config, data, &stream))
+      {
+        // 3/4本指の連続スワイプ出力を優先する。
+      }
       else if (config->report_absolute)
       {
         if (touch_up)
@@ -1686,6 +1830,9 @@ static int iqs915x_init(const struct device *dev)
           .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),        \
       },                                                                              \
       .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),        \
+      .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                      \
+      .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                        \
+      .swipe_step = DT_INST_PROP_OR(n, swipe_step, 32),                               \
       .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                    \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                        \
       .report_absolute = DT_INST_PROP(n, report_absolute),                            \

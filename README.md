@@ -62,6 +62,11 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         /* Use FINGER1_X/Y as internal source and emit REL_X/Y deltas */
         report-absolute;
 
+        /* 3/4 finger swipe as one-shot virtual key events */
+        three-finger-swipe;
+        four-finger-swipe;
+        swipe-step = <32>;
+
         switch-xy;
 
         /* Init data for IQS9150 (no NVM) - see section below */
@@ -77,6 +82,19 @@ source, computes deltas between consecutive samples, and emits
 used as a baseline (no cursor move), then relative movement is reported while
 `TP Movement` is asserted. If the property is omitted, the driver uses
 `REL_X`/`REL_Y` registers directly.
+
+When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
+the centroid of active fingers and emits one-shot virtual key tap events based
+on the dominant swipe direction. One gesture emits only one key event until
+fingers are released. `swipe-step` controls the trigger threshold.
+
+Virtual key mapping:
+
+- 3-finger up/down/left/right -> F13/F14/F15/F16
+- 4-finger up/down/left/right -> F17/F18/F19/F20
+
+See [docs/gesture_virtual_keys_ja.md](docs/gesture_virtual_keys_ja.md) for a
+firmware-side setup guide.
 
 The scroll inertia settings replace the older kinetic-scroll settings.
 If you previously used a friction value such as `85`, the direct replacement

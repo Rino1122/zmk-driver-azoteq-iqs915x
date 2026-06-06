@@ -409,12 +409,17 @@ struct iqs915x_config
     struct iqs915x_inertia_profile pinch_inertia;
     uint8_t finger_debounce_frames;
 
+    // 3/4本指スワイプ設定（単発キーイベント）
+    bool three_finger_swipe;
+    bool four_finger_swipe;
+    uint16_t swipe_step;
+
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
     uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
-    // 座標報告モード
-    bool report_absolute; // true=FINGER1_X/YをINPUT_ABS_X/Yで報告
+    // 座標入力モード
+    bool report_absolute; // true=FINGER1_X/Yを内部入力に使い、REL出力へ変換
 
     // 軸設定
     bool switch_xy;
@@ -473,6 +478,13 @@ struct iqs915x_data
     struct iqs915x_motion_history pinch_motion_history;
     struct iqs915x_inertia_state scroll_inertia_state;
     struct iqs915x_inertia_state pinch_inertia_state;
+
+    // 3/4本指スワイプ（重心追跡）
+    int32_t swipe_last_centroid_x;
+    int32_t swipe_last_centroid_y;
+    bool swipe_centroid_valid;
+    uint8_t swipe_active_fingers;
+    bool swipe_triggered;
 
     // スクロール慣性用
     struct k_work_delayable scroll_inertia_work; // 慣性スクロールタイマー
