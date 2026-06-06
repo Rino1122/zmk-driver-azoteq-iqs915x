@@ -364,6 +364,7 @@ struct iqs915x_finger_tracker
     uint8_t pending_count;
     uint8_t debounce_count;
     bool tail_suppressed;
+    bool awaiting_zero_contact;
 };
 
 struct iqs915x_two_finger_session

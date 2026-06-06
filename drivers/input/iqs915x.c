@@ -278,7 +278,8 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
 
 static void iqs915x_update_finger_state(const struct iqs915x_config *config,
                                         struct iqs915x_data *data,
-                                        const struct iqs915x_stream_data *stream)
+                                        const struct iqs915x_stream_data *stream,
+                                        bool touch_up_event)
 {
   struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
@@ -313,6 +314,19 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
 
   tracker->tail_suppressed =
       stable_before == 2 && tracker->stable_count == 1;
+
+  if (stable_before >= 2 && tracker->stable_count == 1)
+  {
+    // 2本以上から1本へ遷移したら、0本接触を確認するまで
+    // 単指ポインタを再開しない。
+    tracker->awaiting_zero_contact = true;
+  }
+
+  if (raw_count == 0 || touch_up_event)
+  {
+    // TP Touch離上イベント（または生の指本数=0）を0本経由の根拠として扱う。
+    tracker->awaiting_zero_contact = false;
+  }
 
   if (tracker->stable_count != 2 || raw_count < 2)
   {
@@ -1221,7 +1235,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
     uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
     data->is_touching = is_touching_now;
-    iqs915x_update_finger_state(config, data, &stream);
+    iqs915x_update_finger_state(config, data, &stream, touch_up);
 
     bool has_tp_event = is_touching_now || touch_state_changed;
     if (gesture_active || tp_movement)
@@ -1234,8 +1248,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool suppress_pointer_tail =
           !gesture_active && data->gesture_pointer_suppress_ticks > 0;
       bool suppress_pointer = gesture_active || suppress_pointer_tail;
-      bool single_finger_pointer = num_fingers == 1;
-      bool allow_pointer_report = !suppress_pointer && single_finger_pointer;
+      bool single_finger_pointer = data->finger_tracker.stable_count == 1;
+      bool allow_pointer_report = !suppress_pointer && single_finger_pointer &&
+                                  !data->finger_tracker.awaiting_zero_contact;
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
 
       if (gesture_active)
@@ -1444,8 +1459,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           if (touch_down || tp_movement)
           {
             LOG_DBG(
-                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u x=%u y=%u",
+                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u await0=%u x=%u y=%u",
                 stream.gesture_sf, stream.gesture_tf, num_fingers,
+                data->finger_tracker.awaiting_zero_contact,
                 stream.abs_x, stream.abs_y);
           }
         }
@@ -1481,8 +1497,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           }
 
           LOG_DBG(
-              "tp_movement suppressed: sf=0x%04x tf=0x%04x fingers=%u rel_x=%d rel_y=%d",
+              "tp_movement suppressed: sf=0x%04x tf=0x%04x fingers=%u await0=%u rel_x=%d rel_y=%d",
               stream.gesture_sf, stream.gesture_tf, num_fingers,
+              data->finger_tracker.awaiting_zero_contact,
               stream.rel_x, stream.rel_y);
         }
         else
