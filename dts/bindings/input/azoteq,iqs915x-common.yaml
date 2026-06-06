@@ -164,9 +164,10 @@ properties:
   report-absolute:
     type: boolean
     description: |
-      Report raw finger 1 coordinates from registers 0x1024/0x1026 using
-      INPUT_ABS_X and INPUT_ABS_Y instead of relative deltas from REL_X/REL_Y.
-      If unset, the driver keeps reporting relative movement.
+      Use finger 1 absolute coordinates from registers 0x1024/0x1026 as the
+      internal pointer source and convert them to relative deltas in the driver.
+      Host-facing output remains INPUT_REL_X and INPUT_REL_Y.
+      If unset, the driver uses REL_X/REL_Y registers directly.
 
   azoteq,init-data:
     type: uint8-array

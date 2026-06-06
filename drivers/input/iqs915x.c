@@ -1472,17 +1472,28 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
           if (touch_down || tp_movement)
           {
-            if (!data->last_abs_valid || stream.abs_x != data->last_abs_x ||
-                stream.abs_y != data->last_abs_y)
+            if (!data->last_abs_valid)
             {
-              LOG_DBG("tp_absolute: x=%u, y=%u", stream.abs_x, stream.abs_y);
-              input_report_abs(dev, INPUT_ABS_X, stream.abs_x, false,
-                               K_FOREVER);
-              input_report_abs(dev, INPUT_ABS_Y, stream.abs_y, true,
-                               K_FOREVER);
+              // 初回は基準点のみ保存し、次フレーム以降をデルタ報告する
               data->last_abs_x = stream.abs_x;
               data->last_abs_y = stream.abs_y;
               data->last_abs_valid = true;
+            }
+            else
+            {
+              int32_t rel_x = (int32_t)stream.abs_x - (int32_t)data->last_abs_x;
+              int32_t rel_y = (int32_t)stream.abs_y - (int32_t)data->last_abs_y;
+
+              data->last_abs_x = stream.abs_x;
+              data->last_abs_y = stream.abs_y;
+
+              if (rel_x != 0 || rel_y != 0)
+              {
+                LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d (x=%u y=%u)",
+                        (int)rel_x, (int)rel_y, stream.abs_x, stream.abs_y);
+                input_report_rel(dev, INPUT_REL_X, rel_x, false, K_FOREVER);
+                input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
+              }
             }
           }
         }

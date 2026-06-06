@@ -59,7 +59,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         scroll-inertia-min-samples = <1>;
         scroll-inertia-min-avg-speed = <4>;
 
-        /* Report raw FINGER1_X/Y as INPUT_ABS_X/Y instead of REL_X/Y */
+        /* Use FINGER1_X/Y as internal source and emit REL_X/Y deltas */
         report-absolute;
 
         switch-xy;
@@ -70,11 +70,13 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 };
 ```
 
-When `report-absolute` is enabled, the driver emits raw IQS9150 finger 1
-coordinates from registers `0x1024` and `0x1026` as `INPUT_ABS_X` and
-`INPUT_ABS_Y`. The driver sends an initial coordinate sample on touch-down,
-then sends updates while `TP Movement` is asserted. Relative reporting remains
-the default when the property is omitted.
+When `report-absolute` is enabled, the driver uses raw IQS9150 finger 1
+coordinates from registers `0x1024` and `0x1026` as the internal pointer
+source, computes deltas between consecutive samples, and emits
+`INPUT_REL_X`/`INPUT_REL_Y` to the host. The first sample after touch-down is
+used as a baseline (no cursor move), then relative movement is reported while
+`TP Movement` is asserted. If the property is omitted, the driver uses
+`REL_X`/`REL_Y` registers directly.
 
 The scroll inertia settings replace the older kinetic-scroll settings.
 If you previously used a friction value such as `85`, the direct replacement
