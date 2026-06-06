@@ -3,7 +3,7 @@ properties:
     type: phandle-array
     required: true
     description: "Data Ready (RDY) pin. IQS9150ではRDYがLOWでデータ準備完了を通知する。"
-  
+
   reset-gpios:
     type: phandle-array
     description: "Reset pin (optional)"
@@ -15,7 +15,7 @@ properties:
   press-and-hold:
     type: boolean
     description: "Enable press and hold (left click until released)"
-  
+
   press-and-hold-time:
     type: int
     description: "Press and hold detection time in ms (added to tap time)"
@@ -24,10 +24,6 @@ properties:
   two-finger-tap:
     type: boolean
     description: "Enable two finger tap (right click)"
-  
-  scroll:
-    type: boolean
-    description: "Enable two-finger scroll (vertical and horizontal)"
 
   scroll:
     type: boolean
@@ -36,7 +32,7 @@ properties:
   switch-xy:
     type: boolean
     description: "Swap x and y axes"
-  
+
   flip-x:
     type: boolean
     description: "Invert x axis direction"
@@ -58,44 +54,81 @@ properties:
       Enable scroll inertia. When enabled, scrolling continues with momentum
       after releasing fingers and decays according to the inertia profile.
 
+  trigger-ms:
+    type: int
+    default: 35
+    description: |
+      Delay in ms between the last manual scroll input and inertia start.
+      Recommended: at least 2x your sensor polling interval.
+
+  scroll-decay-factor-int:
+    type: int
+    default: 85
+    description: |
+      Scroll inertia retention percentage (0-100) applied at each inertia tick.
+      Higher values produce longer inertia.
+
+  scroll-report-interval-ms:
+    type: int
+    default: 65
+    description: |
+      Interval in ms between inertia decay ticks.
+
+  scroll-threshold-start:
+    type: int
+    default: 2
+    description: |
+      Minimum manual scroll velocity required to arm inertia start.
+
+  scroll-threshold-stop:
+    type: int
+    default: 0
+    description: |
+      Minimum decayed scroll velocity required to continue inertia.
+      Inertia stops when both axes are below or equal to this value.
+
   scroll-inertia-decay:
     type: int
     default: 850
+    deprecated: true
     description: |
-      Scroll inertia decay in x/1000 retention units. Larger values decay
-      more slowly. Default: 850.
+      Deprecated fallback for scroll-decay-factor-int.
+      x/1000 retention units (850 -> 85%).
 
   scroll-inertia-interval-ms:
     type: int
-    default: 15
+    default: 65
+    deprecated: true
     description: |
-      Interval in ms between scroll inertia ticks. Default: 15.
+      Deprecated fallback for scroll-report-interval-ms.
 
   scroll-inertia-recent-window-ms:
     type: int
     default: 60
+    deprecated: true
     description: |
-      Recent motion window in ms used to seed scroll inertia.
+      Deprecated legacy property. Not used by the current scroll inertia model.
 
   scroll-inertia-stale-gap-ms:
     type: int
     default: 35
+    deprecated: true
     description: |
-      Maximum allowed time in ms between the last scroll sample and
-      release when seeding scroll inertia.
+      Deprecated fallback for trigger-ms.
 
   scroll-inertia-min-samples:
     type: int
     default: 1
+    deprecated: true
     description: |
-      Minimum number of recent scroll samples required to seed
-      scroll inertia.
+      Deprecated legacy property. Not used by the current scroll inertia model.
 
   scroll-inertia-min-avg-speed:
     type: int
     default: 4
+    deprecated: true
     description: |
-      Minimum average recent scroll speed required to seed scroll inertia.
+      Deprecated fallback for scroll-threshold-start/stop.
 
   pinch-inertia:
     type: boolean

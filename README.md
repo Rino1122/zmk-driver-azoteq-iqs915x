@@ -52,12 +52,11 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
         /* Scroll inertia settings */
         scroll-inertia;
-        scroll-inertia-decay = <850>;         /* x/1000 velocity retention per tick */
-        scroll-inertia-interval-ms = <15>;    /* Time between inertia updates */
-        scroll-inertia-recent-window-ms = <60>;
-        scroll-inertia-stale-gap-ms = <35>;
-        scroll-inertia-min-samples = <1>;
-        scroll-inertia-min-avg-speed = <4>;
+        trigger-ms = <35>;                    /* Wait before inertia starts */
+        scroll-decay-factor-int = <85>;       /* Retention percent per tick (0-100) */
+        scroll-report-interval-ms = <65>;     /* Time between inertia updates */
+        scroll-threshold-start = <2>;         /* Arm inertia above this velocity */
+        scroll-threshold-stop = <0>;          /* Stop inertia at/below this velocity */
 
         /* Use FINGER1_X/Y as internal source and emit REL_X/Y deltas */
         report-absolute;
@@ -121,10 +120,13 @@ controls that exist as positions in your keyboard keymap/layout. To expose
 gesture controls in Studio, add 8 gesture slots on the firmware side and map
 them to the key codes emitted by this driver.
 
-The scroll inertia settings replace the older kinetic-scroll settings.
-If you previously used a friction value such as `85`, the direct replacement
-is `scroll-inertia-decay = <850>;`. The old kinetic interval maps directly to
-`scroll-inertia-interval-ms`.
+The current scroll inertia model follows a Q8 fixed-point decay flow with
+remainder preservation and round-to-nearest output.
+
+Legacy properties (`scroll-inertia-decay`, `scroll-inertia-interval-ms`,
+`scroll-inertia-stale-gap-ms`, `scroll-inertia-min-avg-speed`) are still
+accepted as fallback for compatibility, but new configurations should use
+`trigger-ms` and `scroll-*` properties shown above.
 
 ## Initialization data (IQS9150/IQS9151)
 

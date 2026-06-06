@@ -331,6 +331,16 @@ struct iqs915x_inertia_profile
     uint16_t min_avg_speed;
 };
 
+struct iqs915x_scroll_inertia_profile
+{
+    bool enabled;
+    uint16_t trigger_ms;
+    uint16_t decay_factor_int;
+    uint16_t interval_ms;
+    uint16_t threshold_start;
+    uint16_t threshold_stop;
+};
+
 struct iqs915x_motion_sample
 {
     int64_t ms;
@@ -354,6 +364,18 @@ struct iqs915x_inertia_state
     int32_t accum_y_fp;
     int64_t last_ms;
     uint32_t elapsed_ms;
+};
+
+struct iqs915x_scroll_inertia_state
+{
+    int16_t vx;
+    int16_t vy;
+    int16_t ema_vx;
+    int16_t ema_vy;
+    int16_t remainder_x_q8;
+    int16_t remainder_y_q8;
+    bool active;
+    bool is_inertial;
 };
 
 struct iqs915x_finger_tracker
@@ -405,7 +427,7 @@ struct iqs915x_config
     bool scroll;
     uint16_t scroll_divisor; // スクロール感度除数
 
-    struct iqs915x_inertia_profile scroll_inertia;
+    struct iqs915x_scroll_inertia_profile scroll_inertia;
     struct iqs915x_inertia_profile pinch_inertia;
     uint8_t finger_debounce_frames;
 
@@ -486,7 +508,7 @@ struct iqs915x_data
     struct iqs915x_two_finger_session two_finger;
     struct iqs915x_motion_history scroll_motion_history;
     struct iqs915x_motion_history pinch_motion_history;
-    struct iqs915x_inertia_state scroll_inertia_state;
+    struct iqs915x_scroll_inertia_state scroll_inertia_state;
     struct iqs915x_inertia_state pinch_inertia_state;
 
     // 3/4本指スワイプ（重心追跡）
