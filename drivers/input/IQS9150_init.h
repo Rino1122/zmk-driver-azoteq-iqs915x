@@ -10,32 +10,32 @@
 
 /* ALP ATI Compensation */
 /* Memory Map Position 0x115C - 0x1175 */
-#define ALP_COMPENSATION_RX0_0                   0xB8
-#define ALP_COMPENSATION_RX0_1                   0x12
-#define ALP_COMPENSATION_RX1_0                   0xBD
-#define ALP_COMPENSATION_RX1_1                   0x12
-#define ALP_COMPENSATION_RX2_0                   0xC3
-#define ALP_COMPENSATION_RX2_1                   0x12
-#define ALP_COMPENSATION_RX3_0                   0xB0
-#define ALP_COMPENSATION_RX3_1                   0x12
-#define ALP_COMPENSATION_RX4_0                   0xB1
-#define ALP_COMPENSATION_RX4_1                   0x12
-#define ALP_COMPENSATION_RX5_0                   0xC2
-#define ALP_COMPENSATION_RX5_1                   0x12
-#define ALP_COMPENSATION_RX6_0                   0xC6
+#define ALP_COMPENSATION_RX0_0                   0xAB
+#define ALP_COMPENSATION_RX0_1                   0x0E
+#define ALP_COMPENSATION_RX1_0                   0xB2
+#define ALP_COMPENSATION_RX1_1                   0x0E
+#define ALP_COMPENSATION_RX2_0                   0xF0
+#define ALP_COMPENSATION_RX2_1                   0x0E
+#define ALP_COMPENSATION_RX3_0                   0xA4
+#define ALP_COMPENSATION_RX3_1                   0x0E
+#define ALP_COMPENSATION_RX4_0                   0xB8
+#define ALP_COMPENSATION_RX4_1                   0x0E
+#define ALP_COMPENSATION_RX5_0                   0xB2
+#define ALP_COMPENSATION_RX5_1                   0x0E
+#define ALP_COMPENSATION_RX6_0                   0xC8
 #define ALP_COMPENSATION_RX6_1                   0x12
-#define ALP_COMPENSATION_RX7_0                   0xD4
-#define ALP_COMPENSATION_RX7_1                   0x12
-#define ALP_COMPENSATION_RX8_0                   0xC1
-#define ALP_COMPENSATION_RX8_1                   0x12
-#define ALP_COMPENSATION_RX9_0                   0xC1
-#define ALP_COMPENSATION_RX9_1                   0x12
-#define ALP_COMPENSATION_RX10_0                  0xCB
-#define ALP_COMPENSATION_RX10_1                  0x12
-#define ALP_COMPENSATION_RX11_0                  0xB9
-#define ALP_COMPENSATION_RX11_1                  0x12
-#define ALP_COMPENSATION_RX12_0                  0xDA
-#define ALP_COMPENSATION_RX12_1                  0x12
+#define ALP_COMPENSATION_RX7_0                   0xB8
+#define ALP_COMPENSATION_RX7_1                   0x0E
+#define ALP_COMPENSATION_RX8_0                   0x0E
+#define ALP_COMPENSATION_RX8_1                   0x0F
+#define ALP_COMPENSATION_RX9_0                   0xC6
+#define ALP_COMPENSATION_RX9_1                   0x16
+#define ALP_COMPENSATION_RX10_0                  0x76
+#define ALP_COMPENSATION_RX10_1                  0x0E
+#define ALP_COMPENSATION_RX11_0                  0x00
+#define ALP_COMPENSATION_RX11_1                  0x0F
+#define ALP_COMPENSATION_RX12_0                  0xEE
+#define ALP_COMPENSATION_RX12_1                  0x26
 
 /* I2C Slave Address */
 /* Memory Map Position 0x1176 - 0x1177 */
@@ -44,7 +44,7 @@
 
 /* Settings Version Numbers */
 /* Memory Map Position 0x1178 - 0x1179 */
-#define MINOR_VERSION                            0x03
+#define MINOR_VERSION                            0x07
 #define MAJOR_VERSION                            0x00
 
 /* ATI Multipliers / Dividers */
@@ -82,7 +82,7 @@
 /* Memory Map Position 0x1196 - 0x11A1 */
 #define TP_ATI_TARGET_0                          0x5E
 #define TP_ATI_TARGET_1                          0x01
-#define ALP_ATI_TARGET_0                         0x2C
+#define ALP_ATI_TARGET_0                         0x8E
 #define ALP_ATI_TARGET_1                         0x01
 #define ALP_BASE_TARGET_0                        0x32
 #define ALP_BASE_TARGET_1                        0x00
@@ -95,7 +95,7 @@
 
 /* Sampling Periods and Timing */
 /* Memory Map Position 0x11A2 - 0x11BB */
-#define ACTIVE_MODE_SAMPLING_PERIOD_0            0x10
+#define ACTIVE_MODE_SAMPLING_PERIOD_0            0x0F
 #define ACTIVE_MODE_SAMPLING_PERIOD_1            0x00
 #define IDLE_TOUCH_MODE_SAMPLING_PERIOD_0        0x32
 #define IDLE_TOUCH_MODE_SAMPLING_PERIOD_1        0x00
@@ -103,15 +103,15 @@
 #define IDLE_MODE_SAMPLING_PERIOD_1              0x00
 #define LP1_MODE_SAMPLING_PERIOD_0               0x32
 #define LP1_MODE_SAMPLING_PERIOD_1               0x00
-#define LP2_MODE_SAMPLING_PERIOD_0               0x64
-#define LP2_MODE_SAMPLING_PERIOD_1               0x00
+#define LP2_MODE_SAMPLING_PERIOD_0               0x88
+#define LP2_MODE_SAMPLING_PERIOD_1               0x13
 #define STATIONARY_TOUCH_TIMEOUT_0               0x0A
 #define STATIONARY_TOUCH_TIMEOUT_1               0x00
 #define IDLE_TOUCH_MODE_TIMEOUT_0                0x3C
 #define IDLE_TOUCH_MODE_TIMEOUT_1                0x00
 #define IDLE_MODE_TIMEOUT_0                      0x05
 #define IDLE_MODE_TIMEOUT_1                      0x00
-#define LP1_MODE_TIMEOUT_0                       0x28
+#define LP1_MODE_TIMEOUT_0                       0x07
 #define LP1_MODE_TIMEOUT_1                       0x00
 #define ACTIVE_MODE_TIMEOUT_0                    0xDC
 #define ACTIVE_MODE_TIMEOUT_1                    0x05
@@ -124,32 +124,32 @@
 
 /* System Settings */
 /* Memory Map Position 0x11BC - 0x11C1 */
-#define SYSTEM_CONTROL_0                         0x20
+#define SYSTEM_CONTROL_0                         0x00
 #define SYSTEM_CONTROL_1                         0x00
-#define CONFIG_SETTINGS_0                        0x06
-#define CONFIG_SETTINGS_1                        0x0E
+#define CONFIG_SETTINGS_0                        0x84
+#define CONFIG_SETTINGS_1                        0x0F
 #define OTHER_SETTINGS_0                         0xA8
-#define OTHER_SETTINGS_1                         0x80
+#define OTHER_SETTINGS_1                         0x00
 
 /* ALP Settings */
 /* Memory Map Position 0x11C2 - 0x11CB */
 #define ALP_SETUP_0                              0xFF
 #define ALP_SETUP_1                              0xFF
-#define ALP_SETUP_2                              0xFF
-#define ALP_SETUP_3                              0xD3
+#define ALP_SETUP_2                              0x03
+#define ALP_SETUP_3                              0x90
 #define ALP_TX_ENABLE_0                          0x00
 #define ALP_TX_ENABLE_1                          0x00
-#define ALP_TX_ENABLE_2                          0x00
-#define ALP_TX_ENABLE_3                          0xFC
-#define ALP_TX_ENABLE_4                          0xFF
-#define ALP_TX_ENABLE_5                          0x0F
+#define ALP_TX_ENABLE_2                          0xFC
+#define ALP_TX_ENABLE_3                          0x3F
+#define ALP_TX_ENABLE_4                          0x00
+#define ALP_TX_ENABLE_5                          0x00
 
 /* Thresholds and Debounce Settings */
 /* Memory Map Position 0x11CC - 0x11D3 */
 #define TRACKPAD_TOUCH_SET_THRESHOLD             0x2D
 #define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x23
-#define ALP_THRESHOLD                            0x08
-#define ALP_AUTOPROX_THRESHOLD                   0x08
+#define ALP_THRESHOLD                            0xFF
+#define ALP_AUTOPROX_THRESHOLD                   0x7F
 #define ALP_SET_DEBOUNCE                         0x02
 #define ALP_CLEAR_DEBOUNCE                       0x02
 #define SNAP_SET_THRESHOLD                       0x32
@@ -173,14 +173,14 @@
 #define TRACKPAD_HARDWARE_SETTINGS_0             0x00
 #define TRACKPAD_HARDWARE_SETTINGS_1             0x44
 #define ALP_HARDWARE_SETTINGS_0                  0x40
-#define ALP_HARDWARE_SETTINGS_1                  0x4B
+#define ALP_HARDWARE_SETTINGS_1                  0x43
 
 /* Trackpad Settings */
 /* Memory Map Position 0x11E2 - 0x11F5 */
 #define TRACKPAD_SETTINGS_0_0                    0x28
 #define TRACKPAD_SETTINGS_0_1                    0x12
 #define TRACKPAD_SETTINGS_1_0                    0x0C
-#define TRACKPAD_SETTINGS_1_1                    0x03
+#define TRACKPAD_SETTINGS_1_1                    0x04
 #define X_RESOLUTION_0                           0x70
 #define X_RESOLUTION_1                           0x17
 #define Y_RESOLUTION_0                           0xA0
@@ -191,7 +191,7 @@
 #define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x0D
 #define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x28
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
-#define STATIONARY_TOUCH_MOV_THRESHOLD           0x00
+#define STATIONARY_TOUCH_MOV_THRESHOLD           0x32
 #define FINGER_SPLIT_FACTOR                      0x03
 #define X_TRIM_VALUE                             0x00
 #define Y_TRIM_VALUE                             0x00
@@ -201,36 +201,36 @@
 /* Gesture Settings */
 /* Memory Map Position 0x11F6 - 0x1217 */
 #define GESTURE_ENABLE_0                         0x17
-#define GESTURE_ENABLE_1                         0x0F
+#define GESTURE_ENABLE_1                         0x00
 #define GESTURE_ENABLE_2F_0                      0xF7
 #define GESTURE_ENABLE_2F_1                      0x00
 #define TAP_TOUCH_TIME_0                         0x96
 #define TAP_TOUCH_TIME_1                         0x00
 #define TAP_WAIT_TIME_0                          0x96
 #define TAP_WAIT_TIME_1                          0x00
-#define TAP_DISTANCE_0                           0xE8
-#define TAP_DISTANCE_1                           0x03
-#define HOLD_TIME_0                              0x2C
-#define HOLD_TIME_1                              0x01
+#define TAP_DISTANCE_0                           0x64
+#define TAP_DISTANCE_1                           0x00
+#define HOLD_TIME_0                              0xE8
+#define HOLD_TIME_1                              0x03
 #define SWIPE_TIME_0                             0x96
 #define SWIPE_TIME_1                             0x00
-#define SWIPE_X_DISTANCE_0                       0xD0
-#define SWIPE_X_DISTANCE_1                       0x07
-#define SWIPE_Y_DISTANCE_0                       0xDC
-#define SWIPE_Y_DISTANCE_1                       0x05
-#define SWIPE_X_CONS_DIST_0                      0xF4
-#define SWIPE_X_CONS_DIST_1                      0x01
-#define SWIPE_Y_CONS_DIST_0                      0x2C
-#define SWIPE_Y_CONS_DIST_1                      0x01
+#define SWIPE_X_DISTANCE_0                       0xC8
+#define SWIPE_X_DISTANCE_1                       0x00
+#define SWIPE_Y_DISTANCE_0                       0x96
+#define SWIPE_Y_DISTANCE_1                       0x00
+#define SWIPE_X_CONS_DIST_0                      0x32
+#define SWIPE_X_CONS_DIST_1                      0x00
+#define SWIPE_Y_CONS_DIST_0                      0x1E
+#define SWIPE_Y_CONS_DIST_1                      0x00
 #define SWIPE_ANGLE                              0x25
 #define SCROLL_ANGLE                             0x25
-#define ZOOM_INIT_DIST_0                         0xE8
-#define ZOOM_INIT_DIST_1                         0x03
-#define ZOOM_CONSECUTIVE_DIST_0                  0x0A
+#define ZOOM_INIT_DIST_0                         0xFA
+#define ZOOM_INIT_DIST_1                         0x00
+#define ZOOM_CONSECUTIVE_DIST_0                  0x01
 #define ZOOM_CONSECUTIVE_DIST_1                  0x00
-#define SCROLL_INIT_DIST_0                       0x32
+#define SCROLL_INIT_DIST_0                       0x96
 #define SCROLL_INIT_DIST_1                       0x00
-#define SCROLL_CONSECUTIVE_DIST_0                0x05
+#define SCROLL_CONSECUTIVE_DIST_0                0x01
 #define SCROLL_CONSECUTIVE_DIST_1                0x00
 #define PALM_GESTURE_THRESHOLD_0                 0x1E
 #define PALM_GESTURE_THRESHOLD_1                 0x00
