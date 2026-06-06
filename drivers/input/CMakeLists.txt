@@ -19,7 +19,12 @@ add_custom_command(
 	VERBATIM
 )
 
+add_custom_target(iqs915x_init_data_header_gen DEPENDS ${IQS915X_INIT_DATA_ARRAY})
+
+zephyr_include_directories(${IQS915X_INIT_DATA_GEN_DIR})
 zephyr_library_include_directories(${IQS915X_INIT_DATA_GEN_DIR})
+
+add_dependencies(${ZEPHYR_CURRENT_LIBRARY} iqs915x_init_data_header_gen)
 
 set_source_files_properties(iqs915x.c PROPERTIES OBJECT_DEPENDS ${IQS915X_INIT_DATA_ARRAY})
 
