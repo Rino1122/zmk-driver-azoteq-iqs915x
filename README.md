@@ -65,7 +65,10 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         /* 3/4 finger swipe as one-shot virtual key events */
         three-finger-swipe;
         four-finger-swipe;
-        swipe-step = <32>;
+        /* 0 = auto threshold from X/Y resolution with ratio */
+        swipe-step = <0>;
+        swipe-threshold-numerator = <1>;
+        swipe-threshold-denominator = <5>;
 
         /* Optional: override emitted keycodes (defaults: F13..F20) */
         three-finger-swipe-up-key = <INPUT_KEY_F13>;
@@ -96,7 +99,14 @@ used as a baseline (no cursor move), then relative movement is reported while
 When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
 the centroid of active fingers and emits one-shot virtual key tap events based
 on the dominant swipe direction. One gesture emits only one key event until
-fingers are released. `swipe-step` controls the trigger threshold.
+fingers are released.
+
+By default (`swipe-step = <0>`), swipe thresholds are computed from init-data
+X/Y resolutions (registers `0x11E6`/`0x11E8`) using
+`swipe-threshold-numerator` / `swipe-threshold-denominator`.
+Default `1/5` means a gesture triggers at about 20% centroid travel on each
+axis. If you set `swipe-step` to a value > 0, that fixed threshold overrides
+the ratio-based calculation.
 
 You can override each emitted key code using DTS properties
 (`three-finger-swipe-up-key`, etc.). If omitted, defaults are F13..F20.

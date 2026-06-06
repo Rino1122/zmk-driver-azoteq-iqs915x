@@ -413,6 +413,8 @@ struct iqs915x_config
     bool three_finger_swipe;
     bool four_finger_swipe;
     uint16_t swipe_step;
+    uint16_t swipe_threshold_numerator;
+    uint16_t swipe_threshold_denominator;
     uint16_t three_finger_swipe_up_key;
     uint16_t three_finger_swipe_down_key;
     uint16_t three_finger_swipe_left_key;
@@ -493,6 +495,10 @@ struct iqs915x_data
     bool swipe_centroid_valid;
     uint8_t swipe_active_fingers;
     bool swipe_triggered;
+    uint16_t swipe_threshold_x;
+    uint16_t swipe_threshold_y;
+    uint16_t swipe_resolution_x;
+    uint16_t swipe_resolution_y;
 
     // スクロール慣性用
     struct k_work_delayable scroll_inertia_work; // 慣性スクロールタイマー

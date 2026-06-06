@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_DEFAULT_4F_SWIPE_DOWN_KEY INPUT_KEY_F18
 #define IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
 #define IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
+#define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 
@@ -313,6 +314,80 @@ static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
   data->swipe_triggered = false;
 }
 
+static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
+                                        uint16_t reg, uint16_t *val)
+{
+  uint16_t offset;
+
+  if (!config->init_data || config->init_data_len == 0)
+  {
+    return false;
+  }
+
+  if (reg < IQS915X_INIT_DATA_BASE_ADDR ||
+      reg + 1 >= (IQS915X_INIT_DATA_BASE_ADDR + IQS915X_INIT_DATA_MAIN_SIZE))
+  {
+    return false;
+  }
+
+  offset = reg - IQS915X_INIT_DATA_BASE_ADDR;
+  if (offset + 1 >= config->init_data_len)
+  {
+    return false;
+  }
+
+  *val = ((uint16_t)config->init_data[offset + 1] << 8) |
+         (uint16_t)config->init_data[offset];
+  return true;
+}
+
+static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *config,
+                                               struct iqs915x_data *data)
+{
+  uint16_t res_x = 0;
+  uint16_t res_y = 0;
+  uint16_t num = config->swipe_threshold_numerator;
+  uint16_t den = config->swipe_threshold_denominator;
+  bool has_x = iqs915x_get_init_data_reg16(config, IQS915X_X_RESOLUTION, &res_x);
+  bool has_y = iqs915x_get_init_data_reg16(config, IQS915X_Y_RESOLUTION, &res_y);
+
+  if (num == 0)
+  {
+    num = 1;
+  }
+  if (den == 0)
+  {
+    den = 5;
+  }
+
+  data->swipe_resolution_x = has_x ? res_x : 0;
+  data->swipe_resolution_y = has_y ? res_y : 0;
+
+  if (config->swipe_step > 0)
+  {
+    data->swipe_threshold_x = config->swipe_step;
+    data->swipe_threshold_y = config->swipe_step;
+    LOG_INF("Gesture threshold override: %u px", config->swipe_step);
+    return;
+  }
+
+  if (has_x && has_y)
+  {
+    data->swipe_threshold_x = MAX(1U, ((uint32_t)res_x * num) / den);
+    data->swipe_threshold_y = MAX(1U, ((uint32_t)res_y * num) / den);
+    LOG_INF("Gesture thresholds from resolution: x=%u y=%u (res=%ux%u, ratio=%u/%u)",
+            data->swipe_threshold_x, data->swipe_threshold_y, res_x, res_y, num,
+            den);
+    return;
+  }
+
+  data->swipe_threshold_x = IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK;
+  data->swipe_threshold_y = IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK;
+  LOG_WRN("Failed to read X/Y resolution from init-data (0x11E6/0x11E8). "
+          "Using fallback threshold=%u px",
+          IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK);
+}
+
 static uint16_t iqs915x_get_multifinger_swipe_key(const struct iqs915x_config *config,
                                                   uint8_t fingers, int32_t dx,
                                                   int32_t dy)
@@ -444,7 +519,9 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   int32_t centroid_y;
   int32_t dx;
   int32_t dy;
-  int32_t step = config->swipe_step > 0 ? config->swipe_step : 1;
+  bool horizontal;
+  int32_t axis_delta;
+  uint16_t axis_threshold;
   uint16_t key_code;
 
   if (!enabled)
@@ -485,7 +562,11 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   dx = centroid_x - data->swipe_last_centroid_x;
   dy = centroid_y - data->swipe_last_centroid_y;
 
-  if (abs(dx) < step && abs(dy) < step)
+  horizontal = abs(dx) >= abs(dy);
+  axis_delta = horizontal ? dx : dy;
+  axis_threshold = horizontal ? data->swipe_threshold_x : data->swipe_threshold_y;
+
+  if (abs(axis_delta) < axis_threshold)
   {
     return true;
   }
@@ -499,8 +580,11 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   iqs915x_cancel_scroll_inertia(data);
   iqs915x_emit_virtual_key_tap(data->dev, key_code);
   data->swipe_triggered = true;
-  LOG_DBG("mf_swipe(%u): key=%u dx=%d dy=%d", stable_fingers, key_code,
-          (int)dx, (int)dy);
+  LOG_INF("Gesture triggered: %uF %s key=%u dx=%d dy=%d thr_x=%u thr_y=%u",
+          stable_fingers,
+          horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
+          key_code, (int)dx, (int)dy, data->swipe_threshold_x,
+          data->swipe_threshold_y);
 
   return true;
 }
@@ -1722,6 +1806,7 @@ static int iqs915x_init(const struct device *dev)
   data->active_pending = false;
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
+  iqs915x_configure_swipe_thresholds(config, data);
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
@@ -1839,7 +1924,9 @@ static int iqs915x_init(const struct device *dev)
       .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),                                              \
       .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                                                            \
       .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                                                              \
-      .swipe_step = DT_INST_PROP_OR(n, swipe_step, 32),                                                                     \
+      .swipe_step = DT_INST_PROP_OR(n, swipe_step, 0),                                                                      \
+      .swipe_threshold_numerator = DT_INST_PROP_OR(n, swipe_threshold_numerator, 1),                                        \
+      .swipe_threshold_denominator = DT_INST_PROP_OR(n, swipe_threshold_denominator, 5),                                    \
       .three_finger_swipe_up_key = DT_INST_PROP_OR(n, three_finger_swipe_up_key, IQS915X_DEFAULT_3F_SWIPE_UP_KEY),          \
       .three_finger_swipe_down_key = DT_INST_PROP_OR(n, three_finger_swipe_down_key, IQS915X_DEFAULT_3F_SWIPE_DOWN_KEY),    \
       .three_finger_swipe_left_key = DT_INST_PROP_OR(n, three_finger_swipe_left_key, IQS915X_DEFAULT_3F_SWIPE_LEFT_KEY),    \
