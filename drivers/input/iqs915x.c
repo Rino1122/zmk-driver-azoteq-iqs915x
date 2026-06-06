@@ -34,14 +34,14 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
-#define IQS915X_3F_SWIPE_UP_KEY INPUT_KEY_F13
-#define IQS915X_3F_SWIPE_DOWN_KEY INPUT_KEY_F14
-#define IQS915X_3F_SWIPE_LEFT_KEY INPUT_KEY_F15
-#define IQS915X_3F_SWIPE_RIGHT_KEY INPUT_KEY_F16
-#define IQS915X_4F_SWIPE_UP_KEY INPUT_KEY_F17
-#define IQS915X_4F_SWIPE_DOWN_KEY INPUT_KEY_F18
-#define IQS915X_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
-#define IQS915X_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
+#define IQS915X_DEFAULT_3F_SWIPE_UP_KEY INPUT_KEY_F13
+#define IQS915X_DEFAULT_3F_SWIPE_DOWN_KEY INPUT_KEY_F14
+#define IQS915X_DEFAULT_3F_SWIPE_LEFT_KEY INPUT_KEY_F15
+#define IQS915X_DEFAULT_3F_SWIPE_RIGHT_KEY INPUT_KEY_F16
+#define IQS915X_DEFAULT_4F_SWIPE_UP_KEY INPUT_KEY_F17
+#define IQS915X_DEFAULT_4F_SWIPE_DOWN_KEY INPUT_KEY_F18
+#define IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
+#define IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
 
 /* ============================================================
  * I2C通信関数
@@ -311,7 +311,8 @@ static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
   data->swipe_triggered = false;
 }
 
-static uint16_t iqs915x_get_multifinger_swipe_key(uint8_t fingers, int32_t dx,
+static uint16_t iqs915x_get_multifinger_swipe_key(const struct iqs915x_config *config,
+                                                  uint8_t fingers, int32_t dx,
                                                   int32_t dy)
 {
   bool horizontal = abs(dx) >= abs(dy);
@@ -320,18 +321,22 @@ static uint16_t iqs915x_get_multifinger_swipe_key(uint8_t fingers, int32_t dx,
   {
     if (horizontal)
     {
-      return dx > 0 ? IQS915X_3F_SWIPE_RIGHT_KEY : IQS915X_3F_SWIPE_LEFT_KEY;
+      return dx > 0 ? config->three_finger_swipe_right_key
+                    : config->three_finger_swipe_left_key;
     }
-    return dy > 0 ? IQS915X_3F_SWIPE_DOWN_KEY : IQS915X_3F_SWIPE_UP_KEY;
+    return dy > 0 ? config->three_finger_swipe_down_key
+                  : config->three_finger_swipe_up_key;
   }
 
   if (fingers == 4)
   {
     if (horizontal)
     {
-      return dx > 0 ? IQS915X_4F_SWIPE_RIGHT_KEY : IQS915X_4F_SWIPE_LEFT_KEY;
+      return dx > 0 ? config->four_finger_swipe_right_key
+                    : config->four_finger_swipe_left_key;
     }
-    return dy > 0 ? IQS915X_4F_SWIPE_DOWN_KEY : IQS915X_4F_SWIPE_UP_KEY;
+    return dy > 0 ? config->four_finger_swipe_down_key
+                  : config->four_finger_swipe_up_key;
   }
 
   return 0;
@@ -483,7 +488,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
     return true;
   }
 
-  key_code = iqs915x_get_multifinger_swipe_key(stable_fingers, dx, dy);
+  key_code = iqs915x_get_multifinger_swipe_key(config, stable_fingers, dx, dy);
   if (key_code == 0)
   {
     return true;
@@ -1790,60 +1795,68 @@ static int iqs915x_init(const struct device *dev)
 /* ============================================================
  * デバイスインスタンスマクロ
  * ============================================================ */
-#define IQS915X_INIT(n)                                                               \
-  static const uint8_t iqs915x_init_data_##n[] =                                      \
-      DT_INST_PROP_OR(n, azoteq_init_data, {0});                                      \
-  static struct iqs915x_data iqs915x_data_##n;                                        \
-  static const struct iqs915x_config iqs915x_config_##n = {                           \
-      .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
-      .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                \
-      .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                    \
-      .init_data = iqs915x_init_data_##n,                                             \
-      .init_data_len =                                                                \
-          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),                     \
-                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),                  \
-      .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                              \
-      .press_and_hold = DT_INST_PROP(n, press_and_hold),                              \
-      .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                              \
-      .scroll = DT_INST_PROP(n, scroll),                                              \
-      .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                              \
-      .scroll_inertia = {                                                             \
-          .enabled = DT_INST_PROP(n, scroll_inertia),                                 \
-          .interval_ms = DT_INST_PROP_OR(n, scroll_inertia_interval_ms, 15),          \
-          .decay_x1000 = DT_INST_PROP_OR(n, scroll_inertia_decay, 850),               \
-          .recent_window_ms =                                                         \
-              DT_INST_PROP_OR(n, scroll_inertia_recent_window_ms, 60),                \
-          .stale_gap_ms =                                                             \
-              DT_INST_PROP_OR(n, scroll_inertia_stale_gap_ms, 35),                    \
-          .min_samples =                                                              \
-              DT_INST_PROP_OR(n, scroll_inertia_min_samples, 1),                      \
-          .min_avg_speed =                                                            \
-              DT_INST_PROP_OR(n, scroll_inertia_min_avg_speed, 4),                    \
-      },                                                                              \
-      .pinch_inertia = {                                                              \
-          .enabled = DT_INST_PROP(n, pinch_inertia),                                  \
-          .interval_ms = DT_INST_PROP_OR(n, pinch_inertia_interval_ms, 10),           \
-          .decay_x1000 = DT_INST_PROP_OR(n, pinch_inertia_decay, 980),                \
-          .recent_window_ms = DT_INST_PROP_OR(n, pinch_inertia_recent_window_ms, 60), \
-          .stale_gap_ms = DT_INST_PROP_OR(n, pinch_inertia_stale_gap_ms, 35),         \
-          .min_samples = DT_INST_PROP_OR(n, pinch_inertia_min_samples, 1),            \
-          .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),        \
-      },                                                                              \
-      .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),        \
-      .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                      \
-      .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                        \
-      .swipe_step = DT_INST_PROP_OR(n, swipe_step, 32),                               \
-      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                    \
-      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                        \
-      .report_absolute = DT_INST_PROP(n, report_absolute),                            \
-      .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),            \
-      .switch_xy = DT_INST_PROP(n, switch_xy),                                        \
-      .flip_x = DT_INST_PROP(n, flip_x),                                              \
-      .flip_y = DT_INST_PROP(n, flip_y),                                              \
-      .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                    \
-  };                                                                                  \
-  DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,                     \
-                        &iqs915x_config_##n, POST_KERNEL,                             \
+#define IQS915X_INIT(n)                                                                                                     \
+  static const uint8_t iqs915x_init_data_##n[] =                                                                            \
+      DT_INST_PROP_OR(n, azoteq_init_data, {0});                                                                            \
+  static struct iqs915x_data iqs915x_data_##n;                                                                              \
+  static const struct iqs915x_config iqs915x_config_##n = {                                                                 \
+      .i2c = I2C_DT_SPEC_INST_GET(n),                                                                                       \
+      .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                                                      \
+      .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                                                          \
+      .init_data = iqs915x_init_data_##n,                                                                                   \
+      .init_data_len =                                                                                                      \
+          COND_CODE_1(DT_INST_NODE_HAS_PROP(n, azoteq_init_data),                                                           \
+                      (DT_INST_PROP_LEN(n, azoteq_init_data)), (0)),                                                        \
+      .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                    \
+      .press_and_hold = DT_INST_PROP(n, press_and_hold),                                                                    \
+      .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                    \
+      .scroll = DT_INST_PROP(n, scroll),                                                                                    \
+      .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                                                                    \
+      .scroll_inertia = {                                                                                                   \
+          .enabled = DT_INST_PROP(n, scroll_inertia),                                                                       \
+          .interval_ms = DT_INST_PROP_OR(n, scroll_inertia_interval_ms, 15),                                                \
+          .decay_x1000 = DT_INST_PROP_OR(n, scroll_inertia_decay, 850),                                                     \
+          .recent_window_ms =                                                                                               \
+              DT_INST_PROP_OR(n, scroll_inertia_recent_window_ms, 60),                                                      \
+          .stale_gap_ms =                                                                                                   \
+              DT_INST_PROP_OR(n, scroll_inertia_stale_gap_ms, 35),                                                          \
+          .min_samples =                                                                                                    \
+              DT_INST_PROP_OR(n, scroll_inertia_min_samples, 1),                                                            \
+          .min_avg_speed =                                                                                                  \
+              DT_INST_PROP_OR(n, scroll_inertia_min_avg_speed, 4),                                                          \
+      },                                                                                                                    \
+      .pinch_inertia = {                                                                                                    \
+          .enabled = DT_INST_PROP(n, pinch_inertia),                                                                        \
+          .interval_ms = DT_INST_PROP_OR(n, pinch_inertia_interval_ms, 10),                                                 \
+          .decay_x1000 = DT_INST_PROP_OR(n, pinch_inertia_decay, 980),                                                      \
+          .recent_window_ms = DT_INST_PROP_OR(n, pinch_inertia_recent_window_ms, 60),                                       \
+          .stale_gap_ms = DT_INST_PROP_OR(n, pinch_inertia_stale_gap_ms, 35),                                               \
+          .min_samples = DT_INST_PROP_OR(n, pinch_inertia_min_samples, 1),                                                  \
+          .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),                                              \
+      },                                                                                                                    \
+      .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),                                              \
+      .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                                                            \
+      .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                                                              \
+      .swipe_step = DT_INST_PROP_OR(n, swipe_step, 32),                                                                     \
+      .three_finger_swipe_up_key = DT_INST_PROP_OR(n, three_finger_swipe_up_key, IQS915X_DEFAULT_3F_SWIPE_UP_KEY),          \
+      .three_finger_swipe_down_key = DT_INST_PROP_OR(n, three_finger_swipe_down_key, IQS915X_DEFAULT_3F_SWIPE_DOWN_KEY),    \
+      .three_finger_swipe_left_key = DT_INST_PROP_OR(n, three_finger_swipe_left_key, IQS915X_DEFAULT_3F_SWIPE_LEFT_KEY),    \
+      .three_finger_swipe_right_key = DT_INST_PROP_OR(n, three_finger_swipe_right_key, IQS915X_DEFAULT_3F_SWIPE_RIGHT_KEY), \
+      .four_finger_swipe_up_key = DT_INST_PROP_OR(n, four_finger_swipe_up_key, IQS915X_DEFAULT_4F_SWIPE_UP_KEY),            \
+      .four_finger_swipe_down_key = DT_INST_PROP_OR(n, four_finger_swipe_down_key, IQS915X_DEFAULT_4F_SWIPE_DOWN_KEY),      \
+      .four_finger_swipe_left_key = DT_INST_PROP_OR(n, four_finger_swipe_left_key, IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY),      \
+      .four_finger_swipe_right_key = DT_INST_PROP_OR(n, four_finger_swipe_right_key, IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY),   \
+      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                          \
+      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                              \
+      .report_absolute = DT_INST_PROP(n, report_absolute),                                                                  \
+      .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),                                                  \
+      .switch_xy = DT_INST_PROP(n, switch_xy),                                                                              \
+      .flip_x = DT_INST_PROP(n, flip_x),                                                                                    \
+      .flip_y = DT_INST_PROP(n, flip_y),                                                                                    \
+      .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                                                          \
+  };                                                                                                                        \
+  DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,                                                           \
+                        &iqs915x_config_##n, POST_KERNEL,                                                                   \
                         CONFIG_INPUT_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)

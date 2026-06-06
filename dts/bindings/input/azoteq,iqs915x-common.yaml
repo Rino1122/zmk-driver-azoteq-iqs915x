@@ -167,6 +167,46 @@ properties:
       Minimum centroid delta (in raw coordinate units) required to trigger
       one swipe key event. Smaller values increase sensitivity.
 
+  three-finger-swipe-up-key:
+    type: int
+    description: |
+      Key code emitted for 3-finger swipe up. If unset, defaults to F13.
+
+  three-finger-swipe-down-key:
+    type: int
+    description: |
+      Key code emitted for 3-finger swipe down. If unset, defaults to F14.
+
+  three-finger-swipe-left-key:
+    type: int
+    description: |
+      Key code emitted for 3-finger swipe left. If unset, defaults to F15.
+
+  three-finger-swipe-right-key:
+    type: int
+    description: |
+      Key code emitted for 3-finger swipe right. If unset, defaults to F16.
+
+  four-finger-swipe-up-key:
+    type: int
+    description: |
+      Key code emitted for 4-finger swipe up. If unset, defaults to F17.
+
+  four-finger-swipe-down-key:
+    type: int
+    description: |
+      Key code emitted for 4-finger swipe down. If unset, defaults to F18.
+
+  four-finger-swipe-left-key:
+    type: int
+    description: |
+      Key code emitted for 4-finger swipe left. If unset, defaults to F19.
+
+  four-finger-swipe-right-key:
+    type: int
+    description: |
+      Key code emitted for 4-finger swipe right. If unset, defaults to F20.
+
   tap-time:
     type: int
     description: |

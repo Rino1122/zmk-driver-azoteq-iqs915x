@@ -413,6 +413,14 @@ struct iqs915x_config
     bool three_finger_swipe;
     bool four_finger_swipe;
     uint16_t swipe_step;
+    uint16_t three_finger_swipe_up_key;
+    uint16_t three_finger_swipe_down_key;
+    uint16_t three_finger_swipe_left_key;
+    uint16_t three_finger_swipe_right_key;
+    uint16_t four_finger_swipe_up_key;
+    uint16_t four_finger_swipe_down_key;
+    uint16_t four_finger_swipe_left_key;
+    uint16_t four_finger_swipe_right_key;
 
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト

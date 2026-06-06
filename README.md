@@ -67,6 +67,16 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         four-finger-swipe;
         swipe-step = <32>;
 
+        /* Optional: override emitted keycodes (defaults: F13..F20) */
+        three-finger-swipe-up-key = <INPUT_KEY_F13>;
+        three-finger-swipe-down-key = <INPUT_KEY_F14>;
+        three-finger-swipe-left-key = <INPUT_KEY_F15>;
+        three-finger-swipe-right-key = <INPUT_KEY_F16>;
+        four-finger-swipe-up-key = <INPUT_KEY_F17>;
+        four-finger-swipe-down-key = <INPUT_KEY_F18>;
+        four-finger-swipe-left-key = <INPUT_KEY_F19>;
+        four-finger-swipe-right-key = <INPUT_KEY_F20>;
+
         switch-xy;
 
         /* Init data for IQS9150 (no NVM) - see section below */
@@ -88,6 +98,9 @@ the centroid of active fingers and emits one-shot virtual key tap events based
 on the dominant swipe direction. One gesture emits only one key event until
 fingers are released. `swipe-step` controls the trigger threshold.
 
+You can override each emitted key code using DTS properties
+(`three-finger-swipe-up-key`, etc.). If omitted, defaults are F13..F20.
+
 Virtual key mapping:
 
 - 3-finger up/down/left/right -> F13/F14/F15/F16
@@ -95,6 +108,11 @@ Virtual key mapping:
 
 See [docs/gesture_virtual_keys_ja.md](docs/gesture_virtual_keys_ja.md) for a
 firmware-side setup guide.
+
+Important: this driver emits key events, but ZMK Studio only shows assignable
+controls that exist as positions in your keyboard keymap/layout. To expose
+gesture controls in Studio, add 8 gesture slots on the firmware side and map
+them to the key codes emitted by this driver.
 
 The scroll inertia settings replace the older kinetic-scroll settings.
 If you previously used a friction value such as `85`, the direct replacement
