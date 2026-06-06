@@ -43,6 +43,8 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
 #define IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
 
+static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
+
 /* ============================================================
  * I2C通信関数
  *
