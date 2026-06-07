@@ -128,6 +128,9 @@ Legacy properties (`scroll-inertia-decay`, `scroll-inertia-interval-ms`,
 accepted as fallback for compatibility, but new configurations should use
 `trigger-ms` and `scroll-*` properties shown above.
 
+See [docs/scroll_parameters_ja.md](docs/scroll_parameters_ja.md) for a
+practical Japanese guide to each scroll parameter and tuning workflow.
+
 ## Initialization data (IQS9150/IQS9151)
 
 The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot.
