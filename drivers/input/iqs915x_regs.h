@@ -285,22 +285,16 @@
 // 初期化ステップ: iqs915x_setup中に1ステップずつ進行
 enum iqs915x_init_step
 {
-    INIT_CHECK_SHOW_RESET,       // SHOW_RESETフラグ確認
-    INIT_SOFTWARE_RESET,         // ソフトウェアリセット発行
-    INIT_WAIT_SOFTWARE_RESET,    // ソフトウェアリセット完了待機
-    INIT_ACK_RESET,              // リセットACK
-    INIT_WRITE_INIT_DATA,        // init-dataブロック書き込み（複数RDYサイクル）
-    INIT_SINGLE_FINGER_GESTURES, // 1本指ジェスチャー有効化
-    INIT_HOLD_TIME,              // プレス＆ホールド判定時間
-    INIT_TWO_FINGER_GESTURES,    // 2本指ジェスチャー有効化
-    INIT_TRACKPAD_SETTINGS,      // 軸設定（FlipX/Y, SwitchXY）
-    INIT_TAP_TIME,               // タップ判定時間（オプション）
-    INIT_ACTIVE_REPORT_RATE,     // レポートレート（Activeモードのみ）
-    INIT_VERIFY_EVENT_MODE,      // Event Mode有効確認（未設定なら強制設定）
-    INIT_VERIFY_RESET,           // リセット状態確認（ダミー読み取り）
-    INIT_FINAL_ACK_RESET,        // 最終リセットACK（Show Resetフラグクリア）
-    INIT_WAIT_REATI,             // Re-ATI完了待機（SHOW_RESETクリアを確認）
-    INIT_COMPLETE,               // 初期化完了
+    INIT_CHECK_SHOW_RESET,    // SHOW_RESETフラグ確認
+    INIT_SOFTWARE_RESET,      // ソフトウェアリセット発行
+    INIT_WAIT_SOFTWARE_RESET, // ソフトウェアリセット完了待機
+    INIT_ACK_RESET,           // リセットACK
+    INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
+    INIT_VERIFY_EVENT_MODE,   // Event Mode有効確認（未設定なら強制設定）
+    INIT_VERIFY_RESET,        // リセット状態確認（ダミー読み取り）
+    INIT_FINAL_ACK_RESET,     // 最終リセットACK（Show Resetフラグクリア）
+    INIT_WAIT_REATI,          // Re-ATI完了待機（SHOW_RESETクリアを確認）
+    INIT_COMPLETE,            // 初期化完了
 };
 
 // 通常動作時のワークハンドラステート

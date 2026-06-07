@@ -899,6 +899,9 @@ static void iqs915x_init_step_handler(const struct device *dev)
       {
         uint16_t current_addr = addr + i;
         uint8_t original = buffer[i];
+        bool dts_patch = false;
+
+        // === 強制パッチ: ドライバ正常動作に必須のビット修正 ===
         if (current_addr == IQS915X_SYSTEM_CONTROL)
         {
           // ACK_RESET(bit7), REATI_ALP(bit6), REATI_TP(bit5) は
@@ -917,12 +920,91 @@ static void iqs915x_init_step_handler(const struct device *dev)
           // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
           buffer[i] |= 0x01;
         }
-        // init-dataのバイト値がドライバにより上書きされた場合はWRNを出力する
+        // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
+        else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
+                 config->report_rate_ms > 0)
+        {
+          buffer[i] = config->report_rate_ms & 0xFF;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE + 1 &&
+                 config->report_rate_ms > 0)
+        {
+          buffer[i] = (config->report_rate_ms >> 8) & 0xFF;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
+        {
+          uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
+          uint8_t set = 0;
+          if (config->flip_x)
+            set |= IQS915X_FLIP_X;
+          if (config->flip_y)
+            set |= IQS915X_FLIP_Y;
+          if (config->switch_xy)
+            set |= IQS915X_SWITCH_XY_AXIS;
+          buffer[i] = (buffer[i] & ~clr) | set;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
+        {
+          // 影響ビットはすべて下位バイト: bit0=SINGLE_TAP, bit3=PRESS_AND_HOLD
+          uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
+          uint8_t set = 0;
+          if (config->one_finger_tap)
+            set |= (uint8_t)IQS915X_SINGLE_TAP;
+          // PRESS_AND_HOLDはSWエミュレートのため常にHWクリア
+          buffer[i] = (buffer[i] & ~clr) | set;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
+        {
+          // 影響ビットはすべて下位バイト: bit0=TWO_FINGER_TAP, bit6-7=SCROLL_V/H
+          uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
+          uint8_t set = 0;
+          if (config->two_finger_tap)
+            set |= (uint8_t)IQS915X_TWO_FINGER_TAP;
+          if (config->scroll)
+            set |= (uint8_t)IQS915X_SCROLL;
+          buffer[i] = (buffer[i] & ~clr) | set;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_TAP_TIME && config->tap_time > 0)
+        {
+          buffer[i] = config->tap_time & 0xFF;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_TAP_TIME + 1 && config->tap_time > 0)
+        {
+          buffer[i] = (config->tap_time >> 8) & 0xFF;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_HOLD_TIME)
+        {
+          buffer[i] = config->press_and_hold_time & 0xFF;
+          dts_patch = true;
+        }
+        else if (current_addr == IQS915X_HOLD_TIME + 1)
+        {
+          buffer[i] = (config->press_and_hold_time >> 8) & 0xFF;
+          dts_patch = true;
+        }
+
+        // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
         if (buffer[i] != original)
         {
-          LOG_WRN("Init: init-data overridden at reg 0x%04x: "
-                  "init-data=0x%02x -> forced=0x%02x",
-                  current_addr, original, buffer[i]);
+          if (dts_patch)
+          {
+            LOG_WRN("Init: init-data pre-patched by DTS at reg 0x%04x: "
+                    "0x%02x -> 0x%02x",
+                    current_addr, original, buffer[i]);
+          }
+          else
+          {
+            LOG_WRN("Init: init-data overridden at reg 0x%04x: "
+                    "init-data=0x%02x -> forced=0x%02x",
+                    current_addr, original, buffer[i]);
+          }
         }
       }
 
@@ -962,156 +1044,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
     }
     break;
   }
-
-  case INIT_SINGLE_FINGER_GESTURES:
-  {
-    // ソフトウェアによるTap-and-Drag実装のため、ハードウェアのPRESS_AND_HOLDは常にクリアする
-    uint16_t clear_mask = IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD;
-    uint16_t set_mask = 0;
-    if (config->one_finger_tap)
-      set_mask |= IQS915X_SINGLE_TAP;
-    // config->press_and_hold が true の場合でも、ハードウェア機能は有効化しない
-    // （ドライバ側ソフトウェアでTap-and-Dragとしてエミュレートするため）
-
-    ret = iqs915x_modify_reg16(dev, IQS915X_SINGLE_FINGER_GESTURES_ENABLE,
-                               clear_mask, set_mask);
-    if (ret < 0)
-    {
-      LOG_ERR("Failed to configure single finger gestures: %d", ret);
-      return;
-    }
-    // ハードウェアのPRESS_AND_HOLDフラグの状態に関わらず、DTS設定の値をログ出力する
-    if (ret > 0 && config->init_data_len > 0)
-    {
-      LOG_WRN("Init: SF_GESTURES_ENABLE (0x%04x) overridden from init-data "
-              "value by DTS (one_finger_tap=%d, press_and_hold=%d [SW Emulated])",
-              IQS915X_SINGLE_FINGER_GESTURES_ENABLE, config->one_finger_tap,
-              config->press_and_hold);
-    }
-    LOG_DBG("Init: Single finger gestures configured (HW Hold disabled for SW Tap-and-Drag)");
-    data->init_step = INIT_HOLD_TIME;
-    break;
-  }
-
-  case INIT_HOLD_TIME:
-    ret = iqs915x_update_reg16(dev, IQS915X_HOLD_TIME,
-                               config->press_and_hold_time);
-    if (ret < 0)
-    {
-      LOG_ERR("Failed to configure hold time: %d", ret);
-      return;
-    }
-    if (ret > 0 && config->init_data_len > 0)
-    {
-      LOG_WRN("Init: HOLD_TIME (0x%04x) overridden from init-data value "
-              "by DTS (press_and_hold_time=%d ms)",
-              IQS915X_HOLD_TIME, config->press_and_hold_time);
-    }
-    LOG_DBG("Init: Hold time configured");
-    data->init_step = INIT_TWO_FINGER_GESTURES;
-    break;
-
-  case INIT_TWO_FINGER_GESTURES:
-  {
-    uint16_t clear_mask = IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL;
-    uint16_t set_mask = 0;
-    if (config->two_finger_tap)
-      set_mask |= IQS915X_TWO_FINGER_TAP;
-    if (config->scroll)
-      set_mask |= IQS915X_SCROLL;
-
-    ret = iqs915x_modify_reg16(dev, IQS915X_TWO_FINGER_GESTURES_ENABLE,
-                               clear_mask, set_mask);
-    if (ret < 0)
-    {
-      LOG_ERR("Failed to configure two finger gestures: %d", ret);
-      return;
-    }
-    if (ret > 0 && config->init_data_len > 0)
-    {
-      LOG_WRN("Init: TF_GESTURES_ENABLE (0x%04x) overridden from init-data "
-              "value by DTS (two_finger_tap=%d, scroll=%d)",
-              IQS915X_TWO_FINGER_GESTURES_ENABLE, config->two_finger_tap,
-              config->scroll);
-    }
-    LOG_DBG("Init: Two finger gestures configured");
-    data->init_step = INIT_TRACKPAD_SETTINGS;
-    break;
-  }
-
-  case INIT_TRACKPAD_SETTINGS:
-  {
-    uint8_t clear_mask =
-        IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
-    uint8_t set_mask = 0;
-    if (config->flip_x)
-      set_mask |= IQS915X_FLIP_X;
-    if (config->flip_y)
-      set_mask |= IQS915X_FLIP_Y;
-    if (config->switch_xy)
-      set_mask |= IQS915X_SWITCH_XY_AXIS;
-
-    ret = iqs915x_modify_reg8(dev, IQS915X_TRACKPAD_SETTINGS, clear_mask,
-                              set_mask);
-    if (ret < 0)
-    {
-      LOG_ERR("Failed to configure trackpad settings: %d", ret);
-      return;
-    }
-    if (ret > 0 && config->init_data_len > 0)
-    {
-      LOG_WRN("Init: TRACKPAD_SETTINGS (0x%04x) overridden from init-data "
-              "value by DTS (flip_x=%d, flip_y=%d, switch_xy=%d)",
-              IQS915X_TRACKPAD_SETTINGS, config->flip_x, config->flip_y,
-              config->switch_xy);
-    }
-    LOG_DBG("Init: Trackpad settings configured");
-    data->init_step = INIT_TAP_TIME;
-    break;
-  }
-
-  case INIT_TAP_TIME:
-    if (config->tap_time > 0)
-    {
-      ret = iqs915x_update_reg16(dev, IQS915X_TAP_TIME, config->tap_time);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed to configure tap time: %d", ret);
-        return;
-      }
-      if (ret > 0 && config->init_data_len > 0)
-      {
-        LOG_WRN("Init: TAP_TIME (0x%04x) overridden from init-data value "
-                "by DTS (tap_time=%d ms)",
-                IQS915X_TAP_TIME, config->tap_time);
-      }
-      LOG_DBG("Init: Tap time set to %d ms", config->tap_time);
-    }
-    data->init_step = INIT_ACTIVE_REPORT_RATE;
-    break;
-
-  case INIT_ACTIVE_REPORT_RATE:
-    // report-rate-msはActive modeのレポートレートのみに適用する。
-    // Idle-Touch/Idle/LP1/LP2モードのレポートレートはinit-dataの設定に委ねる。
-    if (config->report_rate_ms > 0)
-    {
-      ret = iqs915x_update_reg16(dev, IQS915X_ACTIVE_MODE_REPORT_RATE,
-                                 config->report_rate_ms);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed to configure active report rate: %d", ret);
-        return;
-      }
-      if (ret > 0)
-      {
-        LOG_WRN("Init: ACTIVE_REPORT_RATE (0x%04x) overridden from init-data "
-                "value by DTS (report_rate_ms=%d ms)",
-                IQS915X_ACTIVE_MODE_REPORT_RATE, config->report_rate_ms);
-      }
-      LOG_DBG("Init: Active report rate set to %d ms", config->report_rate_ms);
-    }
-    data->init_step = INIT_VERIFY_EVENT_MODE;
-    break;
 
   case INIT_VERIFY_EVENT_MODE:
   {
@@ -1202,8 +1134,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_INF("Init: Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
-      // Re-ATI完了後はDTS設定の書き込みへ進む
-      data->init_step = INIT_SINGLE_FINGER_GESTURES;
+      // Re-ATI完了後はDTS設定は既にinit-dataに事前適用済みのため、設定確認へ進む
+      data->init_step = INIT_VERIFY_EVENT_MODE;
       break;
     }
 
@@ -1213,7 +1145,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_WRN("Init: Re-ATI timeout after %d cycles (flags=0x%04x), proceeding "
               "anyway",
               data->wait_count, stream.info_flags);
-      data->init_step = INIT_SINGLE_FINGER_GESTURES;
+      data->init_step = INIT_VERIFY_EVENT_MODE;
       break;
     }
 
