@@ -10,32 +10,32 @@
 
 /* ALP ATI Compensation */
 /* Memory Map Position 0x115C - 0x1175 */
-#define ALP_COMPENSATION_RX0_0                   0xAB
-#define ALP_COMPENSATION_RX0_1                   0x0E
-#define ALP_COMPENSATION_RX1_0                   0xB2
-#define ALP_COMPENSATION_RX1_1                   0x0E
-#define ALP_COMPENSATION_RX2_0                   0xF0
-#define ALP_COMPENSATION_RX2_1                   0x0E
-#define ALP_COMPENSATION_RX3_0                   0xA4
-#define ALP_COMPENSATION_RX3_1                   0x0E
-#define ALP_COMPENSATION_RX4_0                   0xB8
-#define ALP_COMPENSATION_RX4_1                   0x0E
-#define ALP_COMPENSATION_RX5_0                   0xB2
-#define ALP_COMPENSATION_RX5_1                   0x0E
-#define ALP_COMPENSATION_RX6_0                   0xC8
-#define ALP_COMPENSATION_RX6_1                   0x12
-#define ALP_COMPENSATION_RX7_0                   0xB8
-#define ALP_COMPENSATION_RX7_1                   0x0E
-#define ALP_COMPENSATION_RX8_0                   0x0E
-#define ALP_COMPENSATION_RX8_1                   0x0F
-#define ALP_COMPENSATION_RX9_0                   0xC6
-#define ALP_COMPENSATION_RX9_1                   0x16
-#define ALP_COMPENSATION_RX10_0                  0x76
-#define ALP_COMPENSATION_RX10_1                  0x0E
-#define ALP_COMPENSATION_RX11_0                  0x00
-#define ALP_COMPENSATION_RX11_1                  0x0F
-#define ALP_COMPENSATION_RX12_0                  0xEE
-#define ALP_COMPENSATION_RX12_1                  0x26
+#define ALP_COMPENSATION_RX0_0                   0xE3
+#define ALP_COMPENSATION_RX0_1                   0x2A
+#define ALP_COMPENSATION_RX1_0                   0xD8
+#define ALP_COMPENSATION_RX1_1                   0x26
+#define ALP_COMPENSATION_RX2_0                   0x0C
+#define ALP_COMPENSATION_RX2_1                   0x2B
+#define ALP_COMPENSATION_RX3_0                   0xD0
+#define ALP_COMPENSATION_RX3_1                   0x26
+#define ALP_COMPENSATION_RX4_0                   0xD8
+#define ALP_COMPENSATION_RX4_1                   0x26
+#define ALP_COMPENSATION_RX5_0                   0x0E
+#define ALP_COMPENSATION_RX5_1                   0x2B
+#define ALP_COMPENSATION_RX6_0                   0xF5
+#define ALP_COMPENSATION_RX6_1                   0x2A
+#define ALP_COMPENSATION_RX7_0                   0x13
+#define ALP_COMPENSATION_RX7_1                   0x2B
+#define ALP_COMPENSATION_RX8_0                   0xF5
+#define ALP_COMPENSATION_RX8_1                   0x2A
+#define ALP_COMPENSATION_RX9_0                   0xFF
+#define ALP_COMPENSATION_RX9_1                   0x03
+#define ALP_COMPENSATION_RX10_0                  0xFF
+#define ALP_COMPENSATION_RX10_1                  0x03
+#define ALP_COMPENSATION_RX11_0                  0xFF
+#define ALP_COMPENSATION_RX11_1                  0x03
+#define ALP_COMPENSATION_RX12_0                  0xFF
+#define ALP_COMPENSATION_RX12_1                  0x03
 
 /* I2C Slave Address */
 /* Memory Map Position 0x1176 - 0x1177 */
@@ -51,47 +51,47 @@
 /* Memory Map Position 0x117A - 0x1195 */
 #define TP_ATI_MULTDIV_L                         0x21
 #define TP_ATI_MULTDIV_H                         0x4B
-#define ALP_ATI_COARSE_RX0_L                     0x84
-#define ALP_ATI_COARSE_RX0_H                     0x5E
-#define ALP_ATI_COARSE_RX1_L                     0x84
-#define ALP_ATI_COARSE_RX1_H                     0x60
-#define ALP_ATI_COARSE_RX2_L                     0x84
-#define ALP_ATI_COARSE_RX2_H                     0x5C
-#define ALP_ATI_COARSE_RX3_L                     0x84
-#define ALP_ATI_COARSE_RX3_H                     0x5E
-#define ALP_ATI_COARSE_RX4_L                     0x84
-#define ALP_ATI_COARSE_RX4_H                     0x60
-#define ALP_ATI_COARSE_RX5_L                     0x84
-#define ALP_ATI_COARSE_RX5_H                     0x5A
-#define ALP_ATI_COARSE_RX6_L                     0x84
-#define ALP_ATI_COARSE_RX6_H                     0x5A
-#define ALP_ATI_COARSE_RX7_L                     0x84
-#define ALP_ATI_COARSE_RX7_H                     0x5E
-#define ALP_ATI_COARSE_RX8_L                     0x84
-#define ALP_ATI_COARSE_RX8_H                     0x5C
-#define ALP_ATI_COARSE_RX9_L                     0x87
-#define ALP_ATI_COARSE_RX9_H                     0x5A
-#define ALP_ATI_COARSE_RX10_L                    0x84
-#define ALP_ATI_COARSE_RX10_H                    0x58
-#define ALP_ATI_COARSE_RX11_L                    0x04
-#define ALP_ATI_COARSE_RX11_H                    0x67
-#define ALP_ATI_COARSE_RX12_L                    0x02
-#define ALP_ATI_COARSE_RX12_H                    0x65
+#define ALP_ATI_COARSE_RX0_L                     0x8E
+#define ALP_ATI_COARSE_RX0_H                     0x56
+#define ALP_ATI_COARSE_RX1_L                     0x8E
+#define ALP_ATI_COARSE_RX1_H                     0x56
+#define ALP_ATI_COARSE_RX2_L                     0x87
+#define ALP_ATI_COARSE_RX2_H                     0x68
+#define ALP_ATI_COARSE_RX3_L                     0x87
+#define ALP_ATI_COARSE_RX3_H                     0x66
+#define ALP_ATI_COARSE_RX4_L                     0x8E
+#define ALP_ATI_COARSE_RX4_H                     0x56
+#define ALP_ATI_COARSE_RX5_L                     0x87
+#define ALP_ATI_COARSE_RX5_H                     0x64
+#define ALP_ATI_COARSE_RX6_L                     0x87
+#define ALP_ATI_COARSE_RX6_H                     0x64
+#define ALP_ATI_COARSE_RX7_L                     0x8E
+#define ALP_ATI_COARSE_RX7_H                     0x56
+#define ALP_ATI_COARSE_RX8_L                     0x87
+#define ALP_ATI_COARSE_RX8_H                     0x68
+#define ALP_ATI_COARSE_RX9_L                     0x3B
+#define ALP_ATI_COARSE_RX9_H                     0x7E
+#define ALP_ATI_COARSE_RX10_L                    0x3B
+#define ALP_ATI_COARSE_RX10_H                    0x7E
+#define ALP_ATI_COARSE_RX11_L                    0x3B
+#define ALP_ATI_COARSE_RX11_H                    0x7E
+#define ALP_ATI_COARSE_RX12_L                    0x3B
+#define ALP_ATI_COARSE_RX12_H                    0x7E
 
 /* ATI Settings */
 /* Memory Map Position 0x1196 - 0x11A1 */
 #define TP_ATI_TARGET_0                          0x5E
 #define TP_ATI_TARGET_1                          0x01
-#define ALP_ATI_TARGET_0                         0x8E
+#define ALP_ATI_TARGET_0                         0x90
 #define ALP_ATI_TARGET_1                         0x01
-#define ALP_BASE_TARGET_0                        0x32
+#define ALP_BASE_TARGET_0                        0x64
 #define ALP_BASE_TARGET_1                        0x00
 #define TP_NEG_DELTA_REATI_0                     0x64
 #define TP_NEG_DELTA_REATI_1                     0x00
 #define TP_POS_DELTA_REATI_0                     0x98
 #define TP_POS_DELTA_REATI_1                     0x08
 #define TP_REF_DRIFT_LIMIT                       0xC8
-#define ALP_LTA_DRIFT_LIMIT                      0x14
+#define ALP_LTA_DRIFT_LIMIT                      0xC8
 
 /* Sampling Periods and Timing */
 /* Memory Map Position 0x11A2 - 0x11BB */
@@ -103,8 +103,8 @@
 #define IDLE_MODE_SAMPLING_PERIOD_1              0x00
 #define LP1_MODE_SAMPLING_PERIOD_0               0x32
 #define LP1_MODE_SAMPLING_PERIOD_1               0x00
-#define LP2_MODE_SAMPLING_PERIOD_0               0xE8
-#define LP2_MODE_SAMPLING_PERIOD_1               0x03
+#define LP2_MODE_SAMPLING_PERIOD_0               0xFB
+#define LP2_MODE_SAMPLING_PERIOD_1               0x01
 #define STATIONARY_TOUCH_TIMEOUT_0               0x0A
 #define STATIONARY_TOUCH_TIMEOUT_1               0x00
 #define IDLE_TOUCH_MODE_TIMEOUT_0                0x3C
@@ -124,25 +124,25 @@
 
 /* System Settings */
 /* Memory Map Position 0x11BC - 0x11C1 */
-#define SYSTEM_CONTROL_0                         0x00
+#define SYSTEM_CONTROL_0                         0x40
 #define SYSTEM_CONTROL_1                         0x00
-#define CONFIG_SETTINGS_0                        0x84
+#define CONFIG_SETTINGS_0                        0x8E
 #define CONFIG_SETTINGS_1                        0x0F
 #define OTHER_SETTINGS_0                         0xAC
 #define OTHER_SETTINGS_1                         0x00
 
 /* ALP Settings */
 /* Memory Map Position 0x11C2 - 0x11CB */
-#define ALP_SETUP_0                              0x00
-#define ALP_SETUP_1                              0x00
-#define ALP_SETUP_2                              0x00
-#define ALP_SETUP_3                              0xC0
+#define ALP_SETUP_0                              0xFF
+#define ALP_SETUP_1                              0xE1
+#define ALP_SETUP_2                              0x3F
+#define ALP_SETUP_3                              0xD0
 #define ALP_TX_ENABLE_0                          0x00
-#define ALP_TX_ENABLE_1                          0x00
-#define ALP_TX_ENABLE_2                          0x00
-#define ALP_TX_ENABLE_3                          0x00
-#define ALP_TX_ENABLE_4                          0x00
-#define ALP_TX_ENABLE_5                          0x00
+#define ALP_TX_ENABLE_1                          0x0E
+#define ALP_TX_ENABLE_2                          0xC0
+#define ALP_TX_ENABLE_3                          0xC0
+#define ALP_TX_ENABLE_4                          0x80
+#define ALP_TX_ENABLE_5                          0x0F
 
 /* Thresholds and Debounce Settings */
 /* Memory Map Position 0x11CC - 0x11D3 */
@@ -150,8 +150,8 @@
 #define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x23
 #define ALP_THRESHOLD                            0xFF
 #define ALP_AUTOPROX_THRESHOLD                   0x7F
-#define ALP_SET_DEBOUNCE                         0x02
-#define ALP_CLEAR_DEBOUNCE                       0x02
+#define ALP_SET_DEBOUNCE                         0x64
+#define ALP_CLEAR_DEBOUNCE                       0x32
 #define SNAP_SET_THRESHOLD                       0x32
 #define SNAP_CLEAR_THRESHOLD                     0x32
 
@@ -159,8 +159,8 @@
 /* Memory Map Position 0x11D4 - 0x11D7 */
 #define ALP_COUNT_BETA_LP1                       0x46
 #define ALP_LTA_BETA_LP1                         0x04
-#define ALP_COUNT_BETA_LP2                       0xFF
-#define ALP_LTA_BETA_LP2                         0xFF
+#define ALP_COUNT_BETA_LP2                       0x46
+#define ALP_LTA_BETA_LP2                         0x04
 
 /* Hardware Settings */
 /* Memory Map Position 0x11D8 - 0x11E1 */
