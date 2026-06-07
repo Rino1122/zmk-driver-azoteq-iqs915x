@@ -687,6 +687,32 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
   }
 }
 
+static void iqs915x_hold_release_work_handler(struct k_work *work)
+{
+  struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+  struct iqs915x_data *data =
+      CONTAINER_OF(dwork, struct iqs915x_data, hold_release_work);
+
+  data->hold_release_pending = false;
+
+  if (!data->active_hold)
+  {
+    return;
+  }
+
+  if (data->is_touching)
+  {
+    LOG_DBG("hold release timeout ignored: touch resumed");
+    return;
+  }
+
+  data->active_hold = false;
+  data->last_touch_up_time = 0;
+  input_report_key(data->dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+  data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+  LOG_DBG("hold release timeout fired: drag released");
+}
+
 /* ============================================================
  * スクロール慣性処理
  *
@@ -1350,6 +1376,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
       }
+      k_work_cancel_delayable(&data->hold_release_work);
+      data->hold_release_pending = false;
       data->active_hold = false;
       data->is_touching = false;
       data->last_touch_up_time = 0;
@@ -1369,17 +1397,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     // =========================================================
     bool is_touching_now =
         (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
-    bool drag_just_released = false;
-
-    if (config->press_and_hold && data->active_hold && !is_touching_now)
-    {
-      drag_just_released = true;
-      data->active_hold = false;
-      data->last_touch_up_time = 0;
-      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-      data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-    }
-
     // Global TP Touchの現在値と前回値からtrackpad-wideのtouch遷移を合成する
     bool was_touching = data->is_touching;
     bool touch_down = is_touching_now && !was_touching;
@@ -1550,13 +1567,32 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
       if (hold_became_active)
       {
+        if (data->hold_release_pending)
+        {
+          k_work_cancel_delayable(&data->hold_release_work);
+          data->hold_release_pending = false;
+        }
         k_work_cancel_delayable(&data->button_release_work);
         input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
         data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
       }
-      else if (drag_just_released)
+
+      if (config->press_and_hold && data->active_hold)
       {
-        // ドラッグ解除はhas_tp_eventの外で処理済み（ここはスキップ）
+        if (touch_down && data->hold_release_pending)
+        {
+          k_work_cancel_delayable(&data->hold_release_work);
+          data->hold_release_pending = false;
+          LOG_DBG("hold release timeout canceled: touch resumed");
+        }
+        else if (touch_up && !data->hold_release_pending)
+        {
+          k_work_schedule(&data->hold_release_work,
+                          K_MSEC(config->press_and_hold_release_timeout_ms));
+          data->hold_release_pending = true;
+          LOG_DBG("hold release timeout scheduled: %u ms",
+                  config->press_and_hold_release_timeout_ms);
+        }
       }
 
       // hold_released のフレームでもシングルタップ/ダブルタップは処理可能にする（干渉を防ぐため else if にしない）
@@ -1767,10 +1803,13 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
+  data->hold_release_pending = false;
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
+  k_work_init_delayable(&data->hold_release_work,
+                        iqs915x_hold_release_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
 
@@ -1895,6 +1934,7 @@ static int iqs915x_init(const struct device *dev)
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
       .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),                                                                                                                         \
+      .press_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, press_and_hold_release_timeout_ms, 500),                                                                                             \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
       .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \
       .flip_y = DT_INST_PROP(n, flip_y),                                                                                                                                                           \
@@ -1931,6 +1971,8 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
       input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
       data->active_hold = false;
     }
+    k_work_cancel_delayable(&data->hold_release_work);
+    data->hold_release_pending = false;
 
     // 押下中のボタンをすべてリリース
     for (int i = 0; i < 3; i++)
@@ -1970,6 +2012,11 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     // ===== 有効化: Active modeへの復帰開始 =====
     data->enabled = true;
     data->gesture_pointer_suppress_ticks = 0;
+    if (data->hold_release_pending)
+    {
+      k_work_cancel_delayable(&data->hold_release_work);
+      data->hold_release_pending = false;
+    }
 
     // IQS915xのActive mode復帰を予約
     data->active_pending = true;

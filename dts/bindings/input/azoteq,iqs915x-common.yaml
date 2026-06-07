@@ -21,6 +21,11 @@ properties:
     description: "Press and hold detection time in ms (added to tap time)"
     default: 250
 
+  press-and-hold-release-timeout-ms:
+    type: int
+    description: "Delay in ms before releasing drag after finger count becomes zero"
+    default: 500
+
   two-finger-tap:
     type: boolean
     description: "Enable two finger tap (right click)"

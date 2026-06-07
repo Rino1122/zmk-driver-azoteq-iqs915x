@@ -422,6 +422,7 @@ struct iqs915x_config
     bool press_and_hold;
     bool two_finger_tap;
     uint16_t press_and_hold_time;
+    uint16_t press_and_hold_release_timeout_ms;
 
     // スクロール設定
     bool scroll;
@@ -474,6 +475,7 @@ struct iqs915x_data
     K_KERNEL_STACK_MEMBER(thread_stack, 2048);
 
     struct k_work_delayable button_release_work;
+    struct k_work_delayable hold_release_work;
 
     // ステートマシン
     enum iqs915x_init_step init_step;   // 初期化進行状態
@@ -489,6 +491,7 @@ struct iqs915x_data
     uint8_t buttons_pressed;
     // プレス＆ホールドが有効かどうか（ドラッグ状態）
     bool active_hold;
+    bool hold_release_pending;
     // Tap-and-Dragの待機時間窓 (Uptimeのミリ秒、0は非アクティブ)
     int64_t tap_drag_window_exp;
 
