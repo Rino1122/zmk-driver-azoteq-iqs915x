@@ -1279,7 +1279,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    LOG_DBG("RDY: INFO_FLAGS raw=0x%04x", stream.info_flags);
+    // LOG_DBG("RDY: INFO_FLAGS raw=0x%04x", stream.info_flags);
 
     // info_flagsに立っているビットを個別にDBGログ出力する（連続RDY原因調査用）
     if (stream.info_flags != 0 && stream.info_flags != 0xEEEE)

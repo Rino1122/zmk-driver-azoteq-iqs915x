@@ -44,7 +44,7 @@
 
 /* Settings Version Numbers */
 /* Memory Map Position 0x1178 - 0x1179 */
-#define MINOR_VERSION                            0x07
+#define MINOR_VERSION                            0x08
 #define MAJOR_VERSION                            0x00
 
 /* ATI Multipliers / Dividers */
@@ -103,8 +103,8 @@
 #define IDLE_MODE_SAMPLING_PERIOD_1              0x00
 #define LP1_MODE_SAMPLING_PERIOD_0               0x32
 #define LP1_MODE_SAMPLING_PERIOD_1               0x00
-#define LP2_MODE_SAMPLING_PERIOD_0               0x88
-#define LP2_MODE_SAMPLING_PERIOD_1               0x13
+#define LP2_MODE_SAMPLING_PERIOD_0               0xE8
+#define LP2_MODE_SAMPLING_PERIOD_1               0x03
 #define STATIONARY_TOUCH_TIMEOUT_0               0x0A
 #define STATIONARY_TOUCH_TIMEOUT_1               0x00
 #define IDLE_TOUCH_MODE_TIMEOUT_0                0x3C
@@ -128,19 +128,19 @@
 #define SYSTEM_CONTROL_1                         0x00
 #define CONFIG_SETTINGS_0                        0x84
 #define CONFIG_SETTINGS_1                        0x0F
-#define OTHER_SETTINGS_0                         0xA8
+#define OTHER_SETTINGS_0                         0xAC
 #define OTHER_SETTINGS_1                         0x00
 
 /* ALP Settings */
 /* Memory Map Position 0x11C2 - 0x11CB */
-#define ALP_SETUP_0                              0xFF
-#define ALP_SETUP_1                              0xFF
-#define ALP_SETUP_2                              0x03
-#define ALP_SETUP_3                              0x90
+#define ALP_SETUP_0                              0x00
+#define ALP_SETUP_1                              0x00
+#define ALP_SETUP_2                              0x00
+#define ALP_SETUP_3                              0xC0
 #define ALP_TX_ENABLE_0                          0x00
 #define ALP_TX_ENABLE_1                          0x00
-#define ALP_TX_ENABLE_2                          0xFC
-#define ALP_TX_ENABLE_3                          0x3F
+#define ALP_TX_ENABLE_2                          0x00
+#define ALP_TX_ENABLE_3                          0x00
 #define ALP_TX_ENABLE_4                          0x00
 #define ALP_TX_ENABLE_5                          0x00
 
@@ -159,8 +159,8 @@
 /* Memory Map Position 0x11D4 - 0x11D7 */
 #define ALP_COUNT_BETA_LP1                       0x46
 #define ALP_LTA_BETA_LP1                         0x04
-#define ALP_COUNT_BETA_LP2                       0xB4
-#define ALP_LTA_BETA_LP2                         0x64
+#define ALP_COUNT_BETA_LP2                       0xFF
+#define ALP_LTA_BETA_LP2                         0xFF
 
 /* Hardware Settings */
 /* Memory Map Position 0x11D8 - 0x11E1 */
@@ -191,7 +191,7 @@
 #define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x0D
 #define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x28
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
-#define STATIONARY_TOUCH_MOV_THRESHOLD           0x0A
+#define STATIONARY_TOUCH_MOV_THRESHOLD           0x32
 #define FINGER_SPLIT_FACTOR                      0x03
 #define X_TRIM_VALUE                             0x00
 #define Y_TRIM_VALUE                             0x00
