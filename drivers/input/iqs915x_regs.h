@@ -378,9 +378,15 @@ struct iqs915x_finger_tracker
     uint8_t previous_count;
     uint8_t stable_count;
     uint8_t pending_count;
+    uint8_t sequence_max_count;
     uint8_t debounce_count;
     bool tail_suppressed;
     bool awaiting_zero_contact;
+    bool sequence_active;
+    bool sequence_seen_one;
+    bool sequence_seen_two;
+    bool completed_one_tap_path;
+    bool completed_two_tap_path;
 };
 
 struct iqs915x_two_finger_session

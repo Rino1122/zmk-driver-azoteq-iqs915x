@@ -446,6 +446,13 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
   tracker->current_count = raw_count;
   tracker->previous_count = stable_before;
 
+  if (raw_count > 0 && stable_before == 0)
+  {
+    // 新しい接触シーケンスの開始時に、前回のタップ経路判定を破棄する。
+    tracker->completed_one_tap_path = false;
+    tracker->completed_two_tap_path = false;
+  }
+
   if (raw_count == stable_before)
   {
     tracker->pending_count = raw_count;
@@ -465,6 +472,46 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
       tracker->debounce_count >= debounce_frames)
   {
     tracker->stable_count = tracker->pending_count;
+  }
+
+  if (stable_before == 0 && tracker->stable_count > 0)
+  {
+    tracker->sequence_active = true;
+    tracker->sequence_max_count = tracker->stable_count;
+    tracker->sequence_seen_one = tracker->stable_count == 1;
+    tracker->sequence_seen_two = tracker->stable_count == 2;
+    tracker->completed_one_tap_path = false;
+    tracker->completed_two_tap_path = false;
+  }
+  else if (tracker->sequence_active && tracker->stable_count > 0)
+  {
+    if (tracker->stable_count > tracker->sequence_max_count)
+    {
+      tracker->sequence_max_count = tracker->stable_count;
+    }
+
+    if (tracker->stable_count == 1)
+    {
+      tracker->sequence_seen_one = true;
+    }
+    else if (tracker->stable_count == 2)
+    {
+      tracker->sequence_seen_two = true;
+    }
+  }
+
+  if (stable_before > 0 && tracker->stable_count == 0)
+  {
+    tracker->completed_one_tap_path =
+        tracker->sequence_active && tracker->sequence_seen_one &&
+        tracker->sequence_max_count == 1;
+    tracker->completed_two_tap_path =
+        tracker->sequence_active && tracker->sequence_seen_two &&
+        tracker->sequence_max_count == 2;
+    tracker->sequence_active = false;
+    tracker->sequence_max_count = 0;
+    tracker->sequence_seen_one = false;
+    tracker->sequence_seen_two = false;
   }
 
   tracker->tail_suppressed =
@@ -1359,6 +1406,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool allow_pointer_report = !suppress_pointer && single_finger_pointer &&
                                   !data->finger_tracker.awaiting_zero_contact;
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
+      bool scroll_blocked_by_path =
+          scroll && data->finger_tracker.stable_count == 2 &&
+          data->finger_tracker.sequence_max_count >= 3;
+
+      if (scroll_blocked_by_path)
+      {
+        scroll = false;
+        LOG_DBG("scroll suppressed: sequence_max=%u stable=%u",
+                data->finger_tracker.sequence_max_count,
+                data->finger_tracker.stable_count);
+      }
 
       if (gesture_active)
       {
@@ -1402,15 +1460,36 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       uint16_t button_code = 0;
       bool single_tap_pressed = false;
       bool two_finger_tap_pressed = false;
+      bool allow_single_tap = data->finger_tracker.completed_one_tap_path;
+      bool allow_two_finger_tap = data->finger_tracker.completed_two_tap_path;
+
       if (stream.gesture_sf & IQS915X_SINGLE_TAP)
       {
-        single_tap_pressed = true;
-        button_code = INPUT_BTN_0;
+        if (allow_single_tap)
+        {
+          single_tap_pressed = true;
+          button_code = INPUT_BTN_0;
+        }
+        else
+        {
+          LOG_DBG("single tap suppressed: path invalid (stable=%u max=%u)",
+                  data->finger_tracker.stable_count,
+                  data->finger_tracker.sequence_max_count);
+        }
       }
       else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP)
       {
-        two_finger_tap_pressed = true;
-        button_code = INPUT_BTN_1;
+        if (allow_two_finger_tap)
+        {
+          two_finger_tap_pressed = true;
+          button_code = INPUT_BTN_1;
+        }
+        else
+        {
+          LOG_DBG("two-finger tap suppressed: path invalid (stable=%u max=%u)",
+                  data->finger_tracker.stable_count,
+                  data->finger_tracker.sequence_max_count);
+        }
       }
 
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
@@ -1437,7 +1516,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           // Touch Up (指が離れた瞬間)
           // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
-          if ((now_ms - data->last_touch_down_time) < 200)
+          if ((now_ms - data->last_touch_down_time) < 200 &&
+              data->finger_tracker.completed_one_tap_path)
           {
             // 短いタップとして認定し、ここから300msの窓を開始
             data->last_touch_up_time = now_ms;
@@ -1450,7 +1530,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
 
         // ハードウェアのシングルタップフラグからのフォールバック対応
-        if (single_tap_pressed)
+        if (single_tap_pressed && data->finger_tracker.completed_one_tap_path)
         {
           data->last_touch_up_time = now_ms;
         }
