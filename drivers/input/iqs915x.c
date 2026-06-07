@@ -1160,30 +1160,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
   }
 }
 
-static void iqs915x_log_config_settings_on_rdy(const struct device *dev)
-{
-  uint16_t cfg = 0;
-  int ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
-  if (ret < 0)
-  {
-    LOG_WRN("RDY: Failed to read CONFIG_SETTINGS(0x%04x): %d",
-            IQS915X_CONFIG_SETTINGS, ret);
-    return;
-  }
-
-  LOG_DBG("RDY: CONFIG_SETTINGS(0x%04x)=0x%04x", IQS915X_CONFIG_SETTINGS,
-          cfg);
-
-  LOG_DBG("RDY: Event flags in CONFIG_SETTINGS: GESTURE_EVENT(bit9)=%s, "
-          "TP_EVENT(bit10)=%s, TP_TOUCH_EVENT(bit13)=%s",
-          (cfg & IQS915X_GESTURE_EVENT) ? "ON" : "OFF",
-          (cfg & IQS915X_TP_EVENT) ? "ON" : "OFF",
-          (cfg & IQS915X_TP_TOUCH_EVENT) ? "ON" : "OFF");
-
-  LOG_DBG("RDY: EVENT_MODE(bit8)=%s", (cfg & IQS915X_EVENT_MODE) ? "ENABLED"
-                                                                 : "DISABLED");
-}
-
 /* ============================================================
  * メインスレッド
  *
@@ -1266,9 +1242,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
-
-    // RDY Lowで起床した直後にCONFIG_SETTINGSを診断ログ出力する
-    iqs915x_log_config_settings_on_rdy(dev);
 
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
