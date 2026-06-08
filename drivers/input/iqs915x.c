@@ -303,6 +303,8 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->multifinger_swipe_latched = false;
   data->scroll_sequence_active = false;
   data->scroll_blocked_until_low_contact = false;
+  data->tap_drag_raw_max_fingers = 0;
+  data->tap_drag_raw_gesture_seen = false;
   iqs915x_reset_two_finger_session(data);
 }
 
@@ -483,6 +485,14 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
       tracker->debounce_count >= debounce_frames)
   {
     tracker->stable_count = tracker->pending_count;
+  }
+
+  if (touch_up_event && tracker->stable_count != 0)
+  {
+    tracker->pending_count = 0;
+    tracker->debounce_count = 0;
+    tracker->stable_count = 0;
+    LOG_DBG("finger stable count forced to 0 on GLOBAL_TP_TOUCH release");
   }
 
   if (stable_before == 0 && tracker->stable_count > 0)
@@ -1437,6 +1447,24 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
     bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
     uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
+    bool tap_drag_blocking_gesture =
+        stream.gesture_tf != 0 || (stream.gesture_sf & ~IQS915X_SINGLE_TAP) != 0;
+
+    if (touch_down)
+    {
+      data->tap_drag_raw_max_fingers = num_fingers > 0 ? num_fingers : 1;
+      data->tap_drag_raw_gesture_seen = false;
+    }
+    else if (is_touching_now && num_fingers > data->tap_drag_raw_max_fingers)
+    {
+      data->tap_drag_raw_max_fingers = num_fingers;
+    }
+
+    if (is_touching_now && tap_drag_blocking_gesture)
+    {
+      data->tap_drag_raw_gesture_seen = true;
+    }
+
     data->is_touching = is_touching_now;
     iqs915x_update_finger_state(config, data, &stream, touch_up);
     iqs915x_update_sequence_gates(data);
@@ -1564,13 +1592,26 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
         else if (touch_up)
         {
+          int64_t touch_duration_ms = now_ms - data->last_touch_down_time;
+          bool raw_tap_drag_path =
+              data->tap_drag_raw_max_fingers == 1 &&
+              !data->tap_drag_raw_gesture_seen;
+
           // Touch Up (指が離れた瞬間)
           // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
-          if ((now_ms - data->last_touch_down_time) < 200 &&
-              data->finger_tracker.completed_one_tap_path)
+          if (touch_duration_ms < 200 &&
+              (data->finger_tracker.completed_one_tap_path ||
+               raw_tap_drag_path))
           {
             // 短いタップとして認定し、ここから300msの窓を開始
             data->last_touch_up_time = now_ms;
+            if (!data->finger_tracker.completed_one_tap_path)
+            {
+              LOG_DBG("tap-drag window opened from raw touch sequence: "
+                      "duration=%lld ms max_fingers=%u",
+                      (long long)touch_duration_ms,
+                      data->tap_drag_raw_max_fingers);
+            }
           }
           else
           {

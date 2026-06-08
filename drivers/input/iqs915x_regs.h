@@ -491,6 +491,8 @@ struct iqs915x_data
     bool is_touching;
     int64_t last_touch_down_time;
     int64_t last_touch_up_time;
+    uint8_t tap_drag_raw_max_fingers;
+    bool tap_drag_raw_gesture_seen;
     uint16_t last_abs_x; // 直前に報告したabsolute X座標
     uint16_t last_abs_y; // 直前に報告したabsolute Y座標
     bool last_abs_valid; // absolute座標の直前報告値が有効か
