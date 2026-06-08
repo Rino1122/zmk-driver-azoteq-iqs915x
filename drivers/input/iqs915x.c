@@ -648,7 +648,22 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   }
 
   iqs915x_cancel_scroll_inertia(data);
+  LOG_INF(
+      "Gesture emit before: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u "
+      "flags=0x%04x sf=0x%04x tf=0x%04x latched=%d triggered=%d",
+      stable_fingers,
+      horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
+      gesture_code, (int)dx, (int)dy, data->swipe_threshold_x,
+      data->swipe_threshold_y, stream->trackpad_flags, stream->gesture_sf,
+      stream->gesture_tf, data->multifinger_swipe_latched, data->swipe_triggered);
   iqs915x_emit_gesture_tap(data->dev, gesture_code);
+  LOG_INF(
+      "Gesture emit after: %uF %s gesture=%u dx=%d dy=%d flags=0x%04x sf=0x%04x "
+      "tf=0x%04x",
+      stable_fingers,
+      horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
+      gesture_code, (int)dx, (int)dy, stream->trackpad_flags, stream->gesture_sf,
+      stream->gesture_tf);
   data->swipe_triggered = true;
   data->multifinger_swipe_latched = true;
   LOG_INF("Gesture triggered: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u",
@@ -1357,7 +1372,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       LOG_DBG(
           "info_flags=0x%04x trackpad_flags=0x%04x gesture_sf=0x%04x "
-          "gesture_tf=0x%04x rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          "gesture_tf=0x%04x rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
           stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
           stream.gesture_tf, stream.rel_x, stream.rel_y, stream.abs_x,
           stream.abs_y, mode_str,
@@ -1373,8 +1388,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
           (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
           (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
-          (stream.info_flags & IQS915X_TP_TOUCH_TOGGLED) ? " TP_TOUCH_TOG"
-                                                         : "",
           (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
           (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
     }
