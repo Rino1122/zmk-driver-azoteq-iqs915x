@@ -512,6 +512,9 @@ struct iqs915x_data
     bool swipe_centroid_valid;
     uint8_t swipe_active_fingers;
     bool swipe_triggered;
+    bool multifinger_swipe_latched;
+    bool scroll_sequence_active;
+    bool scroll_blocked_until_low_contact;
     uint16_t swipe_threshold_x;
     uint16_t swipe_threshold_y;
     uint16_t swipe_resolution_x;

@@ -300,6 +300,9 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
   data->swipe_triggered = false;
+  data->multifinger_swipe_latched = false;
+  data->scroll_sequence_active = false;
+  data->scroll_blocked_until_low_contact = false;
   iqs915x_reset_two_finger_session(data);
 }
 
@@ -310,6 +313,25 @@ static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
   data->swipe_triggered = false;
+}
+
+static void iqs915x_update_sequence_gates(struct iqs915x_data *data)
+{
+  struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
+
+  if (tracker->stable_count <= 1)
+  {
+    data->multifinger_swipe_latched = false;
+    data->scroll_sequence_active = false;
+    data->scroll_blocked_until_low_contact = false;
+    iqs915x_reset_multifinger_swipe_state(data);
+    return;
+  }
+
+  if (tracker->sequence_max_count >= 3)
+  {
+    data->scroll_blocked_until_low_contact = true;
+  }
 }
 
 static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
@@ -569,6 +591,13 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
     return false;
   }
 
+  if (data->multifinger_swipe_latched || data->scroll_sequence_active ||
+      (stable_fingers == 3 && data->finger_tracker.sequence_max_count >= 4))
+  {
+    iqs915x_reset_multifinger_swipe_state(data);
+    return true;
+  }
+
   centroid_x = (int32_t)stream->abs_x + (int32_t)stream->finger2_x +
                (int32_t)stream->finger3_x;
   centroid_y = (int32_t)stream->abs_y + (int32_t)stream->finger2_y +
@@ -597,7 +626,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   }
 
   // スワイプ開始時の重心位置を基準に方向を判定し、
-  // 指を離すまで一度だけgesture eventを発火する。
+  // 1本以下を経由するまで一度だけgesture eventを発火する。
   dx = centroid_x - data->swipe_last_centroid_x;
   dy = centroid_y - data->swipe_last_centroid_y;
 
@@ -619,6 +648,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   iqs915x_cancel_scroll_inertia(data);
   iqs915x_emit_gesture_tap(data->dev, gesture_code);
   data->swipe_triggered = true;
+  data->multifinger_swipe_latched = true;
   LOG_INF("Gesture triggered: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u",
           stable_fingers,
           horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
@@ -1394,6 +1424,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
     data->is_touching = is_touching_now;
     iqs915x_update_finger_state(config, data, &stream, touch_up);
+    iqs915x_update_sequence_gates(data);
 
     bool has_tp_event = is_touching_now || touch_state_changed;
     if (gesture_active || tp_movement)
@@ -1412,7 +1443,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
       bool scroll_blocked_by_path =
           scroll && data->finger_tracker.stable_count == 2 &&
-          data->finger_tracker.sequence_max_count >= 3;
+          data->scroll_blocked_until_low_contact;
 
       if (scroll_blocked_by_path)
       {
@@ -1598,6 +1629,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         int16_t gx = (int16_t)stream.gesture_x;
         int16_t gy = (int16_t)stream.gesture_y;
         int16_t scroll_div = config->scroll_divisor;
+
+        data->scroll_sequence_active = true;
 
         if (config->scroll_inertia.enabled)
         {
