@@ -204,22 +204,24 @@ properties:
     description: |
       Absolute swipe threshold in raw coordinate units. Set >0 to force a
       fixed threshold for both axes. If set to 0 (default), the driver reads
-      X/Y resolutions from init-data registers 0x11E6/0x11E8 and computes
-      thresholds by ratio (numerator/denominator).
+      X/Y resolutions from init-data registers 0x11E6/0x11E8 and computes one
+      shared threshold from the smaller resolution by ratio
+      (numerator/denominator).
 
   swipe-threshold-numerator:
     type: int
     default: 1
     description: |
-      Numerator of the auto threshold ratio applied to X/Y resolution when
-      swipe-step is 0.
+      Numerator of the auto threshold ratio applied to the smaller X/Y
+      resolution when swipe-step is 0.
 
   swipe-threshold-denominator:
     type: int
     default: 5
     description: |
-      Denominator of the auto threshold ratio applied to X/Y resolution when
-      swipe-step is 0. Default 1/5 means trigger after about 20% movement.
+      Denominator of the auto threshold ratio applied to the smaller X/Y
+      resolution when swipe-step is 0. Default 1/5 means trigger after about
+      20% movement of the smaller axis.
 
   three-finger-swipe-up-key:
     type: int

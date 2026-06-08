@@ -88,11 +88,12 @@ based on the dominant swipe direction. One gesture emits only one press/release
 pair until fingers are released.
 
 By default (`swipe-step = <0>`), swipe thresholds are computed from init-data
-X/Y resolutions (registers `0x11E6`/`0x11E8`) using
+X/Y resolutions (registers `0x11E6`/`0x11E8`) using the smaller resolution and
 `swipe-threshold-numerator` / `swipe-threshold-denominator`.
-Default `1/5` means a gesture triggers at about 20% centroid travel on each
-axis. If you set `swipe-step` to a value > 0, that fixed threshold overrides
-the ratio-based calculation.
+Default `1/5` means a gesture triggers at about 20% travel of the smaller axis,
+using the same raw-coordinate threshold for horizontal and vertical swipes. If
+you set `swipe-step` to a value > 0, that fixed threshold overrides the
+ratio-based calculation.
 
 The driver reports these gestures using `IQS915X_INPUT_EV_GESTURE` with
 direction-specific codes from `<dt-bindings/input/iqs915x_gestures.h>`.

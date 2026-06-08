@@ -393,11 +393,13 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
 
   if (has_x && has_y)
   {
-    data->swipe_threshold_x = MAX(1U, ((uint32_t)res_x * num) / den);
-    data->swipe_threshold_y = MAX(1U, ((uint32_t)res_y * num) / den);
-    LOG_INF("Gesture thresholds from resolution: x=%u y=%u (res=%ux%u, ratio=%u/%u)",
-            data->swipe_threshold_x, data->swipe_threshold_y, res_x, res_y, num,
-            den);
+    uint16_t base_res = MIN(res_x, res_y);
+    uint16_t threshold = MAX(1U, ((uint32_t)base_res * num) / den);
+
+    data->swipe_threshold_x = threshold;
+    data->swipe_threshold_y = threshold;
+    LOG_INF("Gesture threshold from min resolution: %u (res=%ux%u, ratio=%u/%u)",
+            threshold, res_x, res_y, num, den);
     return;
   }
 
