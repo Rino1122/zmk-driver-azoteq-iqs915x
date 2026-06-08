@@ -189,13 +189,13 @@ properties:
   three-finger-swipe:
     type: boolean
     description: |
-      Enable three-finger swipe as one-shot virtual key event generated from
+      Enable three-finger swipe as one-shot gesture input event generated from
       multi-finger centroid motion.
 
   four-finger-swipe:
     type: boolean
     description: |
-      Enable four-finger swipe as one-shot virtual key event generated from
+      Enable four-finger swipe as one-shot gesture input event generated from
       multi-finger centroid motion.
 
   swipe-step:
@@ -224,42 +224,50 @@ properties:
   three-finger-swipe-up-key:
     type: int
     description: |
-      Key code emitted for 3-finger swipe up. If unset, defaults to F13.
+      Deprecated. Older builds emitted this key code for 3-finger swipe up.
+      Current builds emit IQS915X_GESTURE_3F_UP on IQS915X_INPUT_EV_GESTURE.
 
   three-finger-swipe-down-key:
     type: int
     description: |
-      Key code emitted for 3-finger swipe down. If unset, defaults to F14.
+      Deprecated. Older builds emitted this key code for 3-finger swipe down.
+      Current builds emit IQS915X_GESTURE_3F_DOWN on IQS915X_INPUT_EV_GESTURE.
 
   three-finger-swipe-left-key:
     type: int
     description: |
-      Key code emitted for 3-finger swipe left. If unset, defaults to F15.
+      Deprecated. Older builds emitted this key code for 3-finger swipe left.
+      Current builds emit IQS915X_GESTURE_3F_LEFT on IQS915X_INPUT_EV_GESTURE.
 
   three-finger-swipe-right-key:
     type: int
     description: |
-      Key code emitted for 3-finger swipe right. If unset, defaults to F16.
+      Deprecated. Older builds emitted this key code for 3-finger swipe right.
+      Current builds emit IQS915X_GESTURE_3F_RIGHT on IQS915X_INPUT_EV_GESTURE.
 
   four-finger-swipe-up-key:
     type: int
     description: |
-      Key code emitted for 4-finger swipe up. If unset, defaults to F17.
+      Deprecated. Older builds emitted this key code for 4-finger swipe up.
+      Current builds emit IQS915X_GESTURE_4F_UP on IQS915X_INPUT_EV_GESTURE.
 
   four-finger-swipe-down-key:
     type: int
     description: |
-      Key code emitted for 4-finger swipe down. If unset, defaults to F18.
+      Deprecated. Older builds emitted this key code for 4-finger swipe down.
+      Current builds emit IQS915X_GESTURE_4F_DOWN on IQS915X_INPUT_EV_GESTURE.
 
   four-finger-swipe-left-key:
     type: int
     description: |
-      Key code emitted for 4-finger swipe left. If unset, defaults to F19.
+      Deprecated. Older builds emitted this key code for 4-finger swipe left.
+      Current builds emit IQS915X_GESTURE_4F_LEFT on IQS915X_INPUT_EV_GESTURE.
 
   four-finger-swipe-right-key:
     type: int
     description: |
-      Key code emitted for 4-finger swipe right. If unset, defaults to F20.
+      Deprecated. Older builds emitted this key code for 4-finger swipe right.
+      Current builds emit IQS915X_GESTURE_4F_RIGHT on IQS915X_INPUT_EV_GESTURE.
 
   tap-time:
     type: int

@@ -432,20 +432,12 @@ struct iqs915x_config
     struct iqs915x_inertia_profile pinch_inertia;
     uint8_t finger_debounce_frames;
 
-    // 3/4本指スワイプ設定（単発キーイベント）
+    // 3/4本指スワイプ設定（専用gesture input event）
     bool three_finger_swipe;
     bool four_finger_swipe;
     uint16_t swipe_step;
     uint16_t swipe_threshold_numerator;
     uint16_t swipe_threshold_denominator;
-    uint16_t three_finger_swipe_up_key;
-    uint16_t three_finger_swipe_down_key;
-    uint16_t three_finger_swipe_left_key;
-    uint16_t three_finger_swipe_right_key;
-    uint16_t four_finger_swipe_up_key;
-    uint16_t four_finger_swipe_down_key;
-    uint16_t four_finger_swipe_left_key;
-    uint16_t four_finger_swipe_right_key;
 
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト

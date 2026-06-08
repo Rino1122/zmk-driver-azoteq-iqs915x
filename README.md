@@ -61,23 +61,13 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         /* Use FINGER1_X/Y as internal source and emit REL_X/Y deltas */
         report-absolute;
 
-        /* 3/4 finger swipe as one-shot virtual key events */
+        /* 3/4 finger swipe as one-shot gesture input events */
         three-finger-swipe;
         four-finger-swipe;
         /* 0 = auto threshold from X/Y resolution with ratio */
         swipe-step = <0>;
         swipe-threshold-numerator = <1>;
         swipe-threshold-denominator = <5>;
-
-        /* Optional: override emitted keycodes (defaults: F13..F20) */
-        three-finger-swipe-up-key = <INPUT_KEY_F13>;
-        three-finger-swipe-down-key = <INPUT_KEY_F14>;
-        three-finger-swipe-left-key = <INPUT_KEY_F15>;
-        three-finger-swipe-right-key = <INPUT_KEY_F16>;
-        four-finger-swipe-up-key = <INPUT_KEY_F17>;
-        four-finger-swipe-down-key = <INPUT_KEY_F18>;
-        four-finger-swipe-left-key = <INPUT_KEY_F19>;
-        four-finger-swipe-right-key = <INPUT_KEY_F20>;
 
         switch-xy;
     };
@@ -93,9 +83,9 @@ used as a baseline (no cursor move), then relative movement is reported while
 `REL_X`/`REL_Y` registers directly.
 
 When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
-the centroid of active fingers and emits one-shot virtual key tap events based
-on the dominant swipe direction. One gesture emits only one key event until
-fingers are released.
+the centroid of active fingers and emits one-shot private gesture input events
+based on the dominant swipe direction. One gesture emits only one press/release
+pair until fingers are released.
 
 By default (`swipe-step = <0>`), swipe thresholds are computed from init-data
 X/Y resolutions (registers `0x11E6`/`0x11E8`) using
@@ -104,21 +94,23 @@ Default `1/5` means a gesture triggers at about 20% centroid travel on each
 axis. If you set `swipe-step` to a value > 0, that fixed threshold overrides
 the ratio-based calculation.
 
-You can override each emitted key code using DTS properties
-(`three-finger-swipe-up-key`, etc.). If omitted, defaults are F13..F20.
+The driver reports these gestures using `IQS915X_INPUT_EV_GESTURE` with
+direction-specific codes from `<dt-bindings/input/iqs915x_gestures.h>`.
+Firmware can map those events to keymap positions, behaviors, or other local
+actions without consuming normal keyboard codes such as F13..F20.
 
-Virtual key mapping:
+Gesture code mapping:
 
-- 3-finger up/down/left/right -> F13/F14/F15/F16
-- 4-finger up/down/left/right -> F17/F18/F19/F20
+- 3-finger left/up/down/right -> `IQS915X_GESTURE_3F_LEFT/UP/DOWN/RIGHT`
+- 4-finger left/up/down/right -> `IQS915X_GESTURE_4F_LEFT/UP/DOWN/RIGHT`
 
 See [docs/gesture_virtual_keys_ja.md](docs/gesture_virtual_keys_ja.md) for a
 firmware-side setup guide.
 
-Important: this driver emits key events, but ZMK Studio only shows assignable
-controls that exist as positions in your keyboard keymap/layout. To expose
-gesture controls in Studio, add 8 gesture slots on the firmware side and map
-them to the key codes emitted by this driver.
+Important: this driver emits gesture input events, not ZMK keymap position
+events. To expose gesture controls in Studio, add 8 gesture slots on the
+firmware side and map the gesture events to those keymap positions with an input
+processor.
 
 The current scroll inertia model follows a Q8 fixed-point decay flow with
 remainder preservation and round-to-nearest output.

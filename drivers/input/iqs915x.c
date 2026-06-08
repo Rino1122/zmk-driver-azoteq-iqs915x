@@ -28,6 +28,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
+#include <dt-bindings/input/iqs915x_gestures.h>
 #include <iqs915x.h>
 #include "iqs915x_init_data_bretagne_array.h"
 #include "iqs915x_regs.h"
@@ -39,14 +40,6 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
-#define IQS915X_DEFAULT_3F_SWIPE_UP_KEY INPUT_KEY_F13
-#define IQS915X_DEFAULT_3F_SWIPE_DOWN_KEY INPUT_KEY_F14
-#define IQS915X_DEFAULT_3F_SWIPE_LEFT_KEY INPUT_KEY_F15
-#define IQS915X_DEFAULT_3F_SWIPE_RIGHT_KEY INPUT_KEY_F16
-#define IQS915X_DEFAULT_4F_SWIPE_UP_KEY INPUT_KEY_F17
-#define IQS915X_DEFAULT_4F_SWIPE_DOWN_KEY INPUT_KEY_F18
-#define IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY INPUT_KEY_F19
-#define IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY INPUT_KEY_F20
 #define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
@@ -393,9 +386,8 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
           IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK);
 }
 
-static uint16_t iqs915x_get_multifinger_swipe_key(const struct iqs915x_config *config,
-                                                  uint8_t fingers, int32_t dx,
-                                                  int32_t dy)
+static uint16_t iqs915x_get_multifinger_swipe_gesture(uint8_t fingers, int32_t dx,
+                                                      int32_t dy)
 {
   bool horizontal = abs(dx) >= abs(dy);
 
@@ -403,32 +395,27 @@ static uint16_t iqs915x_get_multifinger_swipe_key(const struct iqs915x_config *c
   {
     if (horizontal)
     {
-      return dx > 0 ? config->three_finger_swipe_right_key
-                    : config->three_finger_swipe_left_key;
+      return dx > 0 ? IQS915X_GESTURE_3F_RIGHT : IQS915X_GESTURE_3F_LEFT;
     }
-    return dy > 0 ? config->three_finger_swipe_down_key
-                  : config->three_finger_swipe_up_key;
+    return dy > 0 ? IQS915X_GESTURE_3F_DOWN : IQS915X_GESTURE_3F_UP;
   }
 
   if (fingers == 4)
   {
     if (horizontal)
     {
-      return dx > 0 ? config->four_finger_swipe_right_key
-                    : config->four_finger_swipe_left_key;
+      return dx > 0 ? IQS915X_GESTURE_4F_RIGHT : IQS915X_GESTURE_4F_LEFT;
     }
-    return dy > 0 ? config->four_finger_swipe_down_key
-                  : config->four_finger_swipe_up_key;
+    return dy > 0 ? IQS915X_GESTURE_4F_DOWN : IQS915X_GESTURE_4F_UP;
   }
 
   return 0;
 }
 
-static void iqs915x_emit_virtual_key_tap(const struct device *dev,
-                                         uint16_t key_code)
+static void iqs915x_emit_gesture_tap(const struct device *dev, uint16_t gesture_code)
 {
-  input_report_key(dev, key_code, 1, false, K_FOREVER);
-  input_report_key(dev, key_code, 0, true, K_FOREVER);
+  input_report(dev, IQS915X_INPUT_EV_GESTURE, gesture_code, 1, false, K_FOREVER);
+  input_report(dev, IQS915X_INPUT_EV_GESTURE, gesture_code, 0, true, K_FOREVER);
 }
 
 static void iqs915x_update_finger_state(const struct iqs915x_config *config,
@@ -574,7 +561,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   bool horizontal;
   int32_t axis_delta;
   uint16_t axis_threshold;
-  uint16_t key_code;
+  uint16_t gesture_code;
 
   if (!enabled)
   {
@@ -610,7 +597,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   }
 
   // スワイプ開始時の重心位置を基準に方向を判定し、
-  // 指を離すまで一度だけキーイベントを発火する。
+  // 指を離すまで一度だけgesture eventを発火する。
   dx = centroid_x - data->swipe_last_centroid_x;
   dy = centroid_y - data->swipe_last_centroid_y;
 
@@ -623,19 +610,19 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
     return true;
   }
 
-  key_code = iqs915x_get_multifinger_swipe_key(config, stable_fingers, dx, dy);
-  if (key_code == 0)
+  gesture_code = iqs915x_get_multifinger_swipe_gesture(stable_fingers, dx, dy);
+  if (gesture_code == 0)
   {
     return true;
   }
 
   iqs915x_cancel_scroll_inertia(data);
-  iqs915x_emit_virtual_key_tap(data->dev, key_code);
+  iqs915x_emit_gesture_tap(data->dev, gesture_code);
   data->swipe_triggered = true;
-  LOG_INF("Gesture triggered: %uF %s key=%u dx=%d dy=%d thr_x=%u thr_y=%u",
+  LOG_INF("Gesture triggered: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u",
           stable_fingers,
           horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
-          key_code, (int)dx, (int)dy, data->swipe_threshold_x,
+          gesture_code, (int)dx, (int)dy, data->swipe_threshold_x,
           data->swipe_threshold_y);
 
   return true;
@@ -1922,14 +1909,6 @@ static int iqs915x_init(const struct device *dev)
       .swipe_step = DT_INST_PROP_OR(n, swipe_step, 0),                                                                                                                                             \
       .swipe_threshold_numerator = DT_INST_PROP_OR(n, swipe_threshold_numerator, 1),                                                                                                               \
       .swipe_threshold_denominator = DT_INST_PROP_OR(n, swipe_threshold_denominator, 5),                                                                                                           \
-      .three_finger_swipe_up_key = DT_INST_PROP_OR(n, three_finger_swipe_up_key, IQS915X_DEFAULT_3F_SWIPE_UP_KEY),                                                                                 \
-      .three_finger_swipe_down_key = DT_INST_PROP_OR(n, three_finger_swipe_down_key, IQS915X_DEFAULT_3F_SWIPE_DOWN_KEY),                                                                           \
-      .three_finger_swipe_left_key = DT_INST_PROP_OR(n, three_finger_swipe_left_key, IQS915X_DEFAULT_3F_SWIPE_LEFT_KEY),                                                                           \
-      .three_finger_swipe_right_key = DT_INST_PROP_OR(n, three_finger_swipe_right_key, IQS915X_DEFAULT_3F_SWIPE_RIGHT_KEY),                                                                        \
-      .four_finger_swipe_up_key = DT_INST_PROP_OR(n, four_finger_swipe_up_key, IQS915X_DEFAULT_4F_SWIPE_UP_KEY),                                                                                   \
-      .four_finger_swipe_down_key = DT_INST_PROP_OR(n, four_finger_swipe_down_key, IQS915X_DEFAULT_4F_SWIPE_DOWN_KEY),                                                                             \
-      .four_finger_swipe_left_key = DT_INST_PROP_OR(n, four_finger_swipe_left_key, IQS915X_DEFAULT_4F_SWIPE_LEFT_KEY),                                                                             \
-      .four_finger_swipe_right_key = DT_INST_PROP_OR(n, four_finger_swipe_right_key, IQS915X_DEFAULT_4F_SWIPE_RIGHT_KEY),                                                                          \
       .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                                                                                                 \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
