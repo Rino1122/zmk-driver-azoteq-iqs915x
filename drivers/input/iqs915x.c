@@ -1592,8 +1592,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           k_work_cancel_delayable(&data->hold_release_work);
           data->hold_release_pending = false;
         }
+        bool left_button_pending =
+            (data->buttons_pressed & BIT(LEFT_BUTTON_CODE - INPUT_BTN_0)) != 0;
+
         k_work_cancel_delayable(&data->button_release_work);
-        input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+        if (left_button_pending)
+        {
+          LOG_DBG("tap press promoted to drag hold");
+        }
+        else
+        {
+          input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+        }
         data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
       }
 
