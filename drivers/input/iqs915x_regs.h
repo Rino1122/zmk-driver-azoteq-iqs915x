@@ -288,15 +288,16 @@ enum iqs915x_init_step
     INIT_CHECK_SHOW_RESET,    // SHOW_RESETフラグ確認
     INIT_SOFTWARE_RESET,      // ソフトウェアリセット発行
     INIT_WAIT_SOFTWARE_RESET, // ソフトウェアリセット完了待機
+    INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
+    INIT_WAIT_AFTER_INIT_DATA, // init-data書き込み後のRDYマージン
+    INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_ACK_RESET,           // リセットACK
     INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
-    INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
-    INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
-    INIT_VERIFY_EVENT_MODE,   // Event Mode有効確認（未設定なら強制設定）
-    INIT_SET_EVENT_MODE,      // Event Mode + Manual Control強制設定
-    INIT_CONFIRM_EVENT_MODE,  // 強制設定後のEvent Mode再確認
-    INIT_COMPLETE_READ,       // 初期化完了前の最終読み取り
+    INIT_REQUEST_REATI,       // TP/ALP Re-ATIリクエスト
     INIT_WAIT_REATI,          // TP Re-ATI完了待機
+    INIT_PREPARE_EVENT_MODE,  // CONFIG_SETTINGS読み取りとEvent Mode書き込み値準備
+    INIT_SET_EVENT_MODE,      // Event Mode + Manual Control明示設定
+    INIT_CONFIRM_EVENT_MODE,  // Event Mode設定後の再確認
     INIT_COMPLETE,            // 初期化完了
     INIT_FAILED,              // 初期化失敗（上限超過）
 };

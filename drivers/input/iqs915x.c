@@ -46,6 +46,7 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT 10
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
+#define IQS915X_INIT_POST_WRITE_RDY_MARGIN 2
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 
@@ -942,8 +943,9 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
       {
         // 16-bit little-endian: high byte bit0 == CONFIG_SETTINGS bit8
-        // (EVENT_MODE)。必須機能のため強制セットする。
-        buffer[i] |= 0x01;
+        // (EVENT_MODE)。SHOW_RESET clear後に明示writeするため、
+        // init-data中はevent source bitsを維持しつつEVENT_MODEだけclearする。
+        buffer[i] &= ~0x01;
       }
       // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
       else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
@@ -1167,15 +1169,14 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_ACK_RESET:
   {
-    uint16_t sys_ctrl =
-        IQS915X_ACK_RESET | IQS915X_REATI_TP | IQS915X_REATI_ALP;
+    uint16_t sys_ctrl = IQS915X_ACK_RESET;
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, sys_ctrl);
     if (ret < 0)
     {
       LOG_ERR("Failed to send initial ACK reset: %d", ret);
       return;
     }
-    LOG_DBG("Init: Sent initial Ack Reset and Re-ATI");
+    LOG_INF("Init: ACK_RESET sent");
     data->init_step = INIT_VERIFY_SHOW_RESET_CLEAR;
     data->wait_count = 0;
     break;
@@ -1202,16 +1203,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if ((info_flags & IQS915X_SHOW_RESET) == 0)
     {
       LOG_INF("Init: SHOW_RESET cleared (flags=0x%04x)", info_flags);
-      if (info_flags & IQS915X_REATI_OCCURRED)
-      {
-        LOG_INF("Init: TP Re-ATI occurred while confirming SHOW_RESET clear");
-        data->init_step = INIT_VERIFY_EVENT_MODE;
-      }
-      else
-      {
-        data->init_step = INIT_WAIT_REATI;
-        data->wait_count = 0;
-      }
+      data->init_step = INIT_REQUEST_REATI;
+      data->wait_count = 0;
       break;
     }
 
@@ -1277,11 +1270,22 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (data->init_data_offset >= total)
     {
       LOG_INF("Init: All init-data written (%d bytes)", total);
-      // init-data書き込み完了後は、ACK ResetとATI実行へ進む
-      data->init_step = INIT_ACK_RESET;
+      data->init_step = INIT_WAIT_AFTER_INIT_DATA;
+      data->wait_count = 0;
     }
     break;
   }
+
+  case INIT_WAIT_AFTER_INIT_DATA:
+    data->wait_count++;
+    LOG_INF("Init: wait after init-data %d/%d", data->wait_count,
+            IQS915X_INIT_POST_WRITE_RDY_MARGIN);
+    if (data->wait_count >= IQS915X_INIT_POST_WRITE_RDY_MARGIN)
+    {
+      data->init_step = INIT_ACK_RESET;
+      data->wait_count = 0;
+    }
+    break;
 
   case INIT_VERIFY_INIT_CHUNK:
   {
@@ -1318,7 +1322,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
       if (data->init_data_offset >= config->init_data_len)
       {
         LOG_INF("Init: All init-data written (%d bytes)", config->init_data_len);
-        data->init_step = INIT_ACK_RESET;
+        data->init_step = INIT_WAIT_AFTER_INIT_DATA;
+        data->wait_count = 0;
       }
       else
       {
@@ -1340,12 +1345,27 @@ static void iqs915x_init_step_handler(const struct device *dev)
     break;
   }
 
-  case INIT_VERIFY_EVENT_MODE:
+  case INIT_REQUEST_REATI:
   {
-    // DTS設定完了後、Event ModeとManual Controlが有効になっているかを確認する。
-    // init-dataバッファパッチやDTS設定で設定済のはずだが、
-    // 実際にレジスタを読み返して確認する。このstateでは読み取りのみ行い、
-    // 必要な書き込みは次RDYのINIT_SET_EVENT_MODEで行う。
+    uint16_t sys_ctrl = IQS915X_REATI_TP | IQS915X_REATI_ALP;
+
+    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, sys_ctrl);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to request Re-ATI: %d", ret);
+      return;
+    }
+    LOG_INF("Init: Re-ATI requested");
+    data->init_step = INIT_WAIT_REATI;
+    data->wait_count = 0;
+    break;
+  }
+
+  case INIT_PREPARE_EVENT_MODE:
+  {
+    // SHOW_RESET clearとTP Re-ATI完了後にEvent Modeを明示writeする。
+    // このstateでは既存event source bitsを維持するため読み取りだけ行い、
+    // 次RDYのINIT_SET_EVENT_MODEでEVENT_MODE/MANUAL_CONTROLをORした値を書く。
     uint16_t cfg = 0;
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
     if (ret < 0)
@@ -1353,22 +1373,9 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
       return;
     }
-    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
-        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
-    {
-      LOG_DBG("Init: Event Mode + Manual Control confirmed (CONFIG_SETTINGS=0x%04x)",
-              cfg);
-      data->init_step = INIT_COMPLETE_READ;
-    }
-    else
-    {
-      LOG_WRN("Init: CONFIG_SETTINGS missing required bits (0x%04x). "
-              "Will force Event Mode + Manual Control.",
-              cfg);
-      data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
-      data->wait_count = 0;
-      data->init_step = INIT_SET_EVENT_MODE;
-    }
+    data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+    data->wait_count = 0;
+    data->init_step = INIT_SET_EVENT_MODE;
     break;
   }
 
@@ -1380,6 +1387,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to force Event Mode + Manual Control: %d", ret);
       return;
     }
+    LOG_INF("Init: Event Mode explicitly enabled (CONFIG_SETTINGS=0x%04x)",
+            data->init_pending_cfg);
     data->init_step = INIT_CONFIRM_EVENT_MODE;
     break;
 
@@ -1398,10 +1407,16 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
         (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
     {
-      LOG_INF("Init: Event Mode + Manual Control confirmed after force "
-              "(CONFIG_SETTINGS=0x%04x)",
+      LOG_INF("Init: Event Mode confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
-      data->init_step = INIT_COMPLETE_READ;
+      data->init_step = INIT_COMPLETE;
+      data->initialized = true;
+      data->work_state = WORK_READ_DATA;
+      data->last_info_flags = 0;
+      data->init_restart_count = 0;
+      data->init_chunk_retry_count = 0;
+      data->init_pending_cfg = 0;
+      LOG_INF("IQS915x initialization complete");
       break;
     }
 
@@ -1419,33 +1434,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
             cfg, data->wait_count, IQS915X_INIT_EVENT_MODE_MAX_RETRIES);
     data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
     data->init_step = INIT_SET_EVENT_MODE;
-    break;
-  }
-
-  case INIT_COMPLETE_READ:
-  {
-    struct iqs915x_stream_data stream;
-    ret = iqs915x_read_stream(dev, &stream);
-    if (ret < 0)
-    {
-      LOG_ERR("Failed to verify reset: %d", ret);
-      return;
-    }
-    if (stream.info_flags & IQS915X_SHOW_RESET)
-    {
-      LOG_ERR("Init: SHOW_RESET is set during final read (flags=0x%04x)",
-              stream.info_flags);
-      iqs915x_restart_initialization(dev, "SHOW_RESET set during final read");
-      break;
-    }
-    LOG_DBG("Init: Final read flags: 0x%04x", stream.info_flags);
-    data->init_step = INIT_COMPLETE;
-    data->initialized = true;
-    data->work_state = WORK_READ_DATA;
-    data->last_info_flags = stream.info_flags;
-    data->init_restart_count = 0;
-    data->init_chunk_retry_count = 0;
-    LOG_INF("IQS915x initialization complete");
     break;
   }
 
@@ -1476,8 +1464,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
-      // Re-ATI完了後はDTS設定は既にinit-dataに事前適用済みのため、設定確認へ進む
-      data->init_step = INIT_VERIFY_EVENT_MODE;
+      // Re-ATI完了後にEvent Modeを明示writeする
+      data->init_step = INIT_PREPARE_EVENT_MODE;
       break;
     }
 
@@ -1636,8 +1624,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     // IQS915xのランタイムリセット検出
-    // 初期化中のINIT_VERIFY_SHOW_RESET_CLEAR/INIT_COMPLETE_READで
-    // SHOW_RESETクリアを確認済みなので、
+    // 初期化中のINIT_VERIFY_SHOW_RESET_CLEARでSHOW_RESETクリアを確認済みなので、
     // 通常モードでSHOW_RESETが立っている場合は真のランタイムリセット。
     if (stream.info_flags & IQS915X_SHOW_RESET)
     {
