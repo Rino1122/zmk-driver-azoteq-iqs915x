@@ -1642,8 +1642,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // 連続RDY原因調査用。CONFIG_SETTINGSは追加I2C transactionを避けるため
-    // 初期化時のread-back確認値を表示する。
+    // 連続RDY原因調査用。一時的に追加readを行い、live register値も確認する。
+    uint16_t cfg_live = 0xFFFF;
+    uint16_t sys_live = 0xFFFF;
+    uint16_t info_live = 0xFFFF;
+    int cfg_ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg_live);
+    int sys_ret = iqs915x_read_reg16(dev, IQS915X_SYSTEM_CONTROL, &sys_live);
+    int info_ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_live);
+
     if (stream.info_flags != 0xEEEE)
     {
       // Charging Mode (bit2-0) のデコード
@@ -1653,13 +1659,16 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
 
       LOG_DBG(
-          "rdy_data cfg_cached=0x%04x info_flags=0x%04x "
+          "rdy_data cfg_cached=0x%04x cfg_live=0x%04x(cfg_ret=%d) "
+          "sys_live=0x%04x(sys_ret=%d) info_live=0x%04x(info_ret=%d) "
+          "info_flags=0x%04x "
           "trackpad_flags=0x%04x gesture_sf=0x%04x gesture_tf=0x%04x "
           "gesture_xy=(%u,%u) rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
-          data->confirmed_config_settings, stream.info_flags,
-          stream.trackpad_flags, stream.gesture_sf, stream.gesture_tf,
-          stream.gesture_x, stream.gesture_y, stream.rel_x, stream.rel_y,
-          stream.abs_x, stream.abs_y, mode_str,
+          data->confirmed_config_settings, cfg_live, cfg_ret, sys_live,
+          sys_ret, info_live, info_ret, stream.info_flags, stream.trackpad_flags,
+          stream.gesture_sf, stream.gesture_tf, stream.gesture_x,
+          stream.gesture_y, stream.rel_x, stream.rel_y, stream.abs_x,
+          stream.abs_y, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
           (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
