@@ -47,10 +47,8 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_INIT_POST_WRITE_RDY_MARGIN 5
-#define IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT 3
 #define IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES 5
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
-#define IQS915X_EVENT_MODE_DISABLED_DEFAULT_WATCH_MS 500
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
@@ -58,12 +56,17 @@ static void iqs915x_restart_initialization(const struct device *dev,
 
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
 {
-  data->event_mode_watch_armed = false;
-  data->event_mode_relatch_attempted = false;
-  data->event_mode_lp2_after_watch = false;
-  data->event_mode_no_touch_rdy_count = 0;
   data->event_mode_relatch_wait_count = 0;
   data->event_mode_relatch_retry_count = 0;
+}
+
+static void iqs915x_schedule_event_mode_relatch(struct iqs915x_data *data,
+                                                const char *reason)
+{
+  data->event_mode_relatch_wait_count = 0;
+  data->event_mode_relatch_retry_count = 0;
+  data->work_state = WORK_RELATCH_EVENT_MODE_DISABLE;
+  LOG_INF("Event Mode relatch: scheduled after %s", reason);
 }
 
 /* ============================================================
@@ -857,14 +860,6 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       data->event_mode_relatch_retry_count = 0;
       data->work_state = WORK_READ_DATA;
       LOG_INF("Event Mode relatch: confirmed (CONFIG_SETTINGS=0x%04x)", cfg);
-      if (data->event_mode_lp2_after_watch)
-      {
-        data->event_mode_lp2_after_watch = false;
-        data->enabled = false;
-        data->lp2_pending = true;
-        LOG_INF("Event Mode relatch: entering LP2 after relatch");
-        k_sem_give(&data->rdy_sem);
-      }
       break;
     }
 
@@ -1587,8 +1582,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = cfg;
       iqs915x_reset_event_mode_relatch_state(data);
-      data->event_mode_watch_armed = true;
-      data->event_mode_lp2_after_watch = config->disabled_by_default;
       LOG_INF("IQS915x initialization complete");
       break;
     }
@@ -1724,6 +1717,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->active_pending = false;
+        iqs915x_schedule_event_mode_relatch(data, "Active mode transition");
         LOG_INF("Trackpad entered Active mode");
       }
       else
@@ -1741,6 +1735,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->lp2_pending = false;
+        iqs915x_schedule_event_mode_relatch(data, "LP2 mode transition");
         LOG_INF("Trackpad entered LP2 mode");
       }
       else
@@ -1751,39 +1746,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // ===== トラックパッド無効時はRDYを待つだけで何もしない =====
-    if (!data->enabled)
-    {
-      // Suspend中でもRDYが来る可能性（SHOW_RESETなど）があるため、
-      // セマフォをタイムアウト付きで待ち、起き上がったら再度ループ先頭で
-      // active_pending/lp2_pendingをチェックする
-      k_sem_take(&data->rdy_sem, K_MSEC(500));
-      continue;
-    }
-
-    // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機する。
-    // disabled-by-defaultの初期化直後だけは、Event Modeが正常に効いて
-    // RDYが止まった場合にLP2へ進めるようtimeoutを持たせる。
-    if (data->event_mode_watch_armed && data->event_mode_lp2_after_watch)
-    {
-      ret = k_sem_take(&data->rdy_sem,
-                       K_MSEC(IQS915X_EVENT_MODE_DISABLED_DEFAULT_WATCH_MS));
-      if (ret < 0)
-      {
-        data->event_mode_watch_armed = false;
-        data->event_mode_no_touch_rdy_count = 0;
-        data->event_mode_lp2_after_watch = false;
-        data->enabled = false;
-        data->lp2_pending = true;
-        LOG_INF("Event Mode relatch: no continuous RDY detected, entering LP2");
-        k_sem_give(&data->rdy_sem);
-        continue;
-      }
-    }
-    else
-    {
-      k_sem_take(&data->rdy_sem, K_FOREVER);
-    }
+    // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
+    k_sem_take(&data->rdy_sem, K_FOREVER);
 
     if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
         data->work_state == WORK_RELATCH_EVENT_MODE_WAIT ||
@@ -1791,6 +1755,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         data->work_state == WORK_RELATCH_EVENT_MODE_CONFIRM)
     {
       iqs915x_handle_event_mode_relatch_step(dev);
+      continue;
+    }
+
+    // ===== トラックパッド無効時はRDYを待つだけで何もしない =====
+    if (!data->enabled)
+    {
       continue;
     }
 
@@ -1839,42 +1809,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       iqs915x_reset_scroll_inertia(data);
       data->gesture_pointer_suppress_ticks = 0;
       continue;
-    }
-
-    if (data->event_mode_watch_armed)
-    {
-      if (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH)
-      {
-        data->event_mode_watch_armed = false;
-        data->event_mode_no_touch_rdy_count = 0;
-        LOG_INF("Event Mode relatch: monitor cleared by GLOBAL_TP_TOUCH");
-        if (data->event_mode_lp2_after_watch)
-        {
-          data->event_mode_lp2_after_watch = false;
-          data->enabled = false;
-          data->lp2_pending = true;
-          LOG_INF("Event Mode relatch: entering LP2 after touch-confirmed monitor");
-        }
-      }
-      else
-      {
-        data->event_mode_no_touch_rdy_count++;
-        LOG_DBG("Event Mode relatch: no-touch RDY %u/%u",
-                data->event_mode_no_touch_rdy_count,
-                IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT);
-        if (data->event_mode_no_touch_rdy_count >=
-            IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT)
-        {
-          data->event_mode_watch_armed = false;
-          data->event_mode_relatch_attempted = true;
-          data->event_mode_no_touch_rdy_count = 0;
-          data->event_mode_relatch_wait_count = 0;
-          data->event_mode_relatch_retry_count = 0;
-          data->work_state = WORK_RELATCH_EVENT_MODE_DISABLE;
-          LOG_INF("Event Mode relatch: scheduled after %u no-touch RDY edges",
-                  IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT);
-        }
-      }
     }
 
     // =========================================================
@@ -2333,10 +2267,10 @@ static int iqs915x_init(const struct device *dev)
   data->init_pending_cfg = 0;
   data->confirmed_config_settings = 0;
   iqs915x_reset_event_mode_relatch_state(data);
-  // disabled-by-defaultでも初期化直後のEvent Mode監視まではActiveで動かし、
-  // 監視完了またはrelatch完了後にLP2へ移行する。
-  data->enabled = true;
-  data->lp2_pending = false;
+  // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、mode遷移後に
+  // Event Modeを再ラッチする。
+  data->enabled = !config->disabled_by_default;
+  data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
@@ -2496,8 +2430,6 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
   {
     // ===== 無効化: 即座にイベント破棄を開始し、LP2へ遷移 =====
     data->enabled = false;
-    data->work_state = WORK_READ_DATA;
-    iqs915x_reset_event_mode_relatch_state(data);
 
     // 進行中の操作を安全に解除
     // ドラッグ中の場合はボタンリリースを送信

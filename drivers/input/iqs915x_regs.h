@@ -491,10 +491,6 @@ struct iqs915x_data
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
     uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
     uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
-    bool event_mode_watch_armed;         // 初期化直後のEvent Mode再ラッチ監視中
-    bool event_mode_relatch_attempted;   // 初期化1回あたりの再ラッチ実行済み
-    bool event_mode_lp2_after_watch;     // disabled-by-default初期化後に監視完了でLP2へ移行
-    uint8_t event_mode_no_touch_rdy_count; // 無接触RDY連続回数
     uint8_t event_mode_relatch_wait_count; // EVENT_MODE clear後のRDY待機回数
     uint8_t event_mode_relatch_retry_count; // EVENT_MODE再有効化確認リトライ回数
 
