@@ -443,6 +443,9 @@ struct iqs915x_config
     uint16_t swipe_step;
     uint16_t swipe_threshold_numerator;
     uint16_t swipe_threshold_denominator;
+    uint16_t swipe_direction_settle_frames;
+    uint16_t swipe_direction_lock_numerator;
+    uint16_t swipe_direction_lock_denominator;
 
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
@@ -522,6 +525,7 @@ struct iqs915x_data
     int32_t swipe_last_centroid_y;
     bool swipe_centroid_valid;
     uint8_t swipe_active_fingers;
+    uint16_t swipe_valid_frames;
     bool swipe_triggered;
     bool multifinger_swipe_latched;
     bool scroll_sequence_active;

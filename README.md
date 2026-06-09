@@ -68,6 +68,9 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         swipe-step = <0>;
         swipe-threshold-numerator = <1>;
         swipe-threshold-denominator = <5>;
+        swipe-direction-settle-frames = <2>;
+        swipe-direction-lock-numerator = <3>;
+        swipe-direction-lock-denominator = <2>;
 
         switch-xy;
     };
@@ -84,8 +87,10 @@ used as a baseline (no cursor move), then relative movement is reported while
 
 When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
 the centroid of active fingers and emits one-shot private gesture input events
-based on the dominant swipe direction. One gesture emits only one press/release
-pair until fingers are released.
+based on the dominant swipe direction. The direction is locked only after the
+stable-finger baseline has settled and the dominant axis is sufficiently larger
+than the other axis. One gesture emits only one press/release pair until fingers
+are released.
 
 By default (`swipe-step = <0>`), swipe thresholds are computed from init-data
 X/Y resolutions (registers `0x11E6`/`0x11E8`) using the smaller resolution and
@@ -93,7 +98,9 @@ X/Y resolutions (registers `0x11E6`/`0x11E8`) using the smaller resolution and
 Default `1/5` means a gesture triggers at about 20% travel of the smaller axis,
 using the same raw-coordinate threshold for horizontal and vertical swipes. If
 you set `swipe-step` to a value > 0, that fixed threshold overrides the
-ratio-based calculation.
+ratio-based calculation. `swipe-direction-settle-frames` defaults to 2, and the
+default direction-lock ratio is 3/2, so the dominant axis must be about 1.5x the
+other axis before a 3/4-finger swipe direction is emitted.
 
 The driver reports these gestures using `IQS915X_INPUT_EV_GESTURE` with
 direction-specific codes from `<dt-bindings/input/iqs915x_gestures.h>`.

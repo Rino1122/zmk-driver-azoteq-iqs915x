@@ -223,6 +223,29 @@ properties:
       resolution when swipe-step is 0. Default 1/5 means trigger after about
       20% movement of the smaller axis.
 
+  swipe-direction-settle-frames:
+    type: int
+    default: 2
+    description: |
+      Number of post-baseline stable 3/4-finger frames to observe before the
+      driver may lock and emit a swipe direction. This filters touch-down
+      centroid noise before direction recognition.
+
+  swipe-direction-lock-numerator:
+    type: int
+    default: 3
+    description: |
+      Numerator of the dominant-axis lock ratio for 3/4-finger swipes. A swipe
+      emits only when the dominant axis is at least numerator/denominator times
+      the other axis.
+
+  swipe-direction-lock-denominator:
+    type: int
+    default: 2
+    description: |
+      Denominator of the dominant-axis lock ratio for 3/4-finger swipes.
+      Default 3/2 means the dominant axis must be about 1.5x the other axis.
+
   three-finger-swipe-up-key:
     type: int
     description: |

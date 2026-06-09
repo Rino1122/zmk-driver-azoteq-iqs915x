@@ -319,6 +319,7 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->swipe_last_centroid_y = 0;
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
+  data->swipe_valid_frames = 0;
   data->swipe_triggered = false;
   data->multifinger_swipe_latched = false;
   data->scroll_sequence_active = false;
@@ -334,6 +335,7 @@ static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
   data->swipe_last_centroid_y = 0;
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
+  data->swipe_valid_frames = 0;
   data->swipe_triggered = false;
 }
 
@@ -614,6 +616,12 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   int32_t dy;
   bool horizontal;
   int32_t axis_delta;
+  int32_t abs_dx;
+  int32_t abs_dy;
+  int32_t major_delta;
+  int32_t minor_delta;
+  uint16_t lock_num;
+  uint16_t lock_den;
   uint16_t axis_threshold;
   uint16_t gesture_code;
 
@@ -648,6 +656,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
     data->swipe_last_centroid_y = centroid_y;
     data->swipe_centroid_valid = true;
     data->swipe_active_fingers = stable_fingers;
+    data->swipe_valid_frames = 0;
     data->swipe_triggered = false;
     return true;
   }
@@ -662,12 +671,41 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   dx = centroid_x - data->swipe_last_centroid_x;
   dy = centroid_y - data->swipe_last_centroid_y;
 
-  horizontal = abs(dx) >= abs(dy);
+  if (data->swipe_valid_frames < UINT16_MAX)
+  {
+    data->swipe_valid_frames++;
+  }
+
+  if (data->swipe_valid_frames <= config->swipe_direction_settle_frames)
+  {
+    return true;
+  }
+
+  abs_dx = abs(dx);
+  abs_dy = abs(dy);
+  horizontal = abs_dx >= abs_dy;
   axis_delta = horizontal ? dx : dy;
+  major_delta = horizontal ? abs_dx : abs_dy;
+  minor_delta = horizontal ? abs_dy : abs_dx;
   axis_threshold = horizontal ? data->swipe_threshold_x : data->swipe_threshold_y;
 
   if (abs(axis_delta) < axis_threshold)
   {
+    return true;
+  }
+
+  lock_num = config->swipe_direction_lock_numerator > 0
+                 ? config->swipe_direction_lock_numerator
+                 : 3;
+  lock_den = config->swipe_direction_lock_denominator > 0
+                 ? config->swipe_direction_lock_denominator
+                 : 2;
+
+  if ((int64_t)major_delta * lock_den < (int64_t)minor_delta * lock_num)
+  {
+    LOG_DBG("Gesture direction undecided: %uF dx=%d dy=%d lock=%u/%u frames=%u",
+            stable_fingers, (int)dx, (int)dy, lock_num, lock_den,
+            data->swipe_valid_frames);
     return true;
   }
 
@@ -680,12 +718,14 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
   iqs915x_cancel_scroll_inertia(data);
   LOG_INF(
       "Gesture emit before: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u "
-      "flags=0x%04x sf=0x%04x tf=0x%04x latched=%d triggered=%d",
+      "lock=%u/%u frames=%u flags=0x%04x sf=0x%04x tf=0x%04x "
+      "latched=%d triggered=%d",
       stable_fingers,
       horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
       gesture_code, (int)dx, (int)dy, data->swipe_threshold_x,
-      data->swipe_threshold_y, stream->trackpad_flags, stream->gesture_sf,
-      stream->gesture_tf, data->multifinger_swipe_latched, data->swipe_triggered);
+      data->swipe_threshold_y, lock_num, lock_den, data->swipe_valid_frames,
+      stream->trackpad_flags, stream->gesture_sf, stream->gesture_tf,
+      data->multifinger_swipe_latched, data->swipe_triggered);
   iqs915x_emit_gesture_tap(data->dev, gesture_code);
   LOG_INF(
       "Gesture emit after: %uF %s gesture=%u dx=%d dy=%d flags=0x%04x sf=0x%04x "
@@ -2253,6 +2293,9 @@ static int iqs915x_init(const struct device *dev)
       .swipe_step = DT_INST_PROP_OR(n, swipe_step, 0),                                                                                                                                             \
       .swipe_threshold_numerator = DT_INST_PROP_OR(n, swipe_threshold_numerator, 1),                                                                                                               \
       .swipe_threshold_denominator = DT_INST_PROP_OR(n, swipe_threshold_denominator, 5),                                                                                                           \
+      .swipe_direction_settle_frames = DT_INST_PROP_OR(n, swipe_direction_settle_frames, 2),                                                                                                      \
+      .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
+      .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                                                                                                 \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
