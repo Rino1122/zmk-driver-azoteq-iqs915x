@@ -483,6 +483,7 @@ struct iqs915x_data
     uint8_t init_chunk_retry_count;      // 現在のinit-dataチャンク書き込みリトライ回数
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
     uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
+    uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;

@@ -1067,6 +1067,7 @@ static void iqs915x_restart_initialization(const struct device *dev,
   data->wait_count = 0;
   data->init_chunk_retry_count = 0;
   data->init_pending_cfg = 0;
+  data->confirmed_config_settings = 0;
   LOG_WRN("Init: restarting via software reset (%u/%u): %s",
           data->init_restart_count, IQS915X_INIT_MAX_RESTARTS, reason);
 }
@@ -1416,6 +1417,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       data->init_restart_count = 0;
       data->init_chunk_retry_count = 0;
       data->init_pending_cfg = 0;
+      data->confirmed_config_settings = cfg;
       LOG_INF("IQS915x initialization complete");
       break;
     }
@@ -1600,10 +1602,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // LOG_DBG("RDY: INFO_FLAGS raw=0x%04x", stream.info_flags);
-
-    // info_flagsに立っているビットを個別にDBGログ出力する（連続RDY原因調査用）
-    if (stream.info_flags != 0 && stream.info_flags != 0xEEEE)
+    // 連続RDY原因調査用。CONFIG_SETTINGSは追加I2C transactionを避けるため
+    // 初期化時のread-back確認値を表示する。
+    if (stream.info_flags != 0xEEEE)
     {
       // Charging Mode (bit2-0) のデコード
       static const char *const mode_names[] = {"ACTIVE", "IDLE_TOUCH", "IDLE",
@@ -1612,11 +1613,13 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
 
       LOG_DBG(
-          "info_flags=0x%04x trackpad_flags=0x%04x gesture_sf=0x%04x "
-          "gesture_tf=0x%04x rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
-          stream.info_flags, stream.trackpad_flags, stream.gesture_sf,
-          stream.gesture_tf, stream.rel_x, stream.rel_y, stream.abs_x,
-          stream.abs_y, mode_str,
+          "rdy_data cfg_cached=0x%04x info_flags=0x%04x "
+          "trackpad_flags=0x%04x gesture_sf=0x%04x gesture_tf=0x%04x "
+          "gesture_xy=(%u,%u) rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
+          data->confirmed_config_settings, stream.info_flags,
+          stream.trackpad_flags, stream.gesture_sf, stream.gesture_tf,
+          stream.gesture_x, stream.gesture_y, stream.rel_x, stream.rel_y,
+          stream.abs_x, stream.abs_y, mode_str,
           (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
           (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
           (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
@@ -1648,6 +1651,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->init_chunk_retry_count = 0;
       data->init_restart_count = 0;
       data->init_pending_cfg = 0;
+      data->confirmed_config_settings = 0;
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
       if (data->active_hold)
       {
@@ -2122,6 +2126,7 @@ static int iqs915x_init(const struct device *dev)
   data->init_chunk_retry_count = 0;
   data->init_restart_count = 0;
   data->init_pending_cfg = 0;
+  data->confirmed_config_settings = 0;
   // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、そうでなければ有効
   data->enabled = !config->disabled_by_default;
   data->lp2_pending = config->disabled_by_default;
