@@ -309,9 +309,7 @@ enum iqs915x_work_state
     WORK_ACK_RESET,       // リセットACK書き込み
     WORK_READ_DATA,       // トラックパッドデータ一括読み取り
     WORK_RELATCH_EVENT_MODE_DISABLE, // Event Mode再ラッチ: EVENT_MODE clear
-    WORK_RELATCH_EVENT_MODE_WAIT,    // Event Mode再ラッチ: RDY edge待機
     WORK_RELATCH_EVENT_MODE_ENABLE,  // Event Mode再ラッチ: EVENT_MODE set
-    WORK_RELATCH_EVENT_MODE_CONFIRM, // Event Mode再ラッチ: read-back確認
 };
 
 #define IQS915X_INERTIA_MOTION_HISTORY_SIZE 12
@@ -491,7 +489,6 @@ struct iqs915x_data
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
     uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
     uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
-    uint8_t event_mode_relatch_wait_count; // EVENT_MODE clear後のRDY待機回数
     uint8_t event_mode_relatch_retry_count; // EVENT_MODE再有効化確認リトライ回数
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）

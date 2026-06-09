@@ -47,7 +47,6 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_INIT_POST_WRITE_RDY_MARGIN 5
-#define IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES 5
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
@@ -56,15 +55,14 @@ static void iqs915x_restart_initialization(const struct device *dev,
 
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
 {
-  data->event_mode_relatch_wait_count = 0;
   data->event_mode_relatch_retry_count = 0;
 }
 
 static void iqs915x_schedule_event_mode_relatch(struct iqs915x_data *data,
                                                 const char *reason)
 {
-  data->event_mode_relatch_wait_count = 0;
   data->event_mode_relatch_retry_count = 0;
+  k_sem_reset(&data->rdy_sem);
   data->work_state = WORK_RELATCH_EVENT_MODE_DISABLE;
   LOG_INF("Event Mode relatch: scheduled after %s", reason);
 }
@@ -800,29 +798,23 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
     {
+      data->event_mode_relatch_retry_count++;
       LOG_ERR("Event Mode relatch: failed to disable Event Mode: %d", ret);
+      if (data->event_mode_relatch_retry_count >
+          IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
+      {
+        data->initialized = false;
+        iqs915x_restart_initialization(dev, "Event Mode relatch disable failed");
+      }
       return;
     }
 
     data->confirmed_config_settings = cfg;
-    data->event_mode_relatch_wait_count = 0;
-    data->work_state = WORK_RELATCH_EVENT_MODE_WAIT;
+    data->event_mode_relatch_retry_count = 0;
+    data->work_state = WORK_RELATCH_EVENT_MODE_ENABLE;
     LOG_INF("Event Mode relatch: disabling (CONFIG_SETTINGS=0x%04x)", cfg);
     break;
   }
-
-  case WORK_RELATCH_EVENT_MODE_WAIT:
-    data->event_mode_relatch_wait_count++;
-    LOG_INF("Event Mode relatch: wait %u/%u",
-            data->event_mode_relatch_wait_count,
-            IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES);
-    if (data->event_mode_relatch_wait_count >=
-        IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES)
-    {
-      data->event_mode_relatch_wait_count = 0;
-      data->work_state = WORK_RELATCH_EVENT_MODE_ENABLE;
-    }
-    break;
 
   case WORK_RELATCH_EVENT_MODE_ENABLE:
   {
@@ -832,55 +824,22 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
     {
+      data->event_mode_relatch_retry_count++;
       LOG_ERR("Event Mode relatch: failed to enable Event Mode: %d", ret);
+      if (data->event_mode_relatch_retry_count >
+          IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
+      {
+        data->initialized = false;
+        iqs915x_restart_initialization(dev, "Event Mode relatch enable failed");
+      }
       return;
     }
 
     data->confirmed_config_settings = cfg;
-    data->work_state = WORK_RELATCH_EVENT_MODE_CONFIRM;
+    data->event_mode_relatch_retry_count = 0;
+    data->work_state = WORK_READ_DATA;
     LOG_INF("Event Mode relatch: enabling (CONFIG_SETTINGS=0x%04x)", cfg);
-    break;
-  }
-
-  case WORK_RELATCH_EVENT_MODE_CONFIRM:
-  {
-    uint16_t cfg = 0;
-
-    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
-    if (ret < 0)
-    {
-      LOG_ERR("Event Mode relatch: failed to confirm Event Mode: %d", ret);
-      return;
-    }
-
-    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
-        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
-    {
-      data->confirmed_config_settings = cfg;
-      data->event_mode_relatch_retry_count = 0;
-      data->work_state = WORK_READ_DATA;
-      LOG_INF("Event Mode relatch: confirmed (CONFIG_SETTINGS=0x%04x)", cfg);
-      break;
-    }
-
-    data->event_mode_relatch_retry_count++;
-    if (data->event_mode_relatch_retry_count >
-        IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
-    {
-      LOG_ERR("Event Mode relatch: Event Mode did not stick "
-              "(CONFIG_SETTINGS=0x%04x)",
-              cfg);
-      data->initialized = false;
-      iqs915x_restart_initialization(dev, "Event Mode relatch failed");
-      break;
-    }
-
-    data->confirmed_config_settings = cfg;
-    data->work_state = WORK_RELATCH_EVENT_MODE_ENABLE;
-    LOG_WRN("Event Mode relatch: CONFIG_SETTINGS missing required bits "
-            "(0x%04x), retry %u/%u",
-            cfg, data->event_mode_relatch_retry_count,
-            IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES);
+    LOG_INF("Event Mode relatch: complete");
     break;
   }
 
@@ -1750,9 +1709,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     k_sem_take(&data->rdy_sem, K_FOREVER);
 
     if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
-        data->work_state == WORK_RELATCH_EVENT_MODE_WAIT ||
-        data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE ||
-        data->work_state == WORK_RELATCH_EVENT_MODE_CONFIRM)
+        data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE)
     {
       iqs915x_handle_event_mode_relatch_step(dev);
       continue;
