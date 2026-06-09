@@ -289,12 +289,16 @@ enum iqs915x_init_step
     INIT_SOFTWARE_RESET,      // ソフトウェアリセット発行
     INIT_WAIT_SOFTWARE_RESET, // ソフトウェアリセット完了待機
     INIT_ACK_RESET,           // リセットACK
+    INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
     INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
+    INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_VERIFY_EVENT_MODE,   // Event Mode有効確認（未設定なら強制設定）
-    INIT_VERIFY_RESET,        // リセット状態確認（ダミー読み取り）
-    INIT_FINAL_ACK_RESET,     // 最終リセットACK（Show Resetフラグクリア）
-    INIT_WAIT_REATI,          // Re-ATI完了待機（SHOW_RESETクリアを確認）
+    INIT_SET_EVENT_MODE,      // Event Mode + Manual Control強制設定
+    INIT_CONFIRM_EVENT_MODE,  // 強制設定後のEvent Mode再確認
+    INIT_COMPLETE_READ,       // 初期化完了前の最終読み取り
+    INIT_WAIT_REATI,          // TP Re-ATI完了待機
     INIT_COMPLETE,            // 初期化完了
+    INIT_FAILED,              // 初期化失敗（上限超過）
 };
 
 // 通常動作時のワークハンドラステート
@@ -475,6 +479,9 @@ struct iqs915x_data
     bool initialized;                   // 初期化完了フラグ
     uint16_t init_data_offset;          // init-data書き込み進捗（バイトオフセット）
     uint8_t wait_count;                 // SW ResetやRe-ATIなどの待機リトライカウンタ
+    uint8_t init_chunk_retry_count;      // 現在のinit-dataチャンク書き込みリトライ回数
+    uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
+    uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;

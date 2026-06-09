@@ -41,6 +41,11 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
 #define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
+#define IQS915X_INIT_CHUNK_WRITE_MAX_RETRIES 3
+#define IQS915X_INIT_MAX_RESTARTS 3
+#define IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT 10
+#define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
+#define IQS915X_INIT_REATI_MAX_WAIT 60
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 
@@ -189,6 +194,20 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
   memcpy(&buf[2], data, len);
 
   return i2c_write_dt(&config->i2c, buf, len + 2);
+}
+
+static int iqs915x_read_block(const struct device *dev, uint16_t reg,
+                              uint8_t *data, uint16_t len)
+{
+  const struct iqs915x_config *config = dev->config;
+  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
+
+  if (len > IQS915X_INIT_WRITE_CHUNK_SIZE)
+  {
+    return -EINVAL;
+  }
+
+  return i2c_write_read_dt(&config->i2c, reg_addr, sizeof(reg_addr), data, len);
 }
 
 /* ============================================================
@@ -880,6 +899,176 @@ static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
   }
 }
 
+static int iqs915x_prepare_init_chunk(const struct device *dev,
+                                      uint16_t offset, uint16_t *addr,
+                                      uint16_t *chunk, uint8_t *buffer,
+                                      bool log_changes)
+{
+  const struct iqs915x_config *config = dev->config;
+
+  if (!config->init_data || config->init_data_len == 0 ||
+      offset >= config->init_data_len)
+  {
+    return -EINVAL;
+  }
+
+  if (offset < IQS915X_INIT_DATA_MAIN_SIZE)
+  {
+    uint16_t remaining = IQS915X_INIT_DATA_MAIN_SIZE - offset;
+    *chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
+    *addr = IQS915X_INIT_DATA_BASE_ADDR + offset;
+    memcpy(buffer, &config->init_data[offset], *chunk);
+
+    for (int i = 0; i < *chunk; i++)
+    {
+      uint16_t current_addr = *addr + i;
+      uint8_t original = buffer[i];
+      bool dts_patch = false;
+
+      // === 強制パッチ: ドライバ正常動作に必須のビット修正 ===
+      if (current_addr == IQS915X_SYSTEM_CONTROL)
+      {
+        // ACK_RESET(bit7), REATI_ALP(bit6), REATI_TP(bit5) は
+        // 初期化シーケンス中に誤って実行されないよう強制クリアする
+        buffer[i] &= ~0xE0;
+      }
+      else if (current_addr == IQS915X_CONFIG_SETTINGS)
+      {
+        // TERMINATE_COMMS(bit6), FORCE_COMMS_METHOD(bit4) は
+        // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアし、
+        // MANUAL_CONTROL(bit7) は常に有効化する
+        buffer[i] = (buffer[i] & ~0x50) | 0x80;
+      }
+      else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
+      {
+        // 16-bit little-endian: high byte bit0 == CONFIG_SETTINGS bit8
+        // (EVENT_MODE)。必須機能のため強制セットする。
+        buffer[i] |= 0x01;
+      }
+      // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
+      else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
+               config->report_rate_ms > 0)
+      {
+        buffer[i] = config->report_rate_ms & 0xFF;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE + 1 &&
+               config->report_rate_ms > 0)
+      {
+        buffer[i] = (config->report_rate_ms >> 8) & 0xFF;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
+      {
+        uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
+        uint8_t set = 0;
+        if (config->flip_x)
+          set |= IQS915X_FLIP_X;
+        if (config->flip_y)
+          set |= IQS915X_FLIP_Y;
+        if (config->switch_xy)
+          set |= IQS915X_SWITCH_XY_AXIS;
+        buffer[i] = (buffer[i] & ~clr) | set;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
+      {
+        // 影響ビットはすべて下位バイト: bit0=SINGLE_TAP, bit3=PRESS_AND_HOLD
+        uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
+        uint8_t set = 0;
+        if (config->one_finger_tap)
+          set |= (uint8_t)IQS915X_SINGLE_TAP;
+        // PRESS_AND_HOLDはSWエミュレートのため常にHWクリア
+        buffer[i] = (buffer[i] & ~clr) | set;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
+      {
+        // 影響ビットはすべて下位バイト: bit0=TWO_FINGER_TAP, bit6-7=SCROLL_V/H
+        uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
+        uint8_t set = 0;
+        if (config->two_finger_tap)
+          set |= (uint8_t)IQS915X_TWO_FINGER_TAP;
+        if (config->scroll)
+          set |= (uint8_t)IQS915X_SCROLL;
+        buffer[i] = (buffer[i] & ~clr) | set;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_TAP_TIME && config->tap_time > 0)
+      {
+        buffer[i] = config->tap_time & 0xFF;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_TAP_TIME + 1 && config->tap_time > 0)
+      {
+        buffer[i] = (config->tap_time >> 8) & 0xFF;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_HOLD_TIME)
+      {
+        buffer[i] = config->press_and_hold_time & 0xFF;
+        dts_patch = true;
+      }
+      else if (current_addr == IQS915X_HOLD_TIME + 1)
+      {
+        buffer[i] = (config->press_and_hold_time >> 8) & 0xFF;
+        dts_patch = true;
+      }
+
+      // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
+      if (log_changes && buffer[i] != original)
+      {
+        if (dts_patch)
+        {
+          LOG_WRN("Init: init-data pre-patched by DTS at reg 0x%04x: "
+                  "0x%02x -> 0x%02x",
+                  current_addr, original, buffer[i]);
+        }
+        else
+        {
+          LOG_WRN("Init: init-data overridden at reg 0x%04x: "
+                  "init-data=0x%02x -> forced=0x%02x",
+                  current_addr, original, buffer[i]);
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  uint16_t eng_offset = offset - IQS915X_INIT_DATA_MAIN_SIZE;
+  uint16_t remaining = IQS915X_INIT_DATA_ENG_SIZE - eng_offset;
+
+  *chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
+  *addr = IQS915X_INIT_DATA_ENG_ADDR + eng_offset;
+  memcpy(buffer, &config->init_data[offset], *chunk);
+
+  return 0;
+}
+
+static void iqs915x_restart_initialization(const struct device *dev,
+                                           const char *reason)
+{
+  struct iqs915x_data *data = dev->data;
+
+  if (data->init_restart_count >= IQS915X_INIT_MAX_RESTARTS)
+  {
+    LOG_ERR("Init: restart limit reached after %u attempts (%s). Halting init.",
+            data->init_restart_count, reason);
+    data->init_step = INIT_FAILED;
+    return;
+  }
+
+  data->init_restart_count++;
+  data->init_step = INIT_SOFTWARE_RESET;
+  data->init_data_offset = 0;
+  data->wait_count = 0;
+  data->init_chunk_retry_count = 0;
+  data->init_pending_cfg = 0;
+  LOG_WRN("Init: restarting via software reset (%u/%u): %s",
+          data->init_restart_count, IQS915X_INIT_MAX_RESTARTS, reason);
+}
+
 /* ============================================================
  * 初期化ステートマシン
  * ============================================================ */
@@ -916,6 +1105,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
               info_flags);
       data->init_step = INIT_WRITE_INIT_DATA;
       data->init_data_offset = 0;
+      data->init_chunk_retry_count = 0;
     }
     else
     {
@@ -966,6 +1156,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_INF("Init: SW Reset complete, SHOW_RESET is set");
       data->init_step = INIT_WRITE_INIT_DATA;
       data->init_data_offset = 0;
+      data->init_chunk_retry_count = 0;
     }
     else
     {
@@ -985,8 +1176,56 @@ static void iqs915x_init_step_handler(const struct device *dev)
       return;
     }
     LOG_DBG("Init: Sent initial Ack Reset and Re-ATI");
-    data->init_step = INIT_WAIT_REATI;
+    data->init_step = INIT_VERIFY_SHOW_RESET_CLEAR;
     data->wait_count = 0;
+    break;
+  }
+
+  case INIT_VERIFY_SHOW_RESET_CLEAR:
+  {
+    uint16_t info_flags = 0;
+
+    data->wait_count++;
+    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to read Info Flags after ACK reset: %d", ret);
+      return;
+    }
+
+    if (info_flags == 0xEEEE)
+    {
+      LOG_DBG("Init: IC busy (0xEEEE) while waiting for SHOW_RESET clear");
+      break;
+    }
+
+    if ((info_flags & IQS915X_SHOW_RESET) == 0)
+    {
+      LOG_INF("Init: SHOW_RESET cleared (flags=0x%04x)", info_flags);
+      if (info_flags & IQS915X_REATI_OCCURRED)
+      {
+        LOG_INF("Init: TP Re-ATI occurred while confirming SHOW_RESET clear");
+        data->init_step = INIT_VERIFY_EVENT_MODE;
+      }
+      else
+      {
+        data->init_step = INIT_WAIT_REATI;
+        data->wait_count = 0;
+      }
+      break;
+    }
+
+    if (data->wait_count > IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT)
+    {
+      LOG_ERR("Init: SHOW_RESET did not clear after ACK reset (flags=0x%04x)",
+              info_flags);
+      iqs915x_restart_initialization(dev, "SHOW_RESET stuck after ACK_RESET");
+      break;
+    }
+
+    LOG_DBG("Init: Waiting for SHOW_RESET clear (flags=0x%04x, cycle=%d/%d)",
+            info_flags, data->wait_count,
+            IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT);
     break;
   }
 
@@ -1002,156 +1241,38 @@ static void iqs915x_init_step_handler(const struct device *dev)
 
     uint16_t offset = data->init_data_offset;
     uint16_t total = config->init_data_len;
+    uint16_t addr = 0;
+    uint16_t chunk = 0;
+    uint8_t buffer[IQS915X_INIT_WRITE_CHUNK_SIZE];
 
-    if (offset < IQS915X_INIT_DATA_MAIN_SIZE)
+    ret = iqs915x_prepare_init_chunk(dev, offset, &addr, &chunk, buffer,
+                                     data->init_chunk_retry_count == 0);
+    if (ret < 0)
     {
-      uint16_t remaining = IQS915X_INIT_DATA_MAIN_SIZE - offset;
-      uint16_t chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
-      uint16_t addr = IQS915X_INIT_DATA_BASE_ADDR + offset;
-
-      uint8_t buffer[IQS915X_INIT_WRITE_CHUNK_SIZE];
-      memcpy(buffer, &config->init_data[offset], chunk);
-
-      for (int i = 0; i < chunk; i++)
-      {
-        uint16_t current_addr = addr + i;
-        uint8_t original = buffer[i];
-        bool dts_patch = false;
-
-        // === 強制パッチ: ドライバ正常動作に必須のビット修正 ===
-        if (current_addr == IQS915X_SYSTEM_CONTROL)
-        {
-          // ACK_RESET(bit7), REATI_ALP(bit6), REATI_TP(bit5) は
-          // 初期化シーケンス中に誤って実行されないよう強制クリアする
-          buffer[i] &= ~0xE0;
-        }
-        else if (current_addr == IQS915X_CONFIG_SETTINGS)
-        {
-          // TERMINATE_COMMS(bit6), FORCE_COMMS_METHOD(bit4) は
-          // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアし、
-          // MANUAL_CONTROL(bit7) は常に有効化する
-          buffer[i] = (buffer[i] & ~0x50) | 0x80;
-        }
-        else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
-        {
-          // EVENT_MODE(bit8, 上位バイトのbit0) は必須機能のため強制セットする
-          buffer[i] |= 0x01;
-        }
-        // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
-        else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
-                 config->report_rate_ms > 0)
-        {
-          buffer[i] = config->report_rate_ms & 0xFF;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE + 1 &&
-                 config->report_rate_ms > 0)
-        {
-          buffer[i] = (config->report_rate_ms >> 8) & 0xFF;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
-        {
-          uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
-          uint8_t set = 0;
-          if (config->flip_x)
-            set |= IQS915X_FLIP_X;
-          if (config->flip_y)
-            set |= IQS915X_FLIP_Y;
-          if (config->switch_xy)
-            set |= IQS915X_SWITCH_XY_AXIS;
-          buffer[i] = (buffer[i] & ~clr) | set;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
-        {
-          // 影響ビットはすべて下位バイト: bit0=SINGLE_TAP, bit3=PRESS_AND_HOLD
-          uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
-          uint8_t set = 0;
-          if (config->one_finger_tap)
-            set |= (uint8_t)IQS915X_SINGLE_TAP;
-          // PRESS_AND_HOLDはSWエミュレートのため常にHWクリア
-          buffer[i] = (buffer[i] & ~clr) | set;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
-        {
-          // 影響ビットはすべて下位バイト: bit0=TWO_FINGER_TAP, bit6-7=SCROLL_V/H
-          uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
-          uint8_t set = 0;
-          if (config->two_finger_tap)
-            set |= (uint8_t)IQS915X_TWO_FINGER_TAP;
-          if (config->scroll)
-            set |= (uint8_t)IQS915X_SCROLL;
-          buffer[i] = (buffer[i] & ~clr) | set;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_TAP_TIME && config->tap_time > 0)
-        {
-          buffer[i] = config->tap_time & 0xFF;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_TAP_TIME + 1 && config->tap_time > 0)
-        {
-          buffer[i] = (config->tap_time >> 8) & 0xFF;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_HOLD_TIME)
-        {
-          buffer[i] = config->press_and_hold_time & 0xFF;
-          dts_patch = true;
-        }
-        else if (current_addr == IQS915X_HOLD_TIME + 1)
-        {
-          buffer[i] = (config->press_and_hold_time >> 8) & 0xFF;
-          dts_patch = true;
-        }
-
-        // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
-        if (buffer[i] != original)
-        {
-          if (dts_patch)
-          {
-            LOG_WRN("Init: init-data pre-patched by DTS at reg 0x%04x: "
-                    "0x%02x -> 0x%02x",
-                    current_addr, original, buffer[i]);
-          }
-          else
-          {
-            LOG_WRN("Init: init-data overridden at reg 0x%04x: "
-                    "init-data=0x%02x -> forced=0x%02x",
-                    current_addr, original, buffer[i]);
-          }
-        }
-      }
-
-      ret = iqs915x_write_block(dev, addr, buffer, chunk);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
-        return; // 次のRDYでリトライ
-      }
-      LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr,
-              offset + chunk, total);
-      data->init_data_offset = offset + chunk;
+      LOG_ERR("Failed to prepare init-data at offset %u: %d", offset, ret);
+      iqs915x_restart_initialization(dev, "invalid init-data offset");
+      break;
     }
-    else if (offset < total)
+
+    ret = iqs915x_write_block(dev, addr, buffer, chunk);
+    if (ret < 0)
     {
-      uint16_t eng_offset = offset - IQS915X_INIT_DATA_MAIN_SIZE;
-      uint16_t remaining = IQS915X_INIT_DATA_ENG_SIZE - eng_offset;
-      uint16_t chunk = MIN(remaining, IQS915X_INIT_WRITE_CHUNK_SIZE);
-      uint16_t addr = IQS915X_INIT_DATA_ENG_ADDR + eng_offset;
-
-      ret = iqs915x_write_block(dev, addr, &config->init_data[offset], chunk);
-      if (ret < 0)
+      data->init_chunk_retry_count++;
+      LOG_ERR("Failed to write init-data at 0x%04x: %d (retry %u/%u)",
+              addr, ret, data->init_chunk_retry_count,
+              IQS915X_INIT_CHUNK_WRITE_MAX_RETRIES);
+      if (data->init_chunk_retry_count >
+          IQS915X_INIT_CHUNK_WRITE_MAX_RETRIES)
       {
-        LOG_ERR("Failed to write init-data at 0x%04x: %d", addr, ret);
-        return;
+        data->init_step = INIT_VERIFY_INIT_CHUNK;
       }
-      LOG_DBG("Init: Wrote %d eng bytes at 0x%04x (%d/%d)", chunk, addr,
-              offset + chunk, total);
-      data->init_data_offset = offset + chunk;
+      return; // 次のRDYで同じチャンクをリトライまたはread-backする
     }
+
+    LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr,
+            offset + chunk, total);
+    data->init_data_offset = offset + chunk;
+    data->init_chunk_retry_count = 0;
 
     if (data->init_data_offset >= total)
     {
@@ -1162,11 +1283,69 @@ static void iqs915x_init_step_handler(const struct device *dev)
     break;
   }
 
+  case INIT_VERIFY_INIT_CHUNK:
+  {
+    uint16_t offset = data->init_data_offset;
+    uint16_t addr = 0;
+    uint16_t chunk = 0;
+    uint8_t expected[IQS915X_INIT_WRITE_CHUNK_SIZE];
+    uint8_t actual[IQS915X_INIT_WRITE_CHUNK_SIZE];
+
+    ret = iqs915x_prepare_init_chunk(dev, offset, &addr, &chunk, expected,
+                                     false);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to prepare init-data verify chunk at offset %u: %d",
+              offset, ret);
+      iqs915x_restart_initialization(dev, "invalid init-data verify offset");
+      break;
+    }
+
+    ret = iqs915x_read_block(dev, addr, actual, chunk);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to read back init-data at 0x%04x: %d", addr, ret);
+      iqs915x_restart_initialization(dev, "init-data read-back failed");
+      break;
+    }
+
+    if (memcmp(expected, actual, chunk) == 0)
+    {
+      LOG_WRN("Init: write error at 0x%04x but read-back matches; continuing",
+              addr);
+      data->init_data_offset = offset + chunk;
+      data->init_chunk_retry_count = 0;
+      if (data->init_data_offset >= config->init_data_len)
+      {
+        LOG_INF("Init: All init-data written (%d bytes)", config->init_data_len);
+        data->init_step = INIT_ACK_RESET;
+      }
+      else
+      {
+        data->init_step = INIT_WRITE_INIT_DATA;
+      }
+      break;
+    }
+
+    for (int i = 0; i < chunk; i++)
+    {
+      if (expected[i] != actual[i])
+      {
+        LOG_ERR("Init: init-data mismatch at reg 0x%04x: expected=0x%02x actual=0x%02x",
+                addr + i, expected[i], actual[i]);
+        break;
+      }
+    }
+    iqs915x_restart_initialization(dev, "init-data read-back mismatch");
+    break;
+  }
+
   case INIT_VERIFY_EVENT_MODE:
   {
     // DTS設定完了後、Event ModeとManual Controlが有効になっているかを確認する。
     // init-dataバッファパッチやDTS設定で設定済のはずだが、
-    // 実際にレジスタを読み返して確認する。
+    // 実際にレジスタを読み返して確認する。このstateでは読み取りのみ行い、
+    // 必要な書き込みは次RDYのINIT_SET_EVENT_MODEで行う。
     uint16_t cfg = 0;
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
     if (ret < 0)
@@ -1179,27 +1358,71 @@ static void iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_DBG("Init: Event Mode + Manual Control confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
+      data->init_step = INIT_COMPLETE_READ;
     }
     else
     {
-      // 必須ビットが欠けている場合は警告を出して強制設定する
       LOG_WRN("Init: CONFIG_SETTINGS missing required bits (0x%04x). "
-              "Forcing Event Mode + Manual Control.",
+              "Will force Event Mode + Manual Control.",
               cfg);
-      ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
-                                cfg | IQS915X_EVENT_MODE |
-                                    IQS915X_MANUAL_CONTROL);
-      if (ret < 0)
-      {
-        LOG_ERR("Failed to force Event Mode + Manual Control: %d", ret);
-        return;
-      }
+      data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+      data->wait_count = 0;
+      data->init_step = INIT_SET_EVENT_MODE;
     }
-    data->init_step = INIT_VERIFY_RESET;
     break;
   }
 
-  case INIT_VERIFY_RESET:
+  case INIT_SET_EVENT_MODE:
+    ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS,
+                              data->init_pending_cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to force Event Mode + Manual Control: %d", ret);
+      return;
+    }
+    data->init_step = INIT_CONFIRM_EVENT_MODE;
+    break;
+
+  case INIT_CONFIRM_EVENT_MODE:
+  {
+    uint16_t cfg = 0;
+
+    data->wait_count++;
+    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to confirm CONFIG_SETTINGS: %d", ret);
+      return;
+    }
+
+    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
+        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
+    {
+      LOG_INF("Init: Event Mode + Manual Control confirmed after force "
+              "(CONFIG_SETTINGS=0x%04x)",
+              cfg);
+      data->init_step = INIT_COMPLETE_READ;
+      break;
+    }
+
+    if (data->wait_count > IQS915X_INIT_EVENT_MODE_MAX_RETRIES)
+    {
+      LOG_ERR("Init: Event Mode + Manual Control did not stick "
+              "(CONFIG_SETTINGS=0x%04x)",
+              cfg);
+      iqs915x_restart_initialization(dev, "Event Mode verification failed");
+      break;
+    }
+
+    LOG_WRN("Init: CONFIG_SETTINGS still missing required bits (0x%04x), "
+            "retrying force (%d/%d)",
+            cfg, data->wait_count, IQS915X_INIT_EVENT_MODE_MAX_RETRIES);
+    data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+    data->init_step = INIT_SET_EVENT_MODE;
+    break;
+  }
+
+  case INIT_COMPLETE_READ:
   {
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
@@ -1208,20 +1431,21 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to verify reset: %d", ret);
       return;
     }
-    LOG_DBG("Init: Verify reset flags: 0x%04x", stream.info_flags);
-    // 初期化が完了していればこれ以上のACK_RESETは不要
+    if (stream.info_flags & IQS915X_SHOW_RESET)
+    {
+      LOG_ERR("Init: SHOW_RESET is set during final read (flags=0x%04x)",
+              stream.info_flags);
+      iqs915x_restart_initialization(dev, "SHOW_RESET set during final read");
+      break;
+    }
+    LOG_DBG("Init: Final read flags: 0x%04x", stream.info_flags);
     data->init_step = INIT_COMPLETE;
     data->initialized = true;
     data->work_state = WORK_READ_DATA;
     data->last_info_flags = stream.info_flags;
+    data->init_restart_count = 0;
+    data->init_chunk_retry_count = 0;
     LOG_INF("IQS915x initialization complete");
-    break;
-  }
-
-  case INIT_FINAL_ACK_RESET:
-  {
-    // 古いコードですが安全のため残します
-    data->init_step = INIT_WAIT_REATI;
     break;
   }
 
@@ -1245,34 +1469,43 @@ static void iqs915x_init_step_handler(const struct device *dev)
       break;
     }
 
-    // REATI_OCCURRED (bit4) フラグでRe-ATI完了を検出する
+    // REATI_OCCURRED (bit4) フラグでTP Re-ATI完了を検出する。
+    // ALP Re-ATIはLP1/LP2で実行されるため、初期化完了の必須条件にしない。
     // このフラグはRe-ATIが実行されたRDYサイクルで1回だけセットされる
     if (stream.info_flags & IQS915X_REATI_OCCURRED)
     {
-      LOG_INF("Init: Re-ATI occurred (flags=0x%04x) after %d cycles",
+      LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
       // Re-ATI完了後はDTS設定は既にinit-dataに事前適用済みのため、設定確認へ進む
       data->init_step = INIT_VERIFY_EVENT_MODE;
       break;
     }
 
-    if (data->wait_count > 60)
+    if (stream.info_flags & IQS915X_ALP_REATI_OCCURRED)
     {
-      // タイムアウト: Re-ATIが検出できなかったが次のステップへ進む
-      LOG_WRN("Init: Re-ATI timeout after %d cycles (flags=0x%04x), proceeding "
-              "anyway",
+      LOG_DBG("Init: ALP Re-ATI occurred while waiting for TP Re-ATI "
+              "(flags=0x%04x)",
+              stream.info_flags);
+    }
+
+    if (data->wait_count > IQS915X_INIT_REATI_MAX_WAIT)
+    {
+      LOG_ERR("Init: TP Re-ATI timeout after %d cycles (flags=0x%04x)",
               data->wait_count, stream.info_flags);
-      data->init_step = INIT_VERIFY_EVENT_MODE;
+      iqs915x_restart_initialization(dev, "TP Re-ATI timeout");
       break;
     }
 
     // Re-ATIはまだ発生していない、次のRDYで再確認
-    LOG_DBG("Init: Waiting for Re-ATI (flags=0x%04x, cycle=%d/60)",
-            stream.info_flags, data->wait_count);
+    LOG_DBG("Init: Waiting for TP Re-ATI (flags=0x%04x, cycle=%d/%d)",
+            stream.info_flags, data->wait_count, IQS915X_INIT_REATI_MAX_WAIT);
     break;
   }
 
   case INIT_COMPLETE:
+    break;
+
+  case INIT_FAILED:
     break;
   }
 }
@@ -1403,7 +1636,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     // IQS915xのランタイムリセット検出
-    // INIT_WAIT_REATIステップでSHOW_RESETクリアを確認済みなので、
+    // 初期化中のINIT_VERIFY_SHOW_RESET_CLEAR/INIT_COMPLETE_READで
+    // SHOW_RESETクリアを確認済みなので、
     // 通常モードでSHOW_RESETが立っている場合は真のランタイムリセット。
     if (stream.info_flags & IQS915X_SHOW_RESET)
     {
@@ -1413,6 +1647,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->initialized = false;
       data->init_step = INIT_CHECK_SHOW_RESET;
       data->init_data_offset = 0;
+      data->wait_count = 0;
+      data->init_chunk_retry_count = 0;
+      data->init_restart_count = 0;
+      data->init_pending_cfg = 0;
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
       if (data->active_hold)
       {
@@ -1882,6 +2120,11 @@ static int iqs915x_init(const struct device *dev)
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->work_state = WORK_READ_DATA;
   data->initialized = false;
+  data->init_data_offset = 0;
+  data->wait_count = 0;
+  data->init_chunk_retry_count = 0;
+  data->init_restart_count = 0;
+  data->init_pending_cfg = 0;
   // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、そうでなければ有効
   data->enabled = !config->disabled_by_default;
   data->lp2_pending = config->disabled_by_default;
