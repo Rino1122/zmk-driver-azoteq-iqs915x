@@ -44,7 +44,7 @@
 - `iqs915x.c` 冒頭コメントには「raw read を使う」とある一方、実装の `iqs915x_read_stream()` は `i2c_write_read_dt()` で `IQS915X_REL_X` から 44 bytes を読んでいます。I2C シーケンス前提を変更する場合はコメントと実装を必ず同期してください。
 - `INIT_FINAL_ACK_RESET` と `INIT_VERIFY_RESET` 付近には古いステップが残っています。初期化 sequence を触るときは、到達可能な state と実機での SHOW_RESET/Re-ATI 挙動を確認してください。
 - `.gitignore` で `docs/` は無視されています。ローカルには datasheet や調整メモがある場合がありますが、追跡済みファイルとしては扱わないでください。
-- Zephyr/ZMK のビルド環境はこのリポジトリ単体には含まれていません。変更確認は、利用側 firmware workspace から west/ZMK build で行う前提です。
+- Zephyr/ZMK のビルド環境はこのリポジトリ単体には含まれていません。変更確認は、利用側 firmware workspace から ZMK build で行う前提です。ローカルでのwestビルドは行わないこと。
 
 ## 作業時の指針
 
