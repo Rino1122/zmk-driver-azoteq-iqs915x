@@ -47,8 +47,22 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_INIT_POST_WRITE_RDY_MARGIN 5
+#define IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT 3
+#define IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES 5
+#define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
+static void iqs915x_restart_initialization(const struct device *dev,
+                                           const char *reason);
+
+static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
+{
+  data->event_mode_watch_armed = false;
+  data->event_mode_relatch_attempted = false;
+  data->event_mode_no_touch_rdy_count = 0;
+  data->event_mode_relatch_wait_count = 0;
+  data->event_mode_relatch_retry_count = 0;
+}
 
 /* ============================================================
  * I2C通信関数
@@ -767,6 +781,109 @@ static int iqs915x_write_power_mode(const struct device *dev, uint16_t mode)
   return 0;
 }
 
+static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
+{
+  struct iqs915x_data *data = dev->data;
+  int ret;
+
+  switch (data->work_state)
+  {
+  case WORK_RELATCH_EVENT_MODE_DISABLE:
+  {
+    uint16_t cfg = data->confirmed_config_settings & ~IQS915X_EVENT_MODE;
+
+    ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Event Mode relatch: failed to disable Event Mode: %d", ret);
+      return;
+    }
+
+    data->confirmed_config_settings = cfg;
+    data->event_mode_relatch_wait_count = 0;
+    data->work_state = WORK_RELATCH_EVENT_MODE_WAIT;
+    LOG_INF("Event Mode relatch: disabling (CONFIG_SETTINGS=0x%04x)", cfg);
+    break;
+  }
+
+  case WORK_RELATCH_EVENT_MODE_WAIT:
+    data->event_mode_relatch_wait_count++;
+    LOG_INF("Event Mode relatch: wait %u/%u",
+            data->event_mode_relatch_wait_count,
+            IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES);
+    if (data->event_mode_relatch_wait_count >=
+        IQS915X_EVENT_MODE_RELATCH_WAIT_EDGES)
+    {
+      data->event_mode_relatch_wait_count = 0;
+      data->work_state = WORK_RELATCH_EVENT_MODE_ENABLE;
+    }
+    break;
+
+  case WORK_RELATCH_EVENT_MODE_ENABLE:
+  {
+    uint16_t cfg = data->confirmed_config_settings |
+                   IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+
+    ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Event Mode relatch: failed to enable Event Mode: %d", ret);
+      return;
+    }
+
+    data->confirmed_config_settings = cfg;
+    data->work_state = WORK_RELATCH_EVENT_MODE_CONFIRM;
+    LOG_INF("Event Mode relatch: enabling (CONFIG_SETTINGS=0x%04x)", cfg);
+    break;
+  }
+
+  case WORK_RELATCH_EVENT_MODE_CONFIRM:
+  {
+    uint16_t cfg = 0;
+
+    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Event Mode relatch: failed to confirm Event Mode: %d", ret);
+      return;
+    }
+
+    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
+        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
+    {
+      data->confirmed_config_settings = cfg;
+      data->event_mode_relatch_retry_count = 0;
+      data->work_state = WORK_READ_DATA;
+      LOG_INF("Event Mode relatch: confirmed (CONFIG_SETTINGS=0x%04x)", cfg);
+      break;
+    }
+
+    data->event_mode_relatch_retry_count++;
+    if (data->event_mode_relatch_retry_count >
+        IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
+    {
+      LOG_ERR("Event Mode relatch: Event Mode did not stick "
+              "(CONFIG_SETTINGS=0x%04x)",
+              cfg);
+      data->initialized = false;
+      iqs915x_restart_initialization(dev, "Event Mode relatch failed");
+      break;
+    }
+
+    data->confirmed_config_settings = cfg;
+    data->work_state = WORK_RELATCH_EVENT_MODE_ENABLE;
+    LOG_WRN("Event Mode relatch: CONFIG_SETTINGS missing required bits "
+            "(0x%04x), retry %u/%u",
+            cfg, data->event_mode_relatch_retry_count,
+            IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES);
+    break;
+  }
+
+  default:
+    break;
+  }
+}
+
 /* ============================================================
  * ボタンリリース遅延処理
  * ============================================================ */
@@ -1108,6 +1225,7 @@ static void iqs915x_restart_initialization(const struct device *dev,
   data->init_chunk_retry_count = 0;
   data->init_pending_cfg = 0;
   data->confirmed_config_settings = 0;
+  iqs915x_reset_event_mode_relatch_state(data);
   LOG_WRN("Init: restarting via software reset (%u/%u): %s",
           data->init_restart_count, IQS915X_INIT_MAX_RESTARTS, reason);
 }
@@ -1458,6 +1576,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
       data->init_chunk_retry_count = 0;
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = cfg;
+      iqs915x_reset_event_mode_relatch_state(data);
+      data->event_mode_watch_armed = data->enabled && !data->lp2_pending;
       LOG_INF("IQS915x initialization complete");
       break;
     }
@@ -1633,6 +1753,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
 
+    if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
+        data->work_state == WORK_RELATCH_EVENT_MODE_WAIT ||
+        data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE ||
+        data->work_state == WORK_RELATCH_EVENT_MODE_CONFIRM)
+    {
+      iqs915x_handle_event_mode_relatch_step(dev);
+      continue;
+    }
+
     // ストリーミングデータをraw読み取り
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
@@ -1640,49 +1769,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       LOG_ERR("Failed to read stream: %d", ret);
       continue;
-    }
-
-    // 連続RDY原因調査用。一時的に追加readを行い、live register値も確認する。
-    uint16_t cfg_live = 0xFFFF;
-    uint16_t sys_live = 0xFFFF;
-    uint16_t info_live = 0xFFFF;
-    int cfg_ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg_live);
-    int sys_ret = iqs915x_read_reg16(dev, IQS915X_SYSTEM_CONTROL, &sys_live);
-    int info_ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_live);
-
-    if (stream.info_flags != 0xEEEE)
-    {
-      // Charging Mode (bit2-0) のデコード
-      static const char *const mode_names[] = {"ACTIVE", "IDLE_TOUCH", "IDLE",
-                                               "LP1", "LP2"};
-      uint8_t mode = stream.info_flags & IQS915X_CHARGING_MODE_MASK;
-      const char *mode_str = (mode < 5) ? mode_names[mode] : "UNKNOWN";
-
-      LOG_DBG(
-          "rdy_data cfg_cached=0x%04x cfg_live=0x%04x(cfg_ret=%d) "
-          "sys_live=0x%04x(sys_ret=%d) info_live=0x%04x(info_ret=%d) "
-          "info_flags=0x%04x "
-          "trackpad_flags=0x%04x gesture_sf=0x%04x gesture_tf=0x%04x "
-          "gesture_xy=(%u,%u) rel=(%d,%d) abs=(%u,%u) mode=%s%s%s%s%s%s%s%s%s%s%s%s%s",
-          data->confirmed_config_settings, cfg_live, cfg_ret, sys_live,
-          sys_ret, info_live, info_ret, stream.info_flags, stream.trackpad_flags,
-          stream.gesture_sf, stream.gesture_tf, stream.gesture_x,
-          stream.gesture_y, stream.rel_x, stream.rel_y, stream.abs_x,
-          stream.abs_y, mode_str,
-          (stream.info_flags & IQS915X_ATI_ERROR) ? " ATI_ERROR" : "",
-          (stream.info_flags & IQS915X_REATI_OCCURRED) ? " REATI_OCCURRED" : "",
-          (stream.info_flags & IQS915X_ALP_ATI_ERROR) ? " ALP_ATI_ERROR" : "",
-          (stream.info_flags & IQS915X_ALP_REATI_OCCURRED) ? " ALP_REATI_OCC"
-                                                           : "",
-          (stream.info_flags & IQS915X_SHOW_RESET) ? " SHOW_RESET" : "",
-          (stream.info_flags & IQS915X_ALP_PROX_STATUS) ? " ALP_PROX_STS" : "",
-          (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) ? " GLOBAL_TP_TOUCH"
-                                                        : "",
-          (stream.info_flags & IQS915X_SWITCH_PRESSED) ? " SWITCH_PRESSED" : "",
-          (stream.info_flags & IQS915X_GLOBAL_SNAP) ? " GLOBAL_SNAP" : "",
-          (stream.info_flags & IQS915X_ALP_PROX_TOGGLED) ? " ALP_PROX_TOG" : "",
-          (stream.info_flags & IQS915X_SWITCH_TOGGLED) ? " SWITCH_TOG" : "",
-          (stream.info_flags & IQS915X_SNAP_TOGGLED) ? " SNAP_TOG" : "");
     }
 
     // IQS915xのランタイムリセット検出
@@ -1701,6 +1787,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->init_restart_count = 0;
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = 0;
+      data->work_state = WORK_READ_DATA;
+      iqs915x_reset_event_mode_relatch_state(data);
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
       if (data->active_hold)
       {
@@ -1719,6 +1807,35 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       iqs915x_reset_scroll_inertia(data);
       data->gesture_pointer_suppress_ticks = 0;
       continue;
+    }
+
+    if (data->event_mode_watch_armed)
+    {
+      if (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH)
+      {
+        data->event_mode_watch_armed = false;
+        data->event_mode_no_touch_rdy_count = 0;
+        LOG_INF("Event Mode relatch: monitor cleared by GLOBAL_TP_TOUCH");
+      }
+      else
+      {
+        data->event_mode_no_touch_rdy_count++;
+        LOG_DBG("Event Mode relatch: no-touch RDY %u/%u",
+                data->event_mode_no_touch_rdy_count,
+                IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT);
+        if (data->event_mode_no_touch_rdy_count >=
+            IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT)
+        {
+          data->event_mode_watch_armed = false;
+          data->event_mode_relatch_attempted = true;
+          data->event_mode_no_touch_rdy_count = 0;
+          data->event_mode_relatch_wait_count = 0;
+          data->event_mode_relatch_retry_count = 0;
+          data->work_state = WORK_RELATCH_EVENT_MODE_DISABLE;
+          LOG_INF("Event Mode relatch: scheduled after %u no-touch RDY edges",
+                  IQS915X_EVENT_MODE_RELATCH_TRIGGER_COUNT);
+        }
+      }
     }
 
     // =========================================================
@@ -2176,6 +2293,7 @@ static int iqs915x_init(const struct device *dev)
   data->init_restart_count = 0;
   data->init_pending_cfg = 0;
   data->confirmed_config_settings = 0;
+  iqs915x_reset_event_mode_relatch_state(data);
   // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、そうでなければ有効
   data->enabled = !config->disabled_by_default;
   data->lp2_pending = config->disabled_by_default;
@@ -2338,6 +2456,8 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
   {
     // ===== 無効化: 即座にイベント破棄を開始し、LP2へ遷移 =====
     data->enabled = false;
+    data->work_state = WORK_READ_DATA;
+    iqs915x_reset_event_mode_relatch_state(data);
 
     // 進行中の操作を安全に解除
     // ドラッグ中の場合はボタンリリースを送信
