@@ -320,6 +320,41 @@ static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
   data->last_abs_valid = false;
 }
 
+static uint16_t iqs915x_absolute_discontinuity_threshold(const struct iqs915x_data *data)
+{
+  uint16_t res_x = data->swipe_resolution_x;
+  uint16_t res_y = data->swipe_resolution_y;
+  uint16_t min_res;
+
+  if (res_x == 0 && res_y == 0)
+  {
+    return 1024;
+  }
+
+  if (res_x == 0)
+  {
+    min_res = res_y;
+  }
+  else if (res_y == 0)
+  {
+    min_res = res_x;
+  }
+  else
+  {
+    min_res = MIN(res_x, res_y);
+  }
+
+  return MAX((uint16_t)(min_res / 3U), (uint16_t)512U);
+}
+
+static bool iqs915x_absolute_delta_is_discontinuity(
+    const struct iqs915x_data *data, int32_t rel_x, int32_t rel_y)
+{
+  uint16_t threshold = iqs915x_absolute_discontinuity_threshold(data);
+
+  return abs(rel_x) > threshold || abs(rel_y) > threshold;
+}
+
 static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
 {
   memset(&data->two_finger, 0, sizeof(data->two_finger));
@@ -1787,6 +1822,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (touch_down)
     {
+      iqs915x_reset_absolute_tracking(data);
       data->tap_drag_raw_max_fingers = num_fingers > 0 ? num_fingers : 1;
       data->tap_drag_raw_gesture_seen = false;
     }
@@ -1798,6 +1834,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     if (is_touching_now && tap_drag_blocking_gesture)
     {
       data->tap_drag_raw_gesture_seen = true;
+    }
+
+    if (touch_up)
+    {
+      iqs915x_reset_absolute_tracking(data);
     }
 
     data->is_touching = is_touching_now;
@@ -1875,19 +1916,33 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool two_finger_tap_pressed = false;
       bool allow_single_tap = data->finger_tracker.completed_one_tap_path;
       bool allow_two_finger_tap = data->finger_tracker.completed_two_tap_path;
+      bool raw_single_tap_path =
+          !is_touching_now && data->tap_drag_raw_max_fingers == 1 &&
+          !data->tap_drag_raw_gesture_seen;
 
       if (stream.gesture_sf & IQS915X_SINGLE_TAP)
       {
-        if (allow_single_tap)
+        if (allow_single_tap || raw_single_tap_path)
         {
           single_tap_pressed = true;
           button_code = INPUT_BTN_0;
+          if (!allow_single_tap)
+          {
+            LOG_DBG("single tap accepted from raw touch sequence: "
+                    "stable=%u max=%u raw_max=%u",
+                    data->finger_tracker.stable_count,
+                    data->finger_tracker.sequence_max_count,
+                    data->tap_drag_raw_max_fingers);
+          }
         }
         else
         {
-          LOG_DBG("single tap suppressed: path invalid (stable=%u max=%u)",
+          LOG_DBG("single tap suppressed: path invalid "
+                  "(stable=%u max=%u raw_max=%u raw_gesture=%u touching=%u)",
                   data->finger_tracker.stable_count,
-                  data->finger_tracker.sequence_max_count);
+                  data->finger_tracker.sequence_max_count,
+                  data->tap_drag_raw_max_fingers,
+                  data->tap_drag_raw_gesture_seen, is_touching_now);
         }
       }
       else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP)
@@ -1928,15 +1983,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         else if (touch_up)
         {
           int64_t touch_duration_ms = now_ms - data->last_touch_down_time;
-          bool raw_tap_drag_path =
-              data->tap_drag_raw_max_fingers == 1 &&
-              !data->tap_drag_raw_gesture_seen;
 
           // Touch Up (指が離れた瞬間)
           // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
           if (touch_duration_ms < 200 &&
               (data->finger_tracker.completed_one_tap_path ||
-               raw_tap_drag_path))
+               raw_single_tap_path))
           {
             // 短いタップとして認定し、ここから300msの窓を開始
             data->last_touch_up_time = now_ms;
@@ -2092,28 +2144,32 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else if (config->report_absolute)
       {
+        bool abs_finger_valid =
+            is_touching_now && num_fingers == 1 &&
+            (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0;
+
         if (touch_up)
         {
           iqs915x_reset_absolute_tracking(data);
         }
-        else if (!allow_pointer_report)
+        else if (!allow_pointer_report || !abs_finger_valid)
         {
           if (!suppress_pointer && (touch_down || tp_movement))
           {
             iqs915x_cancel_scroll_inertia(data);
           }
 
-          if (!single_finger_pointer)
-          {
-            iqs915x_reset_absolute_tracking(data);
-          }
+          iqs915x_reset_absolute_tracking(data);
 
           if (touch_down || tp_movement)
           {
             LOG_DBG(
-                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u await0=%u x=%u y=%u",
+                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u "
+                "stable=%u await0=%u conf=%u x=%u y=%u",
                 stream.gesture_sf, stream.gesture_tf, num_fingers,
+                data->finger_tracker.stable_count,
                 data->finger_tracker.awaiting_zero_contact,
+                (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0,
                 stream.abs_x, stream.abs_y);
           }
         }
@@ -2139,7 +2195,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
               data->last_abs_x = stream.abs_x;
               data->last_abs_y = stream.abs_y;
 
-              if (rel_x != 0 || rel_y != 0)
+              if (iqs915x_absolute_delta_is_discontinuity(data, rel_x, rel_y))
+              {
+                LOG_DBG("tp_absrel discontinuity: rel_x=%d rel_y=%d "
+                        "threshold=%u x=%u y=%u",
+                        (int)rel_x, (int)rel_y,
+                        iqs915x_absolute_discontinuity_threshold(data),
+                        stream.abs_x, stream.abs_y);
+              }
+              else if (rel_x != 0 || rel_y != 0)
               {
                 LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d (x=%u y=%u)",
                         (int)rel_x, (int)rel_y, stream.abs_x, stream.abs_y);
