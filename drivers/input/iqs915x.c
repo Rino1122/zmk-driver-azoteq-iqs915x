@@ -46,7 +46,6 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT 10
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
-#define IQS915X_INIT_POST_WRITE_RDY_MARGIN 5
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
@@ -1429,22 +1428,11 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (data->init_data_offset >= total)
     {
       LOG_INF("Init: All init-data written (%d bytes)", total);
-      data->init_step = INIT_WAIT_AFTER_INIT_DATA;
-      data->wait_count = 0;
-    }
-    break;
-  }
-
-  case INIT_WAIT_AFTER_INIT_DATA:
-    data->wait_count++;
-    LOG_INF("Init: wait after init-data RDY edge %d/%d", data->wait_count,
-            IQS915X_INIT_POST_WRITE_RDY_MARGIN);
-    if (data->wait_count >= IQS915X_INIT_POST_WRITE_RDY_MARGIN)
-    {
       data->init_step = INIT_ACK_RESET;
       data->wait_count = 0;
     }
     break;
+  }
 
   case INIT_VERIFY_INIT_CHUNK:
   {
@@ -1481,7 +1469,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       if (data->init_data_offset >= config->init_data_len)
       {
         LOG_INF("Init: All init-data written (%d bytes)", config->init_data_len);
-        data->init_step = INIT_WAIT_AFTER_INIT_DATA;
+        data->init_step = INIT_ACK_RESET;
         data->wait_count = 0;
       }
       else
@@ -1676,9 +1664,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
   {
     if (!data->initialized)
     {
-      bool strict_rdy_edge_wait =
-          (data->init_step == INIT_WAIT_AFTER_INIT_DATA);
-
       // SHOW_RESETフラグが立っている期間、IQSは自律的にRDYをトグルし続ける仕様のため
       // マスター側からForce Comms（RDY High時にI2C
       // STARTを発行）を行う必要はない。
@@ -1687,18 +1672,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       // ただし割り込みのエッジ取りこぼし対策として：
       // - すでにRDYがLowになっている場合はセマフォをgiveしてすぐ進む
       // - 長めのタイムアウトで完全停止を防ぐ（ICが応答しない異常時の安全策）
-      // init-data後のマージンだけは実RDY edgeを数えるため、自己wakeで進めない。
-      if (!strict_rdy_edge_wait && gpio_pin_get_dt(&config->rdy_gpio) > 0)
+      if (gpio_pin_get_dt(&config->rdy_gpio) > 0)
       {
         k_sem_give(&data->rdy_sem);
       }
       ret = k_sem_take(&data->rdy_sem, K_MSEC(2000));
-      if (strict_rdy_edge_wait && ret < 0)
-      {
-        LOG_ERR("Init: timed out waiting for post init-data RDY edge");
-        iqs915x_restart_initialization(dev, "post init-data RDY edge timeout");
-        continue;
-      }
       iqs915x_init_step_handler(dev);
       continue;
     }

@@ -289,7 +289,6 @@ enum iqs915x_init_step
     INIT_SOFTWARE_RESET,      // ソフトウェアリセット発行
     INIT_WAIT_SOFTWARE_RESET, // ソフトウェアリセット完了待機
     INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
-    INIT_WAIT_AFTER_INIT_DATA, // init-data書き込み後のRDYマージン
     INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_ACK_RESET,           // リセットACK
     INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
