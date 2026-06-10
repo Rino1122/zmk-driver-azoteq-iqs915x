@@ -378,6 +378,7 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->scroll_blocked_until_low_contact = false;
   data->tap_drag_raw_max_fingers = 0;
   data->tap_drag_raw_gesture_seen = false;
+  data->raw_single_tap_reported = false;
   iqs915x_reset_two_finger_session(data);
 }
 
@@ -1825,6 +1826,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       iqs915x_reset_absolute_tracking(data);
       data->tap_drag_raw_max_fingers = num_fingers > 0 ? num_fingers : 1;
       data->tap_drag_raw_gesture_seen = false;
+      data->raw_single_tap_reported = false;
     }
     else if (is_touching_now && num_fingers > data->tap_drag_raw_max_fingers)
     {
@@ -1899,6 +1901,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       int64_t now_ms = k_uptime_get();
 
+      if (touch_down)
+      {
+        data->last_touch_down_time = now_ms;
+      }
+
       if (!scroll)
       {
         // スクロール入力が停止しても慣性がアクティブなら継続させる。
@@ -1919,13 +1926,26 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool raw_single_tap_path =
           !is_touching_now && data->tap_drag_raw_max_fingers == 1 &&
           !data->tap_drag_raw_gesture_seen;
+      bool raw_single_tap_available =
+          raw_single_tap_path && !data->raw_single_tap_reported;
+      int64_t touch_duration_ms =
+          touch_up && data->last_touch_down_time > 0
+              ? now_ms - data->last_touch_down_time
+              : 0;
+      bool raw_single_tap_completed =
+          touch_up && touch_duration_ms < 200 && raw_single_tap_path;
 
       if (stream.gesture_sf & IQS915X_SINGLE_TAP)
       {
-        if (allow_single_tap || raw_single_tap_path)
+        if (data->raw_single_tap_reported)
+        {
+          LOG_DBG("single tap ignored: raw tap already reported");
+        }
+        else if (allow_single_tap || raw_single_tap_available)
         {
           single_tap_pressed = true;
           button_code = INPUT_BTN_0;
+          data->raw_single_tap_reported = true;
           if (!allow_single_tap)
           {
             LOG_DBG("single tap accepted from raw touch sequence: "
@@ -1960,6 +1980,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
       }
 
+      if (config->one_finger_tap && raw_single_tap_completed &&
+          !single_tap_pressed && !data->raw_single_tap_reported)
+      {
+        single_tap_pressed = true;
+        button_code = INPUT_BTN_0;
+        data->raw_single_tap_reported = true;
+        LOG_DBG("single tap emitted from raw touch-up: "
+                "duration=%lld ms max_fingers=%u",
+                (long long)touch_duration_ms,
+                data->tap_drag_raw_max_fingers);
+      }
+
       // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
       // 注: ドラッグ解除は上で has_tp_event の外で処理済み
       bool hold_became_active = false;
@@ -1970,7 +2002,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         if (touch_down)
         {
           // Touch Down (指が触れた瞬間)
-          data->last_touch_down_time = now_ms;
 
           // 前回のタッチリリース(Touch Up)から300ms以内に再び触れられたらドラッグ開始！
           if (data->last_touch_up_time > 0 && (now_ms - data->last_touch_up_time) < 300)
@@ -1982,13 +2013,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
         else if (touch_up)
         {
-          int64_t touch_duration_ms = now_ms - data->last_touch_down_time;
-
           // Touch Up (指が離れた瞬間)
           // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
-          if (touch_duration_ms < 200 &&
-              (data->finger_tracker.completed_one_tap_path ||
-               raw_single_tap_path))
+          if (raw_single_tap_completed ||
+              (touch_duration_ms < 200 &&
+               data->finger_tracker.completed_one_tap_path))
           {
             // 短いタップとして認定し、ここから300msの窓を開始
             data->last_touch_up_time = now_ms;
