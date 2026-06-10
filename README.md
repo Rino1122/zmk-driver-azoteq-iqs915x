@@ -12,7 +12,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 - Optional absolute X/Y reporting from FINGER1_X/Y.
 - Single finger tap: Reported as a left click.
 - Two finger tap: Reported as a right click.
-- Press and hold: Reported as a continuous left click (allows click and drag).
+- Tap-and-hold: A single tap is held briefly; a retouch starts left-button drag, otherwise a click is reported.
 - Vertical scroll.
 - Horizontal scroll.
 - Scroll inertia.
@@ -44,8 +44,9 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
          * See: dts/bindings/input/azoteq,iqs915x-common.yaml for a full list.
          */
         one-finger-tap;
-        press-and-hold;
-        press-and-hold-time = <250>;
+        tap-and-hold;
+        tap-and-hold-reentry-timeout-ms = <300>;
+        tap-and-hold-release-timeout-ms = <250>;
         two-finger-tap;
 
         scroll;

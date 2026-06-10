@@ -425,10 +425,10 @@ struct iqs915x_config
 
     // ジェスチャー設定
     bool one_finger_tap;
-    bool press_and_hold;
+    bool tap_and_hold;
     bool two_finger_tap;
-    uint16_t press_and_hold_time;
-    uint16_t press_and_hold_release_timeout_ms;
+    uint16_t tap_and_hold_reentry_timeout_ms;
+    uint16_t tap_and_hold_release_timeout_ms;
 
     // スクロール設定
     bool scroll;
@@ -476,7 +476,8 @@ struct iqs915x_data
     K_KERNEL_STACK_MEMBER(thread_stack, 2048);
 
     struct k_work_delayable button_release_work;
-    struct k_work_delayable hold_release_work;
+    struct k_work_delayable tap_and_hold_release_work;
+    struct k_work_delayable tap_and_hold_click_work;
 
     // ステートマシン
     enum iqs915x_init_step init_step;   // 初期化進行状態
@@ -495,16 +496,14 @@ struct iqs915x_data
 
     // 直前のサイクルで押されたボタンのビットマスク
     uint8_t buttons_pressed;
-    // プレス＆ホールドが有効かどうか（ドラッグ状態）
-    bool active_hold;
-    bool hold_release_pending;
-    // Tap-and-Dragの待機時間窓 (Uptimeのミリ秒、0は非アクティブ)
-    int64_t tap_drag_window_exp;
+    // Tap-and-Holdでドラッグ状態かどうか
+    bool active_tap_hold;
+    bool tap_and_hold_release_pending;
+    bool tap_and_hold_click_pending;
 
     // 生のタッチ状態トラッキング（Rapid Tap-and-Drag判定用）
     bool is_touching;
     int64_t last_touch_down_time;
-    int64_t last_touch_up_time;
     uint8_t tap_drag_raw_max_fingers;
     bool tap_drag_raw_gesture_seen;
     bool raw_single_tap_reported;

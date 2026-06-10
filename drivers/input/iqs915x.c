@@ -47,6 +47,8 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
+#define IQS915X_BUTTON_TAP_RELEASE_MS 100
+#define IQS915X_RAW_TAP_MAX_DURATION_MS 200
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
@@ -378,6 +380,7 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->tap_drag_raw_max_fingers = 0;
   data->tap_drag_raw_gesture_seen = false;
   data->raw_single_tap_reported = false;
+  data->tap_and_hold_click_pending = false;
   iqs915x_reset_two_finger_session(data);
 }
 
@@ -896,8 +899,8 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
   {
     if (data->buttons_pressed & BIT(i))
     {
-      // ドラッグ中（active_hold）の場合は左クリック(i=0)の離上をスキップ
-      if (i == 0 && data->active_hold)
+      // ドラッグ中（active_tap_hold）の場合は左クリック(i=0)の離上をスキップ
+      if (i == 0 && data->active_tap_hold)
       {
         continue;
       }
@@ -907,30 +910,70 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
   }
 }
 
-static void iqs915x_hold_release_work_handler(struct k_work *work)
+static void iqs915x_report_button_tap(struct iqs915x_data *data,
+                                      uint16_t button_code)
+{
+  k_work_cancel_delayable(&data->button_release_work);
+  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
+  data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
+  k_work_schedule(&data->button_release_work,
+                  K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
+}
+
+static void iqs915x_tap_and_hold_click_work_handler(struct k_work *work)
 {
   struct k_work_delayable *dwork = k_work_delayable_from_work(work);
   struct iqs915x_data *data =
-      CONTAINER_OF(dwork, struct iqs915x_data, hold_release_work);
+      CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_click_work);
 
-  data->hold_release_pending = false;
+  if (!data->tap_and_hold_click_pending)
+  {
+    return;
+  }
 
-  if (!data->active_hold)
+  data->tap_and_hold_click_pending = false;
+
+  if (data->active_tap_hold)
   {
     return;
   }
 
   if (data->is_touching)
   {
-    LOG_DBG("hold release timeout ignored: touch resumed");
+    data->active_tap_hold = true;
+    input_report_key(data->dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+    data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+    LOG_DBG("tap-and-hold drag started from pending click work");
     return;
   }
 
-  data->active_hold = false;
-  data->last_touch_up_time = 0;
+  iqs915x_report_button_tap(data, LEFT_BUTTON_CODE);
+  LOG_DBG("tap-and-hold reentry timeout fired: click reported");
+}
+
+static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
+{
+  struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+  struct iqs915x_data *data =
+      CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_release_work);
+
+  data->tap_and_hold_release_pending = false;
+
+  if (!data->active_tap_hold)
+  {
+    return;
+  }
+
+  if (data->is_touching)
+  {
+    LOG_DBG("tap-and-hold release timeout ignored: touch resumed");
+    return;
+  }
+
+  data->active_tap_hold = false;
   input_report_key(data->dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
   data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-  LOG_DBG("hold release timeout fired: drag released");
+  LOG_DBG("tap-and-hold release timeout fired: drag released");
 }
 
 /* ============================================================
@@ -1134,7 +1177,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         // 影響ビットはすべて下位バイト: bit0=SINGLE_TAP, bit3=PRESS_AND_HOLD
         uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
         uint8_t set = 0;
-        if (config->one_finger_tap)
+        if (config->one_finger_tap || config->tap_and_hold)
           set |= (uint8_t)IQS915X_SINGLE_TAP;
         // PRESS_AND_HOLDはSWエミュレートのため常にHWクリア
         buffer[i] = (buffer[i] & ~clr) | set;
@@ -1162,17 +1205,6 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         buffer[i] = (config->tap_time >> 8) & 0xFF;
         dts_patch = true;
       }
-      else if (current_addr == IQS915X_HOLD_TIME)
-      {
-        buffer[i] = config->press_and_hold_time & 0xFF;
-        dts_patch = true;
-      }
-      else if (current_addr == IQS915X_HOLD_TIME + 1)
-      {
-        buffer[i] = (config->press_and_hold_time >> 8) & 0xFF;
-        dts_patch = true;
-      }
-
       // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
       if (log_changes && buffer[i] != original)
       {
@@ -1763,15 +1795,16 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->work_state = WORK_READ_DATA;
       iqs915x_reset_event_mode_relatch_state(data);
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
-      if (data->active_hold)
+      if (data->active_tap_hold)
       {
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
       }
-      k_work_cancel_delayable(&data->hold_release_work);
-      data->hold_release_pending = false;
-      data->active_hold = false;
+      k_work_cancel_delayable(&data->tap_and_hold_release_work);
+      k_work_cancel_delayable(&data->tap_and_hold_click_work);
+      data->tap_and_hold_release_pending = false;
+      data->tap_and_hold_click_pending = false;
+      data->active_tap_hold = false;
       data->is_touching = false;
-      data->last_touch_up_time = 0;
       data->last_touch_down_time = 0;
       iqs915x_reset_absolute_tracking(data);
       iqs915x_reset_runtime_gesture_state(data);
@@ -1899,6 +1932,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       uint16_t button_code = 0;
       bool single_tap_pressed = false;
       bool two_finger_tap_pressed = false;
+      bool single_tap_enabled = config->one_finger_tap || config->tap_and_hold;
       bool allow_single_tap = data->finger_tracker.completed_one_tap_path;
       bool allow_two_finger_tap = data->finger_tracker.completed_two_tap_path;
       bool raw_single_tap_path =
@@ -1911,7 +1945,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
               ? now_ms - data->last_touch_down_time
               : 0;
       bool raw_single_tap_completed =
-          touch_up && touch_duration_ms < 200 && raw_single_tap_path;
+          touch_up && touch_duration_ms < IQS915X_RAW_TAP_MAX_DURATION_MS &&
+          raw_single_tap_path;
 
       if (stream.gesture_sf & IQS915X_SINGLE_TAP)
       {
@@ -1958,128 +1993,81 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
       }
 
-      if (config->one_finger_tap && raw_single_tap_completed &&
+      if (single_tap_enabled && raw_single_tap_completed &&
           !single_tap_pressed && !data->raw_single_tap_reported)
       {
         single_tap_pressed = true;
         button_code = INPUT_BTN_0;
         data->raw_single_tap_reported = true;
-        LOG_DBG("single tap emitted from raw touch-up: "
+        LOG_DBG("single tap detected from raw touch-up: "
                 "duration=%lld ms max_fingers=%u",
                 (long long)touch_duration_ms,
                 data->tap_drag_raw_max_fingers);
       }
 
-      // ソフトウェアによる Tap-and-Drag (Tap-and-Hold) の状態遷移 (高速応答用 生タッチ追跡版)
-      // 注: ドラッグ解除は上で has_tp_event の外で処理済み
-      bool hold_became_active = false;
+      bool tap_and_hold_became_active = false;
 
-      if (config->press_and_hold && !data->active_hold)
+      if (config->tap_and_hold && !data->active_tap_hold &&
+          touch_down && (data->tap_and_hold_click_pending || single_tap_pressed))
       {
-        // ----- 生のTouch Down / Up イベントによる高速判定 -----
-        if (touch_down)
-        {
-          // Touch Down (指が触れた瞬間)
-
-          // 前回のタッチリリース(Touch Up)から300ms以内に再び触れられたらドラッグ開始！
-          if (data->last_touch_up_time > 0 && (now_ms - data->last_touch_up_time) < 300)
-          {
-            hold_became_active = true;
-            data->active_hold = true;
-            data->last_touch_up_time = 0; // 消費したため窓を閉じる
-          }
-        }
-        else if (touch_up)
-        {
-          // Touch Up (指が離れた瞬間)
-          // 今回のタッチ期間(Down -> Up)が極端に短いか（タップとみなせるか）確認 (今回は200ms以内と判定)
-          if (raw_single_tap_completed ||
-              (touch_duration_ms < 200 &&
-               data->finger_tracker.completed_one_tap_path))
-          {
-            // 短いタップとして認定し、ここから300msの窓を開始
-            data->last_touch_up_time = now_ms;
-            if (!data->finger_tracker.completed_one_tap_path)
-            {
-              LOG_DBG("tap-drag window opened from raw touch sequence: "
-                      "duration=%lld ms max_fingers=%u",
-                      (long long)touch_duration_ms,
-                      data->tap_drag_raw_max_fingers);
-            }
-          }
-          else
-          {
-            // 長く触っていた場合はタップではないので窓を開かない
-            data->last_touch_up_time = 0;
-          }
-        }
-
-        // ハードウェアのシングルタップフラグからのフォールバック対応
-        if (single_tap_pressed && data->finger_tracker.completed_one_tap_path)
-        {
-          data->last_touch_up_time = now_ms;
-        }
-
-        // 時間窓の有効期限切れを定期チェック
-        if (data->last_touch_up_time > 0 && now_ms > (data->last_touch_up_time + 300))
-        {
-          data->last_touch_up_time = 0;
-        }
-      }
-      else if (!config->press_and_hold)
-      {
-        data->last_touch_up_time = 0;
+        k_work_cancel_delayable(&data->tap_and_hold_click_work);
+        data->tap_and_hold_click_pending = false;
+        data->active_tap_hold = true;
+        tap_and_hold_became_active = true;
       }
 
       // 移動とジェスチャーの処理
       // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
-      if (hold_became_active)
+      if (tap_and_hold_became_active)
       {
-        if (data->hold_release_pending)
+        if (data->tap_and_hold_release_pending)
         {
-          k_work_cancel_delayable(&data->hold_release_work);
-          data->hold_release_pending = false;
+          k_work_cancel_delayable(&data->tap_and_hold_release_work);
+          data->tap_and_hold_release_pending = false;
         }
-        bool left_button_pending =
-            (data->buttons_pressed & BIT(LEFT_BUTTON_CODE - INPUT_BTN_0)) != 0;
+        input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+        data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+        LOG_DBG("tap-and-hold drag started from pending single tap");
+      }
 
-        k_work_cancel_delayable(&data->button_release_work);
-        if (left_button_pending)
+      if (config->tap_and_hold && data->active_tap_hold)
+      {
+        if (touch_down && data->tap_and_hold_release_pending)
         {
-          LOG_DBG("tap press promoted to drag hold");
+          k_work_cancel_delayable(&data->tap_and_hold_release_work);
+          data->tap_and_hold_release_pending = false;
+          LOG_DBG("tap-and-hold release timeout canceled: touch resumed");
+        }
+        else if (touch_up && !data->tap_and_hold_release_pending)
+        {
+          k_work_schedule(&data->tap_and_hold_release_work,
+                          K_MSEC(config->tap_and_hold_release_timeout_ms));
+          data->tap_and_hold_release_pending = true;
+          LOG_DBG("tap-and-hold release timeout scheduled: %u ms",
+                  config->tap_and_hold_release_timeout_ms);
+        }
+      }
+
+      if (!tap_and_hold_became_active && single_tap_pressed)
+      {
+        if (config->tap_and_hold)
+        {
+          k_work_cancel_delayable(&data->tap_and_hold_click_work);
+          data->tap_and_hold_click_pending = true;
+          k_work_schedule(&data->tap_and_hold_click_work,
+                          K_MSEC(config->tap_and_hold_reentry_timeout_ms));
+          LOG_DBG("tap-and-hold click pending: %u ms",
+                  config->tap_and_hold_reentry_timeout_ms);
         }
         else
         {
-          input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-        }
-        data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-      }
-
-      if (config->press_and_hold && data->active_hold)
-      {
-        if (touch_down && data->hold_release_pending)
-        {
-          k_work_cancel_delayable(&data->hold_release_work);
-          data->hold_release_pending = false;
-          LOG_DBG("hold release timeout canceled: touch resumed");
-        }
-        else if (touch_up && !data->hold_release_pending)
-        {
-          k_work_schedule(&data->hold_release_work,
-                          K_MSEC(config->press_and_hold_release_timeout_ms));
-          data->hold_release_pending = true;
-          LOG_DBG("hold release timeout scheduled: %u ms",
-                  config->press_and_hold_release_timeout_ms);
+          iqs915x_report_button_tap(data, button_code);
         }
       }
 
-      // hold_released のフレームでもシングルタップ/ダブルタップは処理可能にする（干渉を防ぐため else if にしない）
-      if (!hold_became_active && (single_tap_pressed || two_finger_tap_pressed))
+      if (two_finger_tap_pressed)
       {
-        k_work_cancel_delayable(&data->button_release_work);
-        input_report_key(dev, button_code, 1, true, K_FOREVER);
-        data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
-        k_work_schedule(&data->button_release_work, K_MSEC(100));
+        iqs915x_report_button_tap(data, button_code);
       }
 
       if (scroll)
@@ -2303,13 +2291,16 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
-  data->hold_release_pending = false;
+  data->tap_and_hold_release_pending = false;
+  data->tap_and_hold_click_pending = false;
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
-  k_work_init_delayable(&data->hold_release_work,
-                        iqs915x_hold_release_work_handler);
+  k_work_init_delayable(&data->tap_and_hold_release_work,
+                        iqs915x_tap_and_hold_release_work_handler);
+  k_work_init_delayable(&data->tap_and_hold_click_work,
+                        iqs915x_tap_and_hold_click_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
 
@@ -2390,7 +2381,7 @@ static int iqs915x_init(const struct device *dev)
       .init_data = iqs915x_init_data_bretagne,                                                                                                                                                     \
       .init_data_len = IQS915X_INIT_DATA_TOTAL_SIZE,                                                                                                                                               \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                                                                                           \
-      .press_and_hold = DT_INST_PROP(n, press_and_hold),                                                                                                                                           \
+      .tap_and_hold = DT_INST_PROP(n, tap_and_hold),                                                                                                                                               \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                                                                                           \
       .scroll = DT_INST_PROP(n, scroll),                                                                                                                                                           \
       .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                                                                                                                                           \
@@ -2428,8 +2419,8 @@ static int iqs915x_init(const struct device *dev)
       .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                                                                                                 \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
-      .press_and_hold_time = DT_INST_PROP_OR(n, press_and_hold_time, 250),                                                                                                                         \
-      .press_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, press_and_hold_release_timeout_ms, 500),                                                                                             \
+      .tap_and_hold_reentry_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_reentry_timeout_ms, 300),                                                                                                  \
+      .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
       .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \
       .flip_y = DT_INST_PROP(n, flip_y),                                                                                                                                                           \
@@ -2461,13 +2452,15 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
 
     // 進行中の操作を安全に解除
     // ドラッグ中の場合はボタンリリースを送信
-    if (data->active_hold)
+    if (data->active_tap_hold)
     {
       input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-      data->active_hold = false;
+      data->active_tap_hold = false;
     }
-    k_work_cancel_delayable(&data->hold_release_work);
-    data->hold_release_pending = false;
+    k_work_cancel_delayable(&data->tap_and_hold_release_work);
+    k_work_cancel_delayable(&data->tap_and_hold_click_work);
+    data->tap_and_hold_release_pending = false;
+    data->tap_and_hold_click_pending = false;
 
     // 押下中のボタンをすべてリリース
     for (int i = 0; i < 3; i++)
@@ -2487,7 +2480,6 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     // タッチ状態をリセット
     data->is_touching = false;
     data->last_touch_down_time = 0;
-    data->last_touch_up_time = 0;
     iqs915x_reset_absolute_tracking(data);
     iqs915x_reset_runtime_gesture_state(data);
     data->scroll_x_acc = 0;
@@ -2507,11 +2499,13 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
     // ===== 有効化: Active modeへの復帰開始 =====
     data->enabled = true;
     data->gesture_pointer_suppress_ticks = 0;
-    if (data->hold_release_pending)
+    if (data->tap_and_hold_release_pending)
     {
-      k_work_cancel_delayable(&data->hold_release_work);
-      data->hold_release_pending = false;
+      k_work_cancel_delayable(&data->tap_and_hold_release_work);
+      data->tap_and_hold_release_pending = false;
     }
+    k_work_cancel_delayable(&data->tap_and_hold_click_work);
+    data->tap_and_hold_click_pending = false;
 
     // IQS915xのActive mode復帰を予約
     data->active_pending = true;

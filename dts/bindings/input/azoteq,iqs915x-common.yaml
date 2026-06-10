@@ -12,16 +12,16 @@ properties:
     type: boolean
     description: "Enable single finger tap (left click)"
 
-  press-and-hold:
+  tap-and-hold:
     type: boolean
-    description: "Enable press and hold (left click until released)"
+    description: "Enable tap-and-hold drag using single tap followed by a retouch"
 
-  press-and-hold-time:
+  tap-and-hold-reentry-timeout-ms:
     type: int
-    description: "Press and hold detection time in ms (added to tap time)"
-    default: 250
+    description: "Delay in ms after a single tap during which a retouch starts drag"
+    default: 300
 
-  press-and-hold-release-timeout-ms:
+  tap-and-hold-release-timeout-ms:
     type: int
     description: "Delay in ms before releasing drag after finger count becomes zero"
     default: 500
