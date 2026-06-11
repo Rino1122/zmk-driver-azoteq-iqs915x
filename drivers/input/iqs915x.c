@@ -646,6 +646,15 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
     LOG_DBG("finger stable count forced to 0 on GLOBAL_TP_TOUCH release");
   }
 
+  if (tracker->stable_count != stable_before)
+  {
+    LOG_DBG("finger stable count changed: %u -> %u raw=%u pending=%u "
+            "debounce=%u/%u touch_up=%u flags=0x%04x info=0x%04x",
+            stable_before, tracker->stable_count, raw_count,
+            tracker->pending_count, tracker->debounce_count, debounce_frames,
+            touch_up_event, stream->trackpad_flags, stream->info_flags);
+  }
+
   if (stable_before == 0 && tracker->stable_count > 0)
   {
     tracker->sequence_active = true;
