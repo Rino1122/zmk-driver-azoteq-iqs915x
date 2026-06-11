@@ -606,8 +606,6 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
   uint8_t reported_count = stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
   uint8_t raw_count = is_touching_now ? reported_count : 0;
-  uint8_t debounce_frames =
-      config->finger_debounce_frames > 0 ? config->finger_debounce_frames : 1;
   uint8_t stable_before = tracker->stable_count;
 
   tracker->current_count = raw_count;
@@ -622,36 +620,9 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
     tracker->sequence_max_count = 0;
     tracker->sequence_seen_one = false;
     tracker->sequence_seen_two = false;
-    tracker->pending_count = raw_count;
-    tracker->debounce_count = raw_count > 0 ? 1 : 0;
   }
 
-  if (!is_touching_now)
-  {
-    tracker->pending_count = 0;
-    tracker->debounce_count = 0;
-    tracker->stable_count = 0;
-  }
-  else if (raw_count == stable_before)
-  {
-    tracker->pending_count = raw_count;
-    tracker->debounce_count = 0;
-  }
-  else if (raw_count != tracker->pending_count)
-  {
-    tracker->pending_count = raw_count;
-    tracker->debounce_count = 1;
-  }
-  else if (tracker->debounce_count < UINT8_MAX)
-  {
-    tracker->debounce_count++;
-  }
-
-  if (tracker->pending_count != stable_before &&
-      tracker->debounce_count >= debounce_frames)
-  {
-    tracker->stable_count = tracker->pending_count;
-  }
+  tracker->stable_count = raw_count;
 
   if (touch_up_event && stable_before != 0)
   {
@@ -660,10 +631,9 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
 
   if (tracker->stable_count != stable_before)
   {
-    LOG_DBG("finger stable count changed: %u -> %u raw=%u reported=%u pending=%u "
-            "debounce=%u/%u touch_down=%u touch_up=%u flags=0x%04x info=0x%04x",
+    LOG_DBG("finger count changed: %u -> %u raw=%u reported=%u "
+            "touch_down=%u touch_up=%u flags=0x%04x info=0x%04x",
             stable_before, tracker->stable_count, raw_count, reported_count,
-            tracker->pending_count, tracker->debounce_count, debounce_frames,
             touch_down_event, touch_up_event, stream->trackpad_flags,
             stream->info_flags);
   }
@@ -2582,7 +2552,6 @@ static int iqs915x_init(const struct device *dev)
           .min_samples = DT_INST_PROP_OR(n, pinch_inertia_min_samples, 1),                                                                                                                         \
           .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),                                                                                                                     \
       },                                                                                                                                                                                           \
-      .finger_debounce_frames = DT_INST_PROP_OR(n, finger_debounce_frames, 2),                                                                                                                     \
       .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                                                                                                                                   \
       .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                                                                                                                                     \
       .swipe_step = DT_INST_PROP_OR(n, swipe_step, 0),                                                                                                                                             \

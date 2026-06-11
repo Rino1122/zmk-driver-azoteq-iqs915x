@@ -383,9 +383,7 @@ struct iqs915x_finger_tracker
     uint8_t current_count;
     uint8_t previous_count;
     uint8_t stable_count;
-    uint8_t pending_count;
     uint8_t sequence_max_count;
-    uint8_t debounce_count;
     bool tail_suppressed;
     bool awaiting_zero_contact;
     bool sequence_active;
@@ -439,7 +437,6 @@ struct iqs915x_config
 
     struct iqs915x_scroll_inertia_profile scroll_inertia;
     struct iqs915x_inertia_profile pinch_inertia;
-    uint8_t finger_debounce_frames;
 
     // 3/4本指スワイプ設定（専用gesture input event）
     bool three_finger_swipe;

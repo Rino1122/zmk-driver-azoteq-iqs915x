@@ -190,9 +190,11 @@ properties:
   finger-debounce-frames:
     type: int
     default: 2
+    deprecated: true
     description: |
-      Number of consecutive frames required before a new finger count is
-      treated as stable by the software finger-count state machine.
+      Deprecated compatibility property. Finger count now follows
+      GLOBAL_TP_TOUCH and NUM_FINGERS_MASK directly without RDY-frame-based
+      debounce.
 
   three-finger-swipe:
     type: boolean
