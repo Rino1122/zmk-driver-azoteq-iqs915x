@@ -45,9 +45,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
          */
         one-finger-tap;
         tap-and-hold;
-        tap-and-hold-reentry-timeout-ms = <300>;
         tap-and-hold-release-timeout-ms = <250>;
-        tap-move-threshold = <0>;            /* 0 = auto threshold from X/Y resolution */
         two-finger-tap;
 
         scroll;
@@ -92,9 +90,12 @@ disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
 `TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level
 finger up/down transitions. One-finger tap, two-finger tap, and two-finger
 scroll are recognized in the driver from `GLOBAL_TP_TOUCH`, finger count, touch
-duration, and absolute finger coordinates. `tap-move-threshold = <0>` derives
-the maximum tap movement from the configured X/Y resolution; set a positive raw
-coordinate value to override it.
+duration, and absolute finger coordinates. Tap classification uses the
+IQS9150-style tap profile from init-data: `TAP_TOUCH_TIME` (`0x11FA`),
+`TAP_WAIT_TIME` / air time (`0x11FC`), and `TAP_DISTANCE` (`0x11FE`).
+Single tap is reported after air time elapses. If another touch-down occurs
+within that air time, the pending single tap is canceled and the second contact
+is classified as double click or tap-and-drag.
 
 When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
 the centroid of active fingers and emits one-shot private gesture input events
@@ -157,13 +158,13 @@ This driver now uses a built-in init-data profile and no longer accepts an `azot
 1. Use the **Azoteq GUI** to configure your trackpad and export a new `IQS9150_init.h`.
 2. Replace `drivers/input/IQS9150_init.h` with the exported header as-is.
 3. Build firmware. The array header is generated automatically before compiling `iqs915x.c`.
-4. Keep DTS tuning properties (`tap-time`, `report-rate-ms`, etc.) in your overlay as needed.
+4. Keep DTS tuning properties (`report-rate-ms`, scroll settings, etc.) in your overlay as needed.
 
 The generated array header is a build artifact and does not need to be committed.
 
 ### Priority
 
-The driver writes built-in init-data first, then applies individual DTS properties (e.g. `tap-time`, `report-rate-ms`) as register overrides.
+The driver writes built-in init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides.
 This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
 
 ## Key differences from IQS5xx driver

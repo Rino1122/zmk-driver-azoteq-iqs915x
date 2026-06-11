@@ -18,7 +18,11 @@ properties:
 
   tap-and-hold-reentry-timeout-ms:
     type: int
-    description: "Delay in ms after a single tap during which a retouch starts drag"
+    deprecated: true
+    description: |
+      Deprecated compatibility property. The driver no longer uses this value.
+      Tap/double-tap/tap-and-drag air time is read from the IQS9150 init-data
+      TAP_WAIT_TIME register.
     default: 300
 
   tap-and-hold-release-timeout-ms:
@@ -56,10 +60,11 @@ properties:
   tap-move-threshold:
     type: int
     default: 0
+    deprecated: true
     description: |
-      Maximum movement in raw coordinate units for a touch sequence to remain
-      eligible as a one- or two-finger tap. Set 0 to derive the threshold from
-      the configured X/Y resolution.
+      Deprecated compatibility property. The driver no longer uses this value.
+      Tap movement distance is read from the IQS9150 init-data TAP_DISTANCE
+      register.
 
   scroll-inertia:
     type: boolean
@@ -306,10 +311,11 @@ properties:
 
   tap-time:
     type: int
+    deprecated: true
     description: |
-      Driver-side tap detection time in ms. If not set, the driver uses its
-      built-in tap duration fallback.
-      Shorter values make taps more responsive but may cause false positives.
+      Deprecated compatibility property. The driver no longer writes this DTS
+      value into init-data or uses it for tap classification. Tap touch time is
+      read from the IQS9150 init-data TAP_TOUCH_TIME register.
 
   report-rate-ms:
     type: int

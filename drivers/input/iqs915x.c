@@ -48,8 +48,9 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
-#define IQS915X_RAW_TAP_MAX_DURATION_MS 200
-#define IQS915X_TAP_MOVE_THRESHOLD_FALLBACK 24U
+#define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
+#define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
+#define IQS915X_TAP_DISTANCE_FALLBACK 100U
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
@@ -390,40 +391,6 @@ static int16_t iqs915x_clamp_i16(int32_t value)
   return (int16_t)value;
 }
 
-static uint16_t iqs915x_tap_move_threshold(const struct iqs915x_config *config,
-                                           const struct iqs915x_data *data)
-{
-  uint16_t res_x = data->swipe_resolution_x;
-  uint16_t res_y = data->swipe_resolution_y;
-  uint16_t min_res;
-
-  if (config->tap_move_threshold > 0)
-  {
-    return config->tap_move_threshold;
-  }
-
-  if (res_x == 0 && res_y == 0)
-  {
-    return IQS915X_TAP_MOVE_THRESHOLD_FALLBACK;
-  }
-
-  if (res_x == 0)
-  {
-    min_res = res_y;
-  }
-  else if (res_y == 0)
-  {
-    min_res = res_x;
-  }
-  else
-  {
-    min_res = MIN(res_x, res_y);
-  }
-
-  return MAX((uint16_t)(min_res / 80U),
-             (uint16_t)IQS915X_TAP_MOVE_THRESHOLD_FALLBACK);
-}
-
 static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
 {
   memset(&data->two_finger, 0, sizeof(data->two_finger));
@@ -454,7 +421,10 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->tap_start_y = 0;
   data->tap_max_movement = 0;
   data->completed_two_finger_movement = 0;
-  data->tap_and_hold_click_pending = false;
+  data->single_tap_pending = false;
+  data->tap_sequence_second_touch = false;
+  data->tap_and_hold_start_pending = false;
+  data->pending_tap_up_time = 0;
   iqs915x_reset_two_finger_session(data);
 }
 
@@ -512,6 +482,42 @@ static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
   *val = ((uint16_t)config->init_data[offset + 1] << 8) |
          (uint16_t)config->init_data[offset];
   return true;
+}
+
+static void iqs915x_configure_tap_profile(const struct iqs915x_config *config,
+                                          struct iqs915x_data *data)
+{
+  uint16_t tap_touch_time = 0;
+  uint16_t tap_air_time = 0;
+  uint16_t tap_distance = 0;
+
+  if (!iqs915x_get_init_data_reg16(config, IQS915X_TAP_TOUCH_TIME,
+                                   &tap_touch_time) ||
+      tap_touch_time == 0)
+  {
+    tap_touch_time = IQS915X_TAP_TOUCH_TIME_FALLBACK_MS;
+  }
+
+  if (!iqs915x_get_init_data_reg16(config, IQS915X_TAP_WAIT_TIME,
+                                   &tap_air_time) ||
+      tap_air_time == 0)
+  {
+    tap_air_time = IQS915X_TAP_AIR_TIME_FALLBACK_MS;
+  }
+
+  if (!iqs915x_get_init_data_reg16(config, IQS915X_TAP_DISTANCE,
+                                   &tap_distance) ||
+      tap_distance == 0)
+  {
+    tap_distance = IQS915X_TAP_DISTANCE_FALLBACK;
+  }
+
+  data->tap_touch_time_ms = tap_touch_time;
+  data->tap_air_time_ms = tap_air_time;
+  data->tap_distance = tap_distance;
+
+  LOG_INF("Tap profile: touch=%u ms air=%u ms distance=%u",
+          data->tap_touch_time_ms, data->tap_air_time_ms, data->tap_distance);
 }
 
 static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *config,
@@ -595,8 +601,7 @@ static void iqs915x_emit_gesture_tap(const struct device *dev, uint16_t gesture_
   input_report(dev, IQS915X_INPUT_EV_GESTURE, gesture_code, 0, true, K_FOREVER);
 }
 
-static void iqs915x_update_finger_state(const struct iqs915x_config *config,
-                                        struct iqs915x_data *data,
+static void iqs915x_update_finger_state(struct iqs915x_data *data,
                                         const struct iqs915x_stream_data *stream,
                                         bool is_touching_now,
                                         bool touch_down_event,
@@ -999,17 +1004,53 @@ static void iqs915x_report_button_tap(struct iqs915x_data *data,
                   K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
 }
 
-static uint16_t iqs915x_tap_duration_limit_ms(const struct iqs915x_config *config)
+static void iqs915x_report_button_double_tap(struct iqs915x_data *data,
+                                             uint16_t button_code)
 {
-  return config->tap_time > 0 ? config->tap_time : IQS915X_RAW_TAP_MAX_DURATION_MS;
+  uint8_t button_bit = BIT(button_code - INPUT_BTN_0);
+
+  k_work_cancel_delayable(&data->button_release_work);
+  if (data->buttons_pressed & button_bit)
+  {
+    input_report_key(data->dev, button_code, 0, true, K_FOREVER);
+    data->buttons_pressed &= ~button_bit;
+  }
+
+  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
+  input_report_key(data->dev, button_code, 0, true, K_FOREVER);
+  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
+  data->buttons_pressed |= button_bit;
+  k_work_schedule(&data->button_release_work,
+                  K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
+}
+
+static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
+                                            const char *reason)
+{
+  if (data->active_tap_hold)
+  {
+    return;
+  }
+
+  if (data->tap_and_hold_release_pending)
+  {
+    k_work_cancel_delayable(&data->tap_and_hold_release_work);
+    data->tap_and_hold_release_pending = false;
+  }
+
+  data->active_tap_hold = true;
+  data->tap_and_hold_start_pending = false;
+  data->single_tap_pending = false;
+  data->tap_sequence_second_touch = false;
+  input_report_key(data->dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+  data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+  LOG_DBG("tap-and-drag started: %s", reason);
 }
 
 static void iqs915x_update_single_tap_movement(
-    const struct iqs915x_config *config, struct iqs915x_data *data,
-    const struct iqs915x_stream_data *stream, uint8_t num_fingers)
+    struct iqs915x_data *data, const struct iqs915x_stream_data *stream,
+    uint8_t num_fingers)
 {
-  uint16_t threshold = iqs915x_tap_move_threshold(config, data);
-
   if (num_fingers != 1 ||
       (stream->trackpad_flags & IQS915X_FINGER1_CONFIDENCE) == 0)
   {
@@ -1030,7 +1071,7 @@ static void iqs915x_update_single_tap_movement(
           iqs915x_axis_movement((int32_t)stream->abs_x - data->tap_start_x,
                                 (int32_t)stream->abs_y - data->tap_start_y));
 
-  if (data->tap_max_movement > threshold)
+  if (data->tap_max_movement >= data->tap_distance)
   {
     data->tap_drag_raw_gesture_seen = true;
   }
@@ -1041,7 +1082,6 @@ static bool iqs915x_handle_two_finger_scroll(
     const struct iqs915x_stream_data *stream)
 {
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
-  uint16_t threshold = iqs915x_tap_move_threshold(config, data);
   int16_t gx;
   int16_t gy;
   int16_t scroll_div;
@@ -1054,7 +1094,7 @@ static bool iqs915x_handle_two_finger_scroll(
 
   if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
   {
-    if (two_finger->max_centroid_movement <= threshold)
+    if (two_finger->max_centroid_movement < data->tap_distance)
     {
       return false;
     }
@@ -1063,7 +1103,7 @@ static bool iqs915x_handle_two_finger_scroll(
     data->scroll_sequence_active = true;
     data->tap_drag_raw_gesture_seen = true;
     LOG_DBG("scroll started from centroid movement: max=%u threshold=%u",
-            two_finger->max_centroid_movement, threshold);
+            two_finger->max_centroid_movement, data->tap_distance);
   }
 
   gx = iqs915x_clamp_i16(two_finger->centroid_dx);
@@ -1136,35 +1176,45 @@ static bool iqs915x_handle_two_finger_scroll(
   return true;
 }
 
-static void iqs915x_tap_and_hold_click_work_handler(struct k_work *work)
+static void iqs915x_single_tap_work_handler(struct k_work *work)
 {
   struct k_work_delayable *dwork = k_work_delayable_from_work(work);
   struct iqs915x_data *data =
-      CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_click_work);
+      CONTAINER_OF(dwork, struct iqs915x_data, single_tap_work);
 
-  if (!data->tap_and_hold_click_pending)
+  if (!data->single_tap_pending)
   {
     return;
   }
 
-  data->tap_and_hold_click_pending = false;
+  data->single_tap_pending = false;
 
   if (data->active_tap_hold)
   {
     return;
   }
 
-  if (data->is_touching)
+  if (!data->is_touching)
   {
-    data->active_tap_hold = true;
-    input_report_key(data->dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-    data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-    LOG_DBG("tap-and-hold drag started from pending click work");
+    iqs915x_report_button_tap(data, LEFT_BUTTON_CODE);
+    LOG_DBG("single tap air time elapsed: click reported");
+  }
+}
+
+static void iqs915x_tap_and_hold_start_work_handler(struct k_work *work)
+{
+  struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+  struct iqs915x_data *data =
+      CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_start_work);
+
+  if (!data->tap_and_hold_start_pending || !data->tap_sequence_second_touch ||
+      !data->is_touching)
+  {
+    data->tap_and_hold_start_pending = false;
     return;
   }
 
-  iqs915x_report_button_tap(data, LEFT_BUTTON_CODE);
-  LOG_DBG("tap-and-hold reentry timeout fired: click reported");
+  iqs915x_start_tap_and_hold_drag(data, "second touch held past tap time");
 }
 
 static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
@@ -1407,16 +1457,6 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         // two-finger tap/scrollはabsolute座標からドライバ側で判定する。
         uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
         buffer[i] &= ~clr;
-        dts_patch = true;
-      }
-      else if (current_addr == IQS915X_TAP_TIME && config->tap_time > 0)
-      {
-        buffer[i] = config->tap_time & 0xFF;
-        dts_patch = true;
-      }
-      else if (current_addr == IQS915X_TAP_TIME + 1 && config->tap_time > 0)
-      {
-        buffer[i] = (config->tap_time >> 8) & 0xFF;
         dts_patch = true;
       }
       // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
@@ -2017,9 +2057,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
       }
       k_work_cancel_delayable(&data->tap_and_hold_release_work);
-      k_work_cancel_delayable(&data->tap_and_hold_click_work);
+      k_work_cancel_delayable(&data->single_tap_work);
+      k_work_cancel_delayable(&data->tap_and_hold_start_work);
       data->tap_and_hold_release_pending = false;
-      data->tap_and_hold_click_pending = false;
+      data->single_tap_pending = false;
+      data->tap_sequence_second_touch = false;
+      data->tap_and_hold_start_pending = false;
       data->active_tap_hold = false;
       data->is_touching = false;
       data->last_touch_down_time = 0;
@@ -2077,11 +2120,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     data->is_touching = is_touching_now;
-    iqs915x_update_finger_state(config, data, &stream, is_touching_now,
+    iqs915x_update_finger_state(data, &stream, is_touching_now,
                                 touch_down, touch_up);
     iqs915x_update_sequence_gates(data);
 
-    iqs915x_update_single_tap_movement(config, data, &stream, num_fingers);
+    iqs915x_update_single_tap_movement(data, &stream, num_fingers);
 
     bool has_tp_event = is_touching_now || touch_state_changed;
     if (tp_movement)
@@ -2136,51 +2179,99 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       // タップジェスチャー判定
       uint16_t button_code = 0;
-      bool single_tap_pressed = false;
       bool two_finger_tap_pressed = false;
       bool single_tap_enabled = config->one_finger_tap || config->tap_and_hold;
       bool allow_single_tap = data->finger_tracker.completed_one_tap_path;
       bool allow_two_finger_tap = data->finger_tracker.completed_two_tap_path;
-      uint16_t tap_move_threshold = iqs915x_tap_move_threshold(config, data);
       bool raw_single_tap_path =
           !is_touching_now && data->tap_drag_raw_max_fingers == 1 &&
           !data->tap_drag_raw_gesture_seen &&
-          data->tap_max_movement <= tap_move_threshold;
+          data->tap_max_movement < data->tap_distance;
       int64_t touch_duration_ms =
           touch_up && data->last_touch_down_time > 0
               ? now_ms - data->last_touch_down_time
               : 0;
       bool tap_duration_ok =
-          touch_up && touch_duration_ms <= iqs915x_tap_duration_limit_ms(config);
+          touch_up && touch_duration_ms <= data->tap_touch_time_ms;
       bool raw_single_tap_completed =
           tap_duration_ok &&
           raw_single_tap_path;
       bool raw_two_finger_tap_completed =
           tap_duration_ok && allow_two_finger_tap &&
           data->tap_drag_raw_max_fingers == 2 &&
-          data->completed_two_finger_movement <= tap_move_threshold &&
+          data->completed_two_finger_movement < data->tap_distance &&
           !data->tap_drag_raw_gesture_seen &&
           !data->raw_two_finger_tap_reported;
 
-      if (single_tap_enabled && raw_single_tap_completed &&
+      if (touch_down && data->single_tap_pending)
+      {
+        k_work_cancel_delayable(&data->single_tap_work);
+        data->single_tap_pending = false;
+        data->tap_sequence_second_touch = true;
+        LOG_DBG("single tap pending canceled by second touch: air=%lld ms",
+                (long long)(now_ms - data->pending_tap_up_time));
+
+        if (config->tap_and_hold)
+        {
+          data->tap_and_hold_start_pending = true;
+          k_work_schedule(&data->tap_and_hold_start_work,
+                          K_MSEC(data->tap_touch_time_ms));
+        }
+      }
+      else if (touch_down)
+      {
+        data->tap_sequence_second_touch = false;
+      }
+
+      if (data->tap_sequence_second_touch && is_touching_now &&
+          config->tap_and_hold && !data->active_tap_hold &&
+          data->tap_max_movement >= data->tap_distance)
+      {
+        k_work_cancel_delayable(&data->tap_and_hold_start_work);
+        iqs915x_start_tap_and_hold_drag(data, "second touch moved past tap distance");
+      }
+
+      if (single_tap_enabled && touch_up && raw_single_tap_completed &&
           !data->raw_single_tap_reported)
       {
-        single_tap_pressed = true;
-        button_code = INPUT_BTN_0;
         data->raw_single_tap_reported = true;
-        LOG_DBG("single tap detected from touch sequence: duration=%lld ms "
-                "movement=%u threshold=%u stable_path=%u",
-                (long long)touch_duration_ms, data->tap_max_movement,
-                tap_move_threshold, allow_single_tap);
+
+        if (data->tap_sequence_second_touch)
+        {
+          k_work_cancel_delayable(&data->tap_and_hold_start_work);
+          data->tap_and_hold_start_pending = false;
+          data->tap_sequence_second_touch = false;
+          iqs915x_report_button_double_tap(data, INPUT_BTN_0);
+          LOG_DBG("double tap reported: duration=%lld ms movement=%u "
+                  "distance=%u",
+                  (long long)touch_duration_ms, data->tap_max_movement,
+                  data->tap_distance);
+        }
+        else
+        {
+          data->single_tap_pending = true;
+          data->pending_tap_up_time = now_ms;
+          k_work_schedule(&data->single_tap_work,
+                          K_MSEC(data->tap_air_time_ms));
+          LOG_DBG("single tap pending: duration=%lld ms movement=%u "
+                  "distance=%u air=%u ms stable_path=%u",
+                  (long long)touch_duration_ms, data->tap_max_movement,
+                  data->tap_distance, data->tap_air_time_ms, allow_single_tap);
+        }
       }
-      else if (touch_up && single_tap_enabled && data->tap_drag_raw_max_fingers == 1 &&
-               !data->raw_single_tap_reported)
+      else if (touch_up && single_tap_enabled &&
+               data->tap_drag_raw_max_fingers == 1 &&
+               !data->raw_single_tap_reported &&
+               !data->active_tap_hold)
       {
         LOG_DBG("single tap suppressed: duration=%lld movement=%u threshold=%u "
                 "raw_gesture=%u path=%u",
                 (long long)touch_duration_ms, data->tap_max_movement,
-                tap_move_threshold, data->tap_drag_raw_gesture_seen,
+                data->tap_distance, data->tap_drag_raw_gesture_seen,
                 allow_single_tap);
+        data->tap_sequence_second_touch = false;
+        data->tap_and_hold_start_pending = false;
+        k_work_cancel_delayable(&data->tap_and_hold_start_work);
       }
 
       if (config->two_finger_tap && raw_two_finger_tap_completed)
@@ -2191,7 +2282,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         LOG_DBG("two-finger tap detected from touch sequence: duration=%lld ms "
                 "movement=%u threshold=%u",
                 (long long)touch_duration_ms,
-                data->completed_two_finger_movement, tap_move_threshold);
+                data->completed_two_finger_movement, data->tap_distance);
       }
       else if (touch_up && config->two_finger_tap &&
                data->tap_drag_raw_max_fingers == 2 &&
@@ -2200,33 +2291,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         LOG_DBG("two-finger tap suppressed: duration=%lld movement=%u "
                 "threshold=%u path=%u scroll=%u",
                 (long long)touch_duration_ms,
-                data->completed_two_finger_movement, tap_move_threshold,
+                data->completed_two_finger_movement, data->tap_distance,
                 allow_two_finger_tap, data->tap_drag_raw_gesture_seen);
-      }
-
-      bool tap_and_hold_became_active = false;
-
-      if (config->tap_and_hold && !data->active_tap_hold &&
-          touch_down && (data->tap_and_hold_click_pending || single_tap_pressed))
-      {
-        k_work_cancel_delayable(&data->tap_and_hold_click_work);
-        data->tap_and_hold_click_pending = false;
-        data->active_tap_hold = true;
-        tap_and_hold_became_active = true;
-      }
-
-      // 移動とジェスチャーの処理
-      // NOTE: 状態クリアとボタンリリースが確実に競合しないようにする
-      if (tap_and_hold_became_active)
-      {
-        if (data->tap_and_hold_release_pending)
-        {
-          k_work_cancel_delayable(&data->tap_and_hold_release_work);
-          data->tap_and_hold_release_pending = false;
-        }
-        input_report_key(dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
-        data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
-        LOG_DBG("tap-and-hold drag started from pending single tap");
       }
 
       if (config->tap_and_hold && data->active_tap_hold)
@@ -2244,23 +2310,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           data->tap_and_hold_release_pending = true;
           LOG_DBG("tap-and-hold release timeout scheduled: %u ms",
                   config->tap_and_hold_release_timeout_ms);
-        }
-      }
-
-      if (!tap_and_hold_became_active && single_tap_pressed)
-      {
-        if (config->tap_and_hold)
-        {
-          k_work_cancel_delayable(&data->tap_and_hold_click_work);
-          data->tap_and_hold_click_pending = true;
-          k_work_schedule(&data->tap_and_hold_click_work,
-                          K_MSEC(config->tap_and_hold_reentry_timeout_ms));
-          LOG_DBG("tap-and-hold click pending: %u ms",
-                  config->tap_and_hold_reentry_timeout_ms);
-        }
-        else
-        {
-          iqs915x_report_button_tap(data, button_code);
         }
       }
 
@@ -2436,16 +2485,21 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
+  iqs915x_configure_tap_profile(config, data);
   data->tap_and_hold_release_pending = false;
-  data->tap_and_hold_click_pending = false;
+  data->single_tap_pending = false;
+  data->tap_sequence_second_touch = false;
+  data->tap_and_hold_start_pending = false;
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
   k_work_init_delayable(&data->tap_and_hold_release_work,
                         iqs915x_tap_and_hold_release_work_handler);
-  k_work_init_delayable(&data->tap_and_hold_click_work,
-                        iqs915x_tap_and_hold_click_work_handler);
+  k_work_init_delayable(&data->single_tap_work,
+                        iqs915x_single_tap_work_handler);
+  k_work_init_delayable(&data->tap_and_hold_start_work,
+                        iqs915x_tap_and_hold_start_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
 
@@ -2560,11 +2614,8 @@ static int iqs915x_init(const struct device *dev)
       .swipe_direction_settle_frames = DT_INST_PROP_OR(n, swipe_direction_settle_frames, 2),                                                                                                      \
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
-      .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                                                                                                 \
-      .tap_move_threshold = DT_INST_PROP_OR(n, tap_move_threshold, 0),                                                                                                                             \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
-      .tap_and_hold_reentry_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_reentry_timeout_ms, 300),                                                                                                  \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
       .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \
@@ -2603,9 +2654,12 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
       data->active_tap_hold = false;
     }
     k_work_cancel_delayable(&data->tap_and_hold_release_work);
-    k_work_cancel_delayable(&data->tap_and_hold_click_work);
+    k_work_cancel_delayable(&data->single_tap_work);
+    k_work_cancel_delayable(&data->tap_and_hold_start_work);
     data->tap_and_hold_release_pending = false;
-    data->tap_and_hold_click_pending = false;
+    data->single_tap_pending = false;
+    data->tap_sequence_second_touch = false;
+    data->tap_and_hold_start_pending = false;
 
     // 押下中のボタンをすべてリリース
     for (int i = 0; i < 3; i++)
@@ -2649,8 +2703,11 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
       k_work_cancel_delayable(&data->tap_and_hold_release_work);
       data->tap_and_hold_release_pending = false;
     }
-    k_work_cancel_delayable(&data->tap_and_hold_click_work);
-    data->tap_and_hold_click_pending = false;
+    k_work_cancel_delayable(&data->single_tap_work);
+    k_work_cancel_delayable(&data->tap_and_hold_start_work);
+    data->single_tap_pending = false;
+    data->tap_sequence_second_touch = false;
+    data->tap_and_hold_start_pending = false;
 
     // IQS915xのActive mode復帰を予約
     data->active_pending = true;

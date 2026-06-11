@@ -224,8 +224,10 @@
 #define IQS915X_TWO_FINGER_GESTURES_ENABLE 0x11F8
 
 // ジェスチャータイミング設定 (各2 bytes, ms単位)
-#define IQS915X_TAP_TIME 0x11FA  // タップ判定時間
-#define IQS915X_HOLD_TIME 0x1200 // プレス＆ホールド判定時間
+#define IQS915X_TAP_TOUCH_TIME 0x11FA // タップ接触上限時間
+#define IQS915X_TAP_WAIT_TIME 0x11FC  // 連続タップ待ち時間（air time）
+#define IQS915X_TAP_DISTANCE 0x11FE   // タップ許容移動量
+#define IQS915X_HOLD_TIME 0x1200      // プレス＆ホールド判定時間
 
 // スクロール設定 (各2 bytes)
 #define IQS915X_SCROLL_INITIAL_DIST 0x1212 // スクロール開始に必要な移動量
@@ -428,7 +430,6 @@ struct iqs915x_config
     bool one_finger_tap;
     bool tap_and_hold;
     bool two_finger_tap;
-    uint16_t tap_and_hold_reentry_timeout_ms;
     uint16_t tap_and_hold_release_timeout_ms;
 
     // スクロール設定
@@ -449,8 +450,6 @@ struct iqs915x_config
     uint16_t swipe_direction_lock_denominator;
 
     // タイミング設定
-    uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
-    uint16_t tap_move_threshold; // タップ判定の最大移動量(raw units), 0=自動
     uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
     // 座標入力モード
@@ -478,7 +477,8 @@ struct iqs915x_data
 
     struct k_work_delayable button_release_work;
     struct k_work_delayable tap_and_hold_release_work;
-    struct k_work_delayable tap_and_hold_click_work;
+    struct k_work_delayable single_tap_work;
+    struct k_work_delayable tap_and_hold_start_work;
 
     // ステートマシン
     enum iqs915x_init_step init_step;   // 初期化進行状態
@@ -500,7 +500,10 @@ struct iqs915x_data
     // Tap-and-Holdでドラッグ状態かどうか
     bool active_tap_hold;
     bool tap_and_hold_release_pending;
-    bool tap_and_hold_click_pending;
+    bool single_tap_pending;
+    bool tap_sequence_second_touch;
+    bool tap_and_hold_start_pending;
+    int64_t pending_tap_up_time;
 
     // 生のタッチ状態トラッキング（Rapid Tap-and-Drag判定用）
     bool is_touching;
@@ -514,6 +517,9 @@ struct iqs915x_data
     int32_t tap_start_y;
     uint32_t tap_max_movement;
     uint32_t completed_two_finger_movement;
+    uint16_t tap_touch_time_ms;
+    uint16_t tap_air_time_ms;
+    uint16_t tap_distance;
     uint16_t last_abs_x; // 直前に報告したabsolute X座標
     uint16_t last_abs_y; // 直前に報告したabsolute Y座標
     bool last_abs_valid; // absolute座標の直前報告値が有効か
