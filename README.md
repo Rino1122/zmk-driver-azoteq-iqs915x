@@ -10,11 +10,11 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 - Trackpad movement (relative coordinates).
 - Optional absolute X/Y reporting from FINGER1_X/Y.
-- Single finger tap: Reported as a left click.
-- Two finger tap: Reported as a right click.
+- Driver-side single finger tap: Reported as a left click.
+- Driver-side two finger tap: Reported as a right click.
 - Tap-and-hold: A single tap is held briefly; a retouch starts left-button drag, otherwise a click is reported.
-- Vertical scroll.
-- Horizontal scroll.
+- Driver-side vertical scroll from absolute finger coordinates.
+- Driver-side horizontal scroll from absolute finger coordinates.
 - Scroll inertia.
 
 ## Usage
@@ -47,6 +47,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         tap-and-hold;
         tap-and-hold-reentry-timeout-ms = <300>;
         tap-and-hold-release-timeout-ms = <250>;
+        tap-move-threshold = <0>;            /* 0 = auto threshold from X/Y resolution */
         two-finger-tap;
 
         scroll;
@@ -86,6 +87,15 @@ used as a baseline (no cursor move), then relative movement is reported while
 `TP Movement` is asserted. If the property is omitted, the driver uses
 `REL_X`/`REL_Y` registers directly.
 
+In Event Mode, the driver enables `TP_EVENT` as the only event source and
+disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
+`TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level
+finger up/down transitions. One-finger tap, two-finger tap, and two-finger
+scroll are recognized in the driver from `GLOBAL_TP_TOUCH`, finger count, touch
+duration, and absolute finger coordinates. `tap-move-threshold = <0>` derives
+the maximum tap movement from the configured X/Y resolution; set a positive raw
+coordinate value to override it.
+
 When `three-finger-swipe` or `four-finger-swipe` is enabled, the driver tracks
 the centroid of active fingers and emits one-shot private gesture input events
 based on the dominant swipe direction. The direction is locked only after the
@@ -121,8 +131,9 @@ events. To expose gesture controls in Studio, add 8 gesture slots on the
 firmware side and map the gesture events to those keymap positions with an input
 processor.
 
-The current scroll inertia model follows a Q8 fixed-point decay flow with
-remainder preservation and round-to-nearest output.
+The current scroll inertia model uses two-finger centroid deltas from absolute
+coordinates, then follows a Q8 fixed-point decay flow with remainder
+preservation and round-to-nearest output.
 
 Legacy properties (`scroll-inertia-decay`, `scroll-inertia-interval-ms`,
 `scroll-inertia-stale-gap-ms`, `scroll-inertia-min-avg-speed`) are still

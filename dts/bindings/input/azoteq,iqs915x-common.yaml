@@ -10,7 +10,7 @@ properties:
 
   one-finger-tap:
     type: boolean
-    description: "Enable single finger tap (left click)"
+    description: "Enable driver-side single finger tap (left click)"
 
   tap-and-hold:
     type: boolean
@@ -28,11 +28,11 @@ properties:
 
   two-finger-tap:
     type: boolean
-    description: "Enable two finger tap (right click)"
+    description: "Enable driver-side two finger tap (right click)"
 
   scroll:
     type: boolean
-    description: "Enable two-finger scroll (vertical and horizontal)"
+    description: "Enable driver-side two-finger scroll from absolute coordinates"
 
   switch-xy:
     type: boolean
@@ -52,6 +52,14 @@ properties:
     description: |
       Scroll sensitivity divisor. Smaller values = more sensitive scrolling.
       Default: 2. Increase for slower scrolling, decrease for faster.
+
+  tap-move-threshold:
+    type: int
+    default: 0
+    description: |
+      Maximum movement in raw coordinate units for a touch sequence to remain
+      eligible as a one- or two-finger tap. Set 0 to derive the threshold from
+      the configured X/Y resolution.
 
   scroll-inertia:
     type: boolean
@@ -297,7 +305,8 @@ properties:
   tap-time:
     type: int
     description: |
-      Tap detection time in ms. If not set, IQS9150 NVM default is used.
+      Driver-side tap detection time in ms. If not set, the driver uses its
+      built-in tap duration fallback.
       Shorter values make taps more responsive but may cause false positives.
 
   report-rate-ms:

@@ -7,8 +7,8 @@
  * IQS915xのI2C特性:
  *   - リトルエンディアンのバイトオーダー
  *   - デフォルトではI2C STOPで通信ウィンドウが閉じる
- *   - RESTART方式の読み取り（i2c_write_read）は非対応
- *     → レジスタアドレスなしのraw読み取り（i2c_read）を使用
+ *   - ストリーミング読み取りはREL_Xのレジスタアドレス指定後に
+ *     i2c_write_readで連続読み取りする
  *   - ストリーミング出力はREL_X (0x1014) から開始、
  *     本ドライバではFINGER4_X/Yまで含めて44バイトを読む
  *   - 書き込みは通常のi2c_write（アドレス+データ）で動作
@@ -49,6 +49,7 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_RAW_TAP_MAX_DURATION_MS 200
+#define IQS915X_TAP_MOVE_THRESHOLD_FALLBACK 24U
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
@@ -57,6 +58,19 @@ static void iqs915x_restart_initialization(const struct device *dev,
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
 {
   data->event_mode_relatch_retry_count = 0;
+}
+
+static uint16_t iqs915x_apply_config_settings_policy(uint16_t cfg)
+{
+  cfg |= IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT;
+  cfg &= ~(IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT);
+  return cfg;
+}
+
+static uint16_t iqs915x_config_settings_without_event_mode(uint16_t cfg)
+{
+  cfg = iqs915x_apply_config_settings_policy(cfg);
+  return cfg & ~IQS915X_EVENT_MODE;
 }
 
 static void iqs915x_schedule_event_mode_relatch(struct iqs915x_data *data,
@@ -238,10 +252,10 @@ static int iqs915x_read_block(const struct device *dev, uint16_t reg,
  * メモリレイアウト (44 bytes, リトルエンディアン):
  *   [0-1]:   REL_X (signed int16)
  *   [2-3]:   REL_Y (signed int16)
- *   [4-5]:   GESTURE_X (uint16)
- *   [6-7]:   GESTURE_Y (uint16)
- *   [8-9]:   SINGLE_FINGER_GESTURES (uint16)
- *   [10-11]: TWO_FINGER_GESTURES (uint16)
+ *   [4-5]:   GESTURE_X (uint16, read for diagnostics only)
+ *   [6-7]:   GESTURE_Y (uint16, read for diagnostics only)
+ *   [8-9]:   SINGLE_FINGER_GESTURES (uint16, not used for recognition)
+ *   [10-11]: TWO_FINGER_GESTURES (uint16, not used for recognition)
  *   [12-13]: INFO_FLAGS (uint16)
  *   [14-15]: TRACKPAD_FLAGS (uint16)
  *   [16-17]: FINGER1_X (uint16)
@@ -261,10 +275,10 @@ struct iqs915x_stream_data
 {
   int16_t rel_x;
   int16_t rel_y;
-  uint16_t gesture_x;
-  uint16_t gesture_y;
-  uint16_t gesture_sf; // Single Finger Gestures
-  uint16_t gesture_tf; // Two Finger Gestures
+  uint16_t gesture_x;  // Diagnostics only; driver-side gestures use coordinates.
+  uint16_t gesture_y;  // Diagnostics only; driver-side gestures use coordinates.
+  uint16_t gesture_sf; // Diagnostics only; not used as a recognition source.
+  uint16_t gesture_tf; // Diagnostics only; not used as a recognition source.
   uint16_t info_flags;
   uint16_t trackpad_flags;
   uint16_t abs_x;
@@ -356,6 +370,60 @@ static bool iqs915x_absolute_delta_is_discontinuity(
   return abs(rel_x) > threshold || abs(rel_y) > threshold;
 }
 
+static uint32_t iqs915x_axis_movement(int32_t dx, int32_t dy)
+{
+  return (uint32_t)MAX(abs(dx), abs(dy));
+}
+
+static int16_t iqs915x_clamp_i16(int32_t value)
+{
+  if (value < -32768)
+  {
+    return -32768;
+  }
+
+  if (value > 32767)
+  {
+    return 32767;
+  }
+
+  return (int16_t)value;
+}
+
+static uint16_t iqs915x_tap_move_threshold(const struct iqs915x_config *config,
+                                           const struct iqs915x_data *data)
+{
+  uint16_t res_x = data->swipe_resolution_x;
+  uint16_t res_y = data->swipe_resolution_y;
+  uint16_t min_res;
+
+  if (config->tap_move_threshold > 0)
+  {
+    return config->tap_move_threshold;
+  }
+
+  if (res_x == 0 && res_y == 0)
+  {
+    return IQS915X_TAP_MOVE_THRESHOLD_FALLBACK;
+  }
+
+  if (res_x == 0)
+  {
+    min_res = res_y;
+  }
+  else if (res_y == 0)
+  {
+    min_res = res_x;
+  }
+  else
+  {
+    min_res = MIN(res_x, res_y);
+  }
+
+  return MAX((uint16_t)(min_res / 80U),
+             (uint16_t)IQS915X_TAP_MOVE_THRESHOLD_FALLBACK);
+}
+
 static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
 {
   memset(&data->two_finger, 0, sizeof(data->two_finger));
@@ -380,6 +448,12 @@ static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->tap_drag_raw_max_fingers = 0;
   data->tap_drag_raw_gesture_seen = false;
   data->raw_single_tap_reported = false;
+  data->raw_two_finger_tap_reported = false;
+  data->tap_start_valid = false;
+  data->tap_start_x = 0;
+  data->tap_start_y = 0;
+  data->tap_max_movement = 0;
+  data->completed_two_finger_movement = 0;
   data->tap_and_hold_click_pending = false;
   iqs915x_reset_two_finger_session(data);
 }
@@ -606,6 +680,10 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
     tracker->completed_two_tap_path =
         tracker->sequence_active && tracker->sequence_seen_two &&
         tracker->sequence_max_count == 2;
+    if (tracker->completed_two_tap_path && two_finger->active)
+    {
+      data->completed_two_finger_movement = two_finger->max_centroid_movement;
+    }
     tracker->sequence_active = false;
     tracker->sequence_max_count = 0;
     tracker->sequence_seen_one = false;
@@ -646,6 +724,9 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
     two_finger->mode = IQS915X_2F_MODE_NONE;
     two_finger->centroid_last_x = centroid_x;
     two_finger->centroid_last_y = centroid_y;
+    two_finger->centroid_start_x = centroid_x;
+    two_finger->centroid_start_y = centroid_y;
+    two_finger->max_centroid_movement = 0;
     two_finger->distance_last = distance;
     return;
   }
@@ -653,6 +734,10 @@ static void iqs915x_update_finger_state(const struct iqs915x_config *config,
   two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
   two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
   two_finger->distance_delta = distance - two_finger->distance_last;
+  two_finger->max_centroid_movement =
+      MAX(two_finger->max_centroid_movement,
+          iqs915x_axis_movement(centroid_x - two_finger->centroid_start_x,
+                                centroid_y - two_finger->centroid_start_y));
   two_finger->centroid_last_x = centroid_x;
   two_finger->centroid_last_y = centroid_y;
   two_finger->distance_last = distance;
@@ -791,6 +876,7 @@ static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config
       stream->gesture_tf);
   data->swipe_triggered = true;
   data->multifinger_swipe_latched = true;
+  data->tap_drag_raw_gesture_seen = true;
   LOG_INF("Gesture triggered: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u",
           stable_fingers,
           horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
@@ -831,7 +917,8 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
   {
   case WORK_RELATCH_EVENT_MODE_DISABLE:
   {
-    uint16_t cfg = data->confirmed_config_settings & ~IQS915X_EVENT_MODE;
+    uint16_t cfg =
+        iqs915x_config_settings_without_event_mode(data->confirmed_config_settings);
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
@@ -856,8 +943,8 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
 
   case WORK_RELATCH_EVENT_MODE_ENABLE:
   {
-    uint16_t cfg = data->confirmed_config_settings |
-                   IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+    uint16_t cfg =
+        iqs915x_apply_config_settings_policy(data->confirmed_config_settings);
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
@@ -918,6 +1005,143 @@ static void iqs915x_report_button_tap(struct iqs915x_data *data,
   data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
   k_work_schedule(&data->button_release_work,
                   K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
+}
+
+static uint16_t iqs915x_tap_duration_limit_ms(const struct iqs915x_config *config)
+{
+  return config->tap_time > 0 ? config->tap_time : IQS915X_RAW_TAP_MAX_DURATION_MS;
+}
+
+static void iqs915x_update_single_tap_movement(
+    const struct iqs915x_config *config, struct iqs915x_data *data,
+    const struct iqs915x_stream_data *stream, uint8_t num_fingers)
+{
+  uint16_t threshold = iqs915x_tap_move_threshold(config, data);
+
+  if (num_fingers != 1 ||
+      (stream->trackpad_flags & IQS915X_FINGER1_CONFIDENCE) == 0)
+  {
+    return;
+  }
+
+  if (!data->tap_start_valid)
+  {
+    data->tap_start_x = stream->abs_x;
+    data->tap_start_y = stream->abs_y;
+    data->tap_start_valid = true;
+    data->tap_max_movement = 0;
+    return;
+  }
+
+  data->tap_max_movement =
+      MAX(data->tap_max_movement,
+          iqs915x_axis_movement((int32_t)stream->abs_x - data->tap_start_x,
+                                (int32_t)stream->abs_y - data->tap_start_y));
+
+  if (data->tap_max_movement > threshold)
+  {
+    data->tap_drag_raw_gesture_seen = true;
+  }
+}
+
+static bool iqs915x_handle_two_finger_scroll(
+    const struct iqs915x_config *config, struct iqs915x_data *data,
+    const struct iqs915x_stream_data *stream)
+{
+  struct iqs915x_two_finger_session *two_finger = &data->two_finger;
+  uint16_t threshold = iqs915x_tap_move_threshold(config, data);
+  int16_t gx;
+  int16_t gy;
+  int16_t scroll_div;
+
+  if (!config->scroll || data->finger_tracker.stable_count != 2 ||
+      !two_finger->active || data->scroll_blocked_until_low_contact)
+  {
+    return false;
+  }
+
+  if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
+  {
+    if (two_finger->max_centroid_movement <= threshold)
+    {
+      return false;
+    }
+
+    two_finger->mode = IQS915X_2F_MODE_SCROLL;
+    data->scroll_sequence_active = true;
+    data->tap_drag_raw_gesture_seen = true;
+    LOG_DBG("scroll started from centroid movement: max=%u threshold=%u",
+            two_finger->max_centroid_movement, threshold);
+  }
+
+  gx = iqs915x_clamp_i16(two_finger->centroid_dx);
+  gy = iqs915x_clamp_i16(two_finger->centroid_dy);
+  scroll_div = config->scroll_divisor > 0 ? config->scroll_divisor : 1;
+
+  if (gx == 0 && gy == 0)
+  {
+    return true;
+  }
+
+  if (config->scroll_inertia.enabled)
+  {
+    if (data->scroll_inertia_state.active &&
+        data->scroll_inertia_state.is_inertial)
+    {
+      iqs915x_cancel_scroll_inertia(data);
+    }
+
+    if (gx != 0)
+    {
+      data->scroll_inertia_state.vx = gx;
+      data->scroll_inertia_state.ema_vx =
+          (int16_t)((gx + data->scroll_inertia_state.ema_vx) >> 1);
+    }
+
+    if (gy != 0)
+    {
+      data->scroll_inertia_state.vy = gy;
+      data->scroll_inertia_state.ema_vy =
+          (int16_t)((gy + data->scroll_inertia_state.ema_vy) >> 1);
+    }
+
+    if (abs(data->scroll_inertia_state.vx) >=
+            config->scroll_inertia.threshold_start ||
+        abs(data->scroll_inertia_state.vy) >=
+            config->scroll_inertia.threshold_start)
+    {
+      data->scroll_inertia_state.active = true;
+      data->scroll_inertia_state.is_inertial = false;
+      k_work_reschedule(&data->scroll_inertia_work,
+                        K_MSEC(config->scroll_inertia.trigger_ms));
+    }
+  }
+
+  if (gx != 0)
+  {
+    data->scroll_x_acc += gx;
+    if (abs(data->scroll_x_acc) >= scroll_div)
+    {
+      input_report_rel(data->dev, INPUT_REL_HWHEEL,
+                       data->scroll_x_acc / scroll_div, true, K_FOREVER);
+      data->scroll_x_acc %= scroll_div;
+    }
+  }
+
+  if (gy != 0)
+  {
+    data->scroll_y_acc += gy;
+    if (abs(data->scroll_y_acc) >= scroll_div)
+    {
+      input_report_rel(data->dev, INPUT_REL_WHEEL,
+                       data->scroll_y_acc / scroll_div, true, K_FOREVER);
+      data->scroll_y_acc %= scroll_div;
+    }
+  }
+
+  LOG_DBG("scroll centroid: dx=%d dy=%d flags=0x%04x", gx, gy,
+          stream->trackpad_flags);
+  return true;
 }
 
 static void iqs915x_tap_and_hold_click_work_handler(struct k_work *work)
@@ -1134,17 +1358,24 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       }
       else if (current_addr == IQS915X_CONFIG_SETTINGS)
       {
+        uint16_t cfg = (uint16_t)buffer[i] | ((uint16_t)buffer[i + 1] << 8);
+
         // TERMINATE_COMMS(bit6), FORCE_COMMS_METHOD(bit4) は
         // クロックストレッチ＋I2C STOPによる標準動作のため強制クリアし、
-        // MANUAL_CONTROL(bit7) は常に有効化する
-        buffer[i] = (buffer[i] & ~0x50) | 0x80;
+        // Event ModeではTP_EVENTのみをイベント源にする。
+        cfg &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
+        cfg = iqs915x_config_settings_without_event_mode(cfg);
+        buffer[i] = cfg & 0xFF;
       }
       else if (current_addr == IQS915X_CONFIG_SETTINGS + 1)
       {
-        // 16-bit little-endian: high byte bit0 == CONFIG_SETTINGS bit8
-        // (EVENT_MODE)。SHOW_RESET clear後に明示writeするため、
-        // init-data中はevent source bitsを維持しつつEVENT_MODEだけclearする。
-        buffer[i] &= ~0x01;
+        uint16_t cfg = (uint16_t)buffer[i - 1] | ((uint16_t)buffer[i] << 8);
+
+        // 16-bit little-endian: high byte bit0 == EVENT_MODE。
+        // SHOW_RESET clear後に明示writeするためEVENT_MODEだけclearし、
+        // GESTURE_EVENT/TP_TOUCH_EVENTは無効、TP_EVENTのみ有効にする。
+        cfg = iqs915x_config_settings_without_event_mode(cfg);
+        buffer[i] = (cfg >> 8) & 0xFF;
       }
       // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
       else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
@@ -1174,25 +1405,16 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       }
       else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
       {
-        // 影響ビットはすべて下位バイト: bit0=SINGLE_TAP, bit3=PRESS_AND_HOLD
+        // tap/holdはドライバ側で指本数・位置・時間から判定する。
         uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
-        uint8_t set = 0;
-        if (config->one_finger_tap || config->tap_and_hold)
-          set |= (uint8_t)IQS915X_SINGLE_TAP;
-        // PRESS_AND_HOLDはSWエミュレートのため常にHWクリア
-        buffer[i] = (buffer[i] & ~clr) | set;
+        buffer[i] &= ~clr;
         dts_patch = true;
       }
       else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
       {
-        // 影響ビットはすべて下位バイト: bit0=TWO_FINGER_TAP, bit6-7=SCROLL_V/H
+        // two-finger tap/scrollはabsolute座標からドライバ側で判定する。
         uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
-        uint8_t set = 0;
-        if (config->two_finger_tap)
-          set |= (uint8_t)IQS915X_TWO_FINGER_TAP;
-        if (config->scroll)
-          set |= (uint8_t)IQS915X_SCROLL;
-        buffer[i] = (buffer[i] & ~clr) | set;
+        buffer[i] &= ~clr;
         dts_patch = true;
       }
       else if (current_addr == IQS915X_TAP_TIME && config->tap_time > 0)
@@ -1543,8 +1765,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
   case INIT_PREPARE_EVENT_MODE:
   {
     // SHOW_RESET clearとTP Re-ATI完了後にEvent Modeを明示writeする。
-    // このstateでは既存event source bitsを維持するため読み取りだけ行い、
-    // 次RDYのINIT_SET_EVENT_MODEでEVENT_MODE/MANUAL_CONTROLをORした値を書く。
+    // Event sourceはTP_EVENTのみ有効化し、IQS915x gesture eventと
+    // diamond pattern channel変化用のTP_TOUCH_EVENTは無効化する。
     uint16_t cfg = 0;
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
     if (ret < 0)
@@ -1552,7 +1774,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
       return;
     }
-    data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+    data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->wait_count = 0;
     data->init_step = INIT_SET_EVENT_MODE;
     break;
@@ -1583,8 +1805,11 @@ static void iqs915x_init_step_handler(const struct device *dev)
       return;
     }
 
-    if ((cfg & (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL)) ==
-        (IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL))
+    uint16_t expected = IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL |
+                        IQS915X_TP_EVENT;
+    uint16_t forbidden = IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT;
+
+    if ((cfg & expected) == expected && (cfg & forbidden) == 0)
     {
       LOG_INF("Init: Event Mode confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
@@ -1610,10 +1835,10 @@ static void iqs915x_init_step_handler(const struct device *dev)
       break;
     }
 
-    LOG_WRN("Init: CONFIG_SETTINGS still missing required bits (0x%04x), "
+    LOG_WRN("Init: CONFIG_SETTINGS still missing TP_EVENT-only policy (0x%04x), "
             "retrying force (%d/%d)",
             cfg, data->wait_count, IQS915X_INIT_EVENT_MODE_MAX_RETRIES);
-    data->init_pending_cfg = cfg | IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL;
+    data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->init_step = INIT_SET_EVENT_MODE;
     break;
   }
@@ -1827,10 +2052,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool touch_up = !is_touching_now && was_touching;
     bool touch_state_changed = touch_down || touch_up;
     bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
-    bool gesture_active = stream.gesture_sf != 0 || stream.gesture_tf != 0;
     uint8_t num_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-    bool tap_drag_blocking_gesture =
-        stream.gesture_tf != 0 || (stream.gesture_sf & ~IQS915X_SINGLE_TAP) != 0;
 
     if (touch_down)
     {
@@ -1838,15 +2060,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->tap_drag_raw_max_fingers = num_fingers > 0 ? num_fingers : 1;
       data->tap_drag_raw_gesture_seen = false;
       data->raw_single_tap_reported = false;
+      data->raw_two_finger_tap_reported = false;
+      data->completed_two_finger_movement = 0;
+      data->tap_start_valid = false;
+      data->tap_max_movement = 0;
     }
     else if (is_touching_now && num_fingers > data->tap_drag_raw_max_fingers)
     {
       data->tap_drag_raw_max_fingers = num_fingers;
-    }
-
-    if (is_touching_now && tap_drag_blocking_gesture)
-    {
-      data->tap_drag_raw_gesture_seen = true;
     }
 
     if (touch_up)
@@ -1858,32 +2079,25 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     iqs915x_update_finger_state(config, data, &stream, touch_up);
     iqs915x_update_sequence_gates(data);
 
+    iqs915x_update_single_tap_movement(config, data, &stream, num_fingers);
+
     bool has_tp_event = is_touching_now || touch_state_changed;
-    if (gesture_active || tp_movement)
+    if (tp_movement)
     {
       has_tp_event = true;
     }
 
     if (has_tp_event)
     {
+      bool scroll = iqs915x_handle_two_finger_scroll(config, data, &stream);
+      bool gesture_active = scroll || data->scroll_sequence_active ||
+                            data->multifinger_swipe_latched;
       bool suppress_pointer_tail =
           !gesture_active && data->gesture_pointer_suppress_ticks > 0;
       bool suppress_pointer = gesture_active || suppress_pointer_tail;
       bool single_finger_pointer = data->finger_tracker.stable_count == 1;
       bool allow_pointer_report = !suppress_pointer && single_finger_pointer &&
                                   !data->finger_tracker.awaiting_zero_contact;
-      bool scroll = (stream.gesture_tf & IQS915X_SCROLL) != 0;
-      bool scroll_blocked_by_path =
-          scroll && data->finger_tracker.stable_count == 2 &&
-          data->scroll_blocked_until_low_contact;
-
-      if (scroll_blocked_by_path)
-      {
-        scroll = false;
-        LOG_DBG("scroll suppressed: sequence_max=%u stable=%u",
-                data->finger_tracker.sequence_max_count,
-                data->finger_tracker.stable_count);
-      }
 
       if (gesture_active)
       {
@@ -1898,16 +2112,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (touch_up)
       {
         data->gesture_pointer_suppress_ticks = 0;
-      }
-
-      // 診断: ジェスチャーフラグが非ゼロのときにログ出力
-      if (gesture_active)
-      {
-        LOG_DBG(
-            "gesture: sf=0x%04x tf=0x%04x gx=%d gy=%d rx=%d ry=%d tp=0x%04x",
-            stream.gesture_sf, stream.gesture_tf, (int16_t)stream.gesture_x,
-            (int16_t)stream.gesture_y, stream.rel_x, stream.rel_y,
-            stream.trackpad_flags);
       }
 
       int64_t now_ms = k_uptime_get();
@@ -1935,74 +2139,67 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       bool single_tap_enabled = config->one_finger_tap || config->tap_and_hold;
       bool allow_single_tap = data->finger_tracker.completed_one_tap_path;
       bool allow_two_finger_tap = data->finger_tracker.completed_two_tap_path;
+      uint16_t tap_move_threshold = iqs915x_tap_move_threshold(config, data);
       bool raw_single_tap_path =
           !is_touching_now && data->tap_drag_raw_max_fingers == 1 &&
-          !data->tap_drag_raw_gesture_seen;
-      bool raw_single_tap_available =
-          raw_single_tap_path && !data->raw_single_tap_reported;
+          !data->tap_drag_raw_gesture_seen &&
+          data->tap_max_movement <= tap_move_threshold;
       int64_t touch_duration_ms =
           touch_up && data->last_touch_down_time > 0
               ? now_ms - data->last_touch_down_time
               : 0;
+      bool tap_duration_ok =
+          touch_up && touch_duration_ms <= iqs915x_tap_duration_limit_ms(config);
       bool raw_single_tap_completed =
-          touch_up && touch_duration_ms < IQS915X_RAW_TAP_MAX_DURATION_MS &&
+          tap_duration_ok &&
           raw_single_tap_path;
-
-      if (stream.gesture_sf & IQS915X_SINGLE_TAP)
-      {
-        if (data->raw_single_tap_reported)
-        {
-          LOG_DBG("single tap ignored: raw tap already reported");
-        }
-        else if (allow_single_tap || raw_single_tap_available)
-        {
-          single_tap_pressed = true;
-          button_code = INPUT_BTN_0;
-          data->raw_single_tap_reported = true;
-          if (!allow_single_tap)
-          {
-            LOG_DBG("single tap accepted from raw touch sequence: "
-                    "stable=%u max=%u raw_max=%u",
-                    data->finger_tracker.stable_count,
-                    data->finger_tracker.sequence_max_count,
-                    data->tap_drag_raw_max_fingers);
-          }
-        }
-        else
-        {
-          LOG_DBG("single tap suppressed: path invalid "
-                  "(stable=%u max=%u raw_max=%u raw_gesture=%u touching=%u)",
-                  data->finger_tracker.stable_count,
-                  data->finger_tracker.sequence_max_count,
-                  data->tap_drag_raw_max_fingers,
-                  data->tap_drag_raw_gesture_seen, is_touching_now);
-        }
-      }
-      else if (stream.gesture_tf & IQS915X_TWO_FINGER_TAP)
-      {
-        if (allow_two_finger_tap)
-        {
-          two_finger_tap_pressed = true;
-          button_code = INPUT_BTN_1;
-        }
-        else
-        {
-          LOG_DBG("two-finger tap suppressed: path invalid (stable=%u max=%u)",
-                  data->finger_tracker.stable_count,
-                  data->finger_tracker.sequence_max_count);
-        }
-      }
+      bool raw_two_finger_tap_completed =
+          tap_duration_ok && allow_two_finger_tap &&
+          data->tap_drag_raw_max_fingers == 2 &&
+          data->completed_two_finger_movement <= tap_move_threshold &&
+          !data->tap_drag_raw_gesture_seen &&
+          !data->raw_two_finger_tap_reported;
 
       if (single_tap_enabled && raw_single_tap_completed &&
-          !single_tap_pressed && !data->raw_single_tap_reported)
+          !data->raw_single_tap_reported)
       {
         single_tap_pressed = true;
         button_code = INPUT_BTN_0;
         data->raw_single_tap_reported = true;
-        LOG_DBG("single tap detected from raw touch-up: "
-                "duration=%lld ms max_fingers=%u",
+        LOG_DBG("single tap detected from touch sequence: duration=%lld ms "
+                "movement=%u threshold=%u stable_path=%u",
+                (long long)touch_duration_ms, data->tap_max_movement,
+                tap_move_threshold, allow_single_tap);
+      }
+      else if (touch_up && single_tap_enabled && data->tap_drag_raw_max_fingers == 1 &&
+               !data->raw_single_tap_reported)
+      {
+        LOG_DBG("single tap suppressed: duration=%lld movement=%u threshold=%u "
+                "raw_gesture=%u path=%u",
+                (long long)touch_duration_ms, data->tap_max_movement,
+                tap_move_threshold, data->tap_drag_raw_gesture_seen,
+                allow_single_tap);
+      }
+
+      if (config->two_finger_tap && raw_two_finger_tap_completed)
+      {
+        two_finger_tap_pressed = true;
+        button_code = INPUT_BTN_1;
+        data->raw_two_finger_tap_reported = true;
+        LOG_DBG("two-finger tap detected from touch sequence: duration=%lld ms "
+                "movement=%u threshold=%u",
                 (long long)touch_duration_ms,
-                data->tap_drag_raw_max_fingers);
+                data->completed_two_finger_movement, tap_move_threshold);
+      }
+      else if (touch_up && config->two_finger_tap &&
+               data->tap_drag_raw_max_fingers == 2 &&
+               !data->raw_two_finger_tap_reported)
+      {
+        LOG_DBG("two-finger tap suppressed: duration=%lld movement=%u "
+                "threshold=%u path=%u scroll=%u",
+                (long long)touch_duration_ms,
+                data->completed_two_finger_movement, tap_move_threshold,
+                allow_two_finger_tap, data->tap_drag_raw_gesture_seen);
       }
 
       bool tap_and_hold_became_active = false;
@@ -2072,66 +2269,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
       if (scroll)
       {
-        // スクロール: GESTURE_X/Yをスクロールデルタとして使用
-        // (REL_X/REL_Yはスクロール中はゼロ)
-        int16_t gx = (int16_t)stream.gesture_x;
-        int16_t gy = (int16_t)stream.gesture_y;
-        int16_t scroll_div = config->scroll_divisor;
-
-        data->scroll_sequence_active = true;
-
-        if (config->scroll_inertia.enabled)
-        {
-          if (data->scroll_inertia_state.active &&
-              data->scroll_inertia_state.is_inertial)
-          {
-            iqs915x_cancel_scroll_inertia(data);
-          }
-
-          if (gx != 0)
-          {
-            data->scroll_inertia_state.vx = gx;
-            data->scroll_inertia_state.ema_vx =
-                (int16_t)((gx + data->scroll_inertia_state.ema_vx) >> 1);
-          }
-
-          if (gy != 0)
-          {
-            data->scroll_inertia_state.vy = gy;
-            data->scroll_inertia_state.ema_vy =
-                (int16_t)((gy + data->scroll_inertia_state.ema_vy) >> 1);
-          }
-
-          if (abs(data->scroll_inertia_state.vx) >= config->scroll_inertia.threshold_start ||
-              abs(data->scroll_inertia_state.vy) >= config->scroll_inertia.threshold_start)
-          {
-            data->scroll_inertia_state.active = true;
-            data->scroll_inertia_state.is_inertial = false;
-            k_work_reschedule(&data->scroll_inertia_work,
-                              K_MSEC(config->scroll_inertia.trigger_ms));
-          }
-        }
-
-        if (gx != 0)
-        {
-          data->scroll_x_acc += gx;
-          if (abs(data->scroll_x_acc) >= scroll_div)
-          {
-            input_report_rel(dev, INPUT_REL_HWHEEL,
-                             data->scroll_x_acc / scroll_div, true, K_FOREVER);
-            data->scroll_x_acc %= scroll_div;
-          }
-        }
-        if (gy != 0)
-        {
-          data->scroll_y_acc += gy;
-          if (abs(data->scroll_y_acc) >= scroll_div)
-          {
-            input_report_rel(dev, INPUT_REL_WHEEL,
-                             data->scroll_y_acc / scroll_div, true, K_FOREVER);
-            data->scroll_y_acc %= scroll_div;
-          }
-        }
+        // 2本指scrollはabsolute centroid deltaから処理済み。
       }
       else if (iqs915x_handle_multifinger_swipe(config, data, &stream))
       {
@@ -2159,12 +2297,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           if (touch_down || tp_movement)
           {
             LOG_DBG(
-                "tp_absolute suppressed: sf=0x%04x tf=0x%04x fingers=%u "
-                "stable=%u await0=%u conf=%u x=%u y=%u",
-                stream.gesture_sf, stream.gesture_tf, num_fingers,
+                "tp_absolute suppressed: fingers=%u stable=%u await0=%u "
+                "conf=%u scroll=%u gesture_seen=%u x=%u y=%u",
+                num_fingers,
                 data->finger_tracker.stable_count,
                 data->finger_tracker.awaiting_zero_contact,
                 (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0,
+                data->scroll_sequence_active,
+                data->tap_drag_raw_gesture_seen,
                 stream.abs_x, stream.abs_y);
           }
         }
@@ -2219,9 +2359,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           }
 
           LOG_DBG(
-              "tp_movement suppressed: sf=0x%04x tf=0x%04x fingers=%u await0=%u rel_x=%d rel_y=%d",
-              stream.gesture_sf, stream.gesture_tf, num_fingers,
+              "tp_movement suppressed: fingers=%u await0=%u scroll=%u "
+              "gesture_seen=%u rel_x=%d rel_y=%d",
+              num_fingers,
               data->finger_tracker.awaiting_zero_contact,
+              data->scroll_sequence_active,
+              data->tap_drag_raw_gesture_seen,
               stream.rel_x, stream.rel_y);
         }
         else
@@ -2417,6 +2560,7 @@ static int iqs915x_init(const struct device *dev)
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .tap_time = DT_INST_PROP_OR(n, tap_time, 0),                                                                                                                                                 \
+      .tap_move_threshold = DT_INST_PROP_OR(n, tap_move_threshold, 0),                                                                                                                             \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
       .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
       .tap_and_hold_reentry_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_reentry_timeout_ms, 300),                                                                                                  \

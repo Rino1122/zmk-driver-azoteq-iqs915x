@@ -199,9 +199,9 @@
 #define IQS915X_TERMINATE_COMMS BIT(6)    // 1: 手動終了（0xEEEE書込み必要）
 #define IQS915X_MANUAL_CONTROL BIT(7)     // 手動モード制御
 #define IQS915X_EVENT_MODE BIT(8)         // 0: ストリーミング, 1: イベントモード
-#define IQS915X_GESTURE_EVENT BIT(9)      // ジェスチャーイベント有効化
-#define IQS915X_TP_EVENT BIT(10)          // トラックパッドイベント有効化
-#define IQS915X_TP_TOUCH_EVENT BIT(13)    // トラックパッドタッチイベント有効化
+#define IQS915X_GESTURE_EVENT BIT(9)   // ジェスチャーイベント有効化
+#define IQS915X_TP_EVENT BIT(10)       // 指移動および指up/downイベント有効化
+#define IQS915X_TP_TOUCH_EVENT BIT(13) // diamond pattern各チャネル状態変化イベント
 
 // Trackpad Settings (1 byte)
 // XYのフリップ・スワップ設定
@@ -404,6 +404,9 @@ struct iqs915x_two_finger_session
     int32_t distance_delta;
     int32_t centroid_last_x;
     int32_t centroid_last_y;
+    int32_t centroid_start_x;
+    int32_t centroid_start_y;
+    uint32_t max_centroid_movement;
     int32_t distance_last;
     int32_t pinch_wheel_remainder;
 };
@@ -450,6 +453,7 @@ struct iqs915x_config
 
     // タイミング設定
     uint16_t tap_time;       // タップ判定時間(ms), 0=NVMデフォルト
+    uint16_t tap_move_threshold; // タップ判定の最大移動量(raw units), 0=自動
     uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
     // 座標入力モード
@@ -507,6 +511,12 @@ struct iqs915x_data
     uint8_t tap_drag_raw_max_fingers;
     bool tap_drag_raw_gesture_seen;
     bool raw_single_tap_reported;
+    bool raw_two_finger_tap_reported;
+    bool tap_start_valid;
+    int32_t tap_start_x;
+    int32_t tap_start_y;
+    uint32_t tap_max_movement;
+    uint32_t completed_two_finger_movement;
     uint16_t last_abs_x; // 直前に報告したabsolute X座標
     uint16_t last_abs_y; // 直前に報告したabsolute Y座標
     bool last_abs_valid; // absolute座標の直前報告値が有効か
