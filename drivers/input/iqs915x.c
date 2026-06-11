@@ -610,7 +610,8 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
   struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
   uint8_t reported_count = stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-  uint8_t raw_count = is_touching_now ? reported_count : 0;
+  bool global_tp_touch = (stream->info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
+  uint8_t raw_count = reported_count;
   uint8_t stable_before = tracker->stable_count;
 
   tracker->current_count = raw_count;
@@ -618,7 +619,7 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
 
   if (touch_down_event)
   {
-    // 接触シーケンス境界はGLOBAL_TP_TOUCHを唯一の根拠にする。
+    // GLOBAL_TP_TOUCHは取りこぼしがあるため、接触境界はNUM_FINGERSだけで判定する。
     tracker->completed_one_tap_path = false;
     tracker->completed_two_tap_path = false;
     tracker->sequence_active = false;
@@ -629,18 +630,14 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
 
   tracker->stable_count = raw_count;
 
-  if (touch_up_event && stable_before != 0)
-  {
-    LOG_DBG("finger stable count forced to 0 on GLOBAL_TP_TOUCH release");
-  }
-
   if (tracker->stable_count != stable_before)
   {
     LOG_DBG("finger count changed: %u -> %u raw=%u reported=%u "
-            "touch_down=%u touch_up=%u flags=0x%04x info=0x%04x",
+            "touch_down=%u touch_up=%u global_tp_touch=%u "
+            "flags=0x%04x info=0x%04x",
             stable_before, tracker->stable_count, raw_count, reported_count,
-            touch_down_event, touch_up_event, stream->trackpad_flags,
-            stream->info_flags);
+            touch_down_event, touch_up_event, global_tp_touch,
+            stream->trackpad_flags, stream->info_flags);
   }
 
   if (stable_before == 0 && tracker->stable_count > 0)
@@ -699,7 +696,7 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
 
   if (!is_touching_now)
   {
-    // 0本遷移はGLOBAL_TP_TOUCH releaseを唯一の根拠にする。
+    // 0本遷移はNUM_FINGERS==0だけで判定する。
     tracker->awaiting_zero_contact = false;
   }
 
@@ -2077,25 +2074,26 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // =========================================================
     // ドラッグ解除チェック: has_tp_event に依存せず毎フレーム実行
-    // Global TP Touchの立下がりを使って確実にドラッグを解除する
+    // GLOBAL_TP_TOUCHは取りこぼしがあるため、接触境界には使わない。
     // =========================================================
-    bool is_touching_now =
+    uint8_t reported_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
+    uint8_t num_fingers = reported_fingers;
+    bool global_tp_touch =
         (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
-    // Global TP Touchの現在値と前回値からtrackpad-wideのtouch遷移を合成する
+    bool is_touching_now = num_fingers > 0;
     bool was_touching = data->is_touching;
     bool touch_down = is_touching_now && !was_touching;
     bool touch_up = !is_touching_now && was_touching;
     bool touch_state_changed = touch_down || touch_up;
     bool tp_movement = (stream.trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
-    uint8_t reported_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-    uint8_t num_fingers = is_touching_now ? reported_fingers : 0;
 
     if (touch_state_changed)
     {
       LOG_DBG("touch state changed: %u -> %u reported_fingers=%u "
-              "effective_fingers=%u flags=0x%04x info=0x%04x",
+              "effective_fingers=%u global_tp_touch=%u "
+              "flags=0x%04x info=0x%04x",
               was_touching, is_touching_now, reported_fingers, num_fingers,
-              stream.trackpad_flags, stream.info_flags);
+              global_tp_touch, stream.trackpad_flags, stream.info_flags);
     }
 
     if (touch_down)
