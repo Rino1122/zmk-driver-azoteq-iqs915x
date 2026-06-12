@@ -1280,6 +1280,58 @@ static void iqs915x_update_single_tap_movement(
   }
 }
 
+#define IQS915X_SCROLL_UNITS_PER_AXIS 128
+#define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
+#define IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO 4
+
+static int32_t iqs915x_abs32(int32_t value)
+{
+  return value < 0 ? -value : value;
+}
+
+static void iqs915x_filter_scroll_cross_axis(int16_t *x, int16_t *y)
+{
+  int32_t abs_x = iqs915x_abs32(*x);
+  int32_t abs_y = iqs915x_abs32(*y);
+
+  if (abs_x == 0 || abs_y == 0)
+  {
+    return;
+  }
+
+  if ((abs_x * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_y)
+  {
+    *x = 0;
+  }
+  else if ((abs_y * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_x)
+  {
+    *y = 0;
+  }
+}
+
+static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
+                                                int32_t *accumulator,
+                                                uint16_t code, int16_t delta,
+                                                uint16_t resolution,
+                                                uint16_t divisor)
+{
+  int32_t output;
+  int32_t denom =
+      (int32_t)(resolution > 0 ? resolution : IQS915X_SCROLL_FALLBACK_RESOLUTION) *
+      (int32_t)(divisor > 0 ? divisor : 1);
+
+  *accumulator += (int32_t)delta * IQS915X_SCROLL_UNITS_PER_AXIS;
+  if (iqs915x_abs32(*accumulator) < denom)
+  {
+    return false;
+  }
+
+  output = *accumulator / denom;
+  input_report_rel(data->dev, code, output, true, K_FOREVER);
+  *accumulator %= denom;
+  return output != 0;
+}
+
 static bool iqs915x_handle_two_finger_scroll(
     const struct iqs915x_config *config, struct iqs915x_data *data,
     const struct iqs915x_stream_data *stream)
@@ -1287,7 +1339,7 @@ static bool iqs915x_handle_two_finger_scroll(
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
   int16_t gx;
   int16_t gy;
-  int16_t scroll_div;
+  bool emitted = false;
 
   if (!config->scroll || data->finger_tracker.stable_count != 2 ||
       !two_finger->active || data->scroll_blocked_until_low_contact)
@@ -1311,7 +1363,7 @@ static bool iqs915x_handle_two_finger_scroll(
 
   gx = iqs915x_clamp_i16(two_finger->centroid_dx);
   gy = iqs915x_clamp_i16(two_finger->centroid_dy);
-  scroll_div = config->scroll_divisor > 0 ? config->scroll_divisor : 1;
+  iqs915x_filter_scroll_cross_axis(&gx, &gy);
 
   if (gx == 0 && gy == 0)
   {
@@ -1354,24 +1406,21 @@ static bool iqs915x_handle_two_finger_scroll(
 
   if (gx != 0)
   {
-    data->scroll_x_acc += gx;
-    if (abs(data->scroll_x_acc) >= scroll_div)
-    {
-      input_report_rel(data->dev, INPUT_REL_HWHEEL,
-                       data->scroll_x_acc / scroll_div, true, K_FOREVER);
-      data->scroll_x_acc %= scroll_div;
-    }
+    emitted |= iqs915x_emit_normalized_scroll_axis(
+        data, &data->scroll_x_acc, INPUT_REL_HWHEEL, gx,
+        data->swipe_resolution_x, config->scroll_divisor);
   }
 
   if (gy != 0)
   {
-    data->scroll_y_acc += gy;
-    if (abs(data->scroll_y_acc) >= scroll_div)
-    {
-      input_report_rel(data->dev, INPUT_REL_WHEEL,
-                       data->scroll_y_acc / scroll_div, true, K_FOREVER);
-      data->scroll_y_acc %= scroll_div;
-    }
+    emitted |= iqs915x_emit_normalized_scroll_axis(
+        data, &data->scroll_y_acc, INPUT_REL_WHEEL, gy,
+        data->swipe_resolution_y, config->scroll_divisor);
+  }
+
+  if (emitted)
+  {
+    data->scroll_inertia_state.zero_output_ticks = 0;
   }
 
   LOG_DBG("scroll centroid: dx=%d dy=%d flags=0x%04x", gx, gy,
@@ -1456,6 +1505,7 @@ static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
 #define IQS915X_SCROLL_INERTIA_FP_BITS 8
 #define IQS915X_SCROLL_INERTIA_FP_SCALE BIT(IQS915X_SCROLL_INERTIA_FP_BITS)
 #define IQS915X_SCROLL_INERTIA_Q8_HALF (BIT(IQS915X_SCROLL_INERTIA_FP_BITS - 1))
+#define IQS915X_SCROLL_INERTIA_ZERO_OUTPUT_LIMIT 3
 
 static void iqs915x_calculate_decayed_movement_fixed(
     int16_t in_dx, int16_t in_dy, int16_t decay_factor_q8,
@@ -1504,7 +1554,7 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   int16_t step_x;
   int16_t step_y;
   int16_t decay_factor_q8;
-  int16_t scroll_div = config->scroll_divisor;
+  bool emitted = false;
 
   if (!state->active || !profile->enabled)
   {
@@ -1531,27 +1581,31 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   state->ema_vx = step_x;
   state->ema_vy = step_y;
   state->is_inertial = true;
+  iqs915x_filter_scroll_cross_axis(&step_x, &step_y);
 
   if (step_x != 0)
   {
-    data->scroll_x_acc += step_x;
-    if (abs(data->scroll_x_acc) >= scroll_div)
-    {
-      input_report_rel(dev, INPUT_REL_HWHEEL,
-                       data->scroll_x_acc / scroll_div, true, K_FOREVER);
-      data->scroll_x_acc %= scroll_div;
-    }
+    emitted |= iqs915x_emit_normalized_scroll_axis(
+        data, &data->scroll_x_acc, INPUT_REL_HWHEEL, step_x,
+        data->swipe_resolution_x, config->scroll_divisor);
   }
 
   if (step_y != 0)
   {
-    data->scroll_y_acc += step_y;
-    if (abs(data->scroll_y_acc) >= scroll_div)
-    {
-      input_report_rel(dev, INPUT_REL_WHEEL,
-                       data->scroll_y_acc / scroll_div, true, K_FOREVER);
-      data->scroll_y_acc %= scroll_div;
-    }
+    emitted |= iqs915x_emit_normalized_scroll_axis(
+        data, &data->scroll_y_acc, INPUT_REL_WHEEL, step_y,
+        data->swipe_resolution_y, config->scroll_divisor);
+  }
+
+  if (emitted)
+  {
+    state->zero_output_ticks = 0;
+  }
+  else if (++state->zero_output_ticks >= IQS915X_SCROLL_INERTIA_ZERO_OUTPUT_LIMIT)
+  {
+    iqs915x_stop_scroll_inertia(data);
+    LOG_DBG("Scroll inertia stopped (no HID output)");
+    return;
   }
 
   // 次のティックをスケジュール

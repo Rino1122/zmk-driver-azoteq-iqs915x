@@ -376,6 +376,7 @@ struct iqs915x_scroll_inertia_state
     int16_t ema_vy;
     int16_t remainder_x_q8;
     int16_t remainder_y_q8;
+    uint8_t zero_output_ticks;
     bool active;
     bool is_inertial;
 };
@@ -526,8 +527,8 @@ struct iqs915x_data
     bool last_abs_valid; // absolute座標の直前報告値が有効か
 
     // スクロールアキュムレータ
-    int16_t scroll_x_acc;
-    int16_t scroll_y_acc;
+    int32_t scroll_x_acc;
+    int32_t scroll_y_acc;
 
     struct iqs915x_finger_tracker finger_tracker;
     struct iqs915x_two_finger_session two_finger;
