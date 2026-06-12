@@ -623,9 +623,13 @@ static void iqs915x_update_sequence_gates(struct iqs915x_data *data)
   if (tracker->stable_count <= 1)
   {
     data->multifinger_swipe_latched = false;
-    data->scroll_sequence_active = false;
     data->scroll_blocked_until_low_contact = false;
     iqs915x_reset_multifinger_swipe_state(data);
+
+    if (tracker->stable_count == 0)
+    {
+      data->scroll_sequence_active = false;
+    }
     return;
   }
 
@@ -880,7 +884,18 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
 
   if (tracker->stable_count != 2 || raw_count < 2)
   {
-    iqs915x_reset_two_finger_session(data);
+    if (tracker->stable_count == 1 && data->scroll_sequence_active &&
+        two_finger->active && two_finger->mode == IQS915X_2F_MODE_SCROLL)
+    {
+      two_finger->rebaseline_pending = true;
+      two_finger->centroid_dx = 0;
+      two_finger->centroid_dy = 0;
+      two_finger->distance_delta = 0;
+    }
+    else
+    {
+      iqs915x_reset_two_finger_session(data);
+    }
     return;
   }
 
@@ -893,12 +908,25 @@ static void iqs915x_update_finger_state(struct iqs915x_data *data,
   if (!two_finger->active)
   {
     two_finger->active = true;
+    two_finger->rebaseline_pending = false;
     two_finger->mode = IQS915X_2F_MODE_NONE;
     two_finger->centroid_last_x = centroid_x;
     two_finger->centroid_last_y = centroid_y;
     two_finger->centroid_start_x = centroid_x;
     two_finger->centroid_start_y = centroid_y;
     two_finger->max_centroid_movement = 0;
+    two_finger->distance_last = distance;
+    return;
+  }
+
+  if (two_finger->rebaseline_pending)
+  {
+    two_finger->rebaseline_pending = false;
+    two_finger->centroid_dx = 0;
+    two_finger->centroid_dy = 0;
+    two_finger->distance_delta = 0;
+    two_finger->centroid_last_x = centroid_x;
+    two_finger->centroid_last_y = centroid_y;
     two_finger->distance_last = distance;
     return;
   }

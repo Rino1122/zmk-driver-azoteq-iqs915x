@@ -398,6 +398,7 @@ struct iqs915x_finger_tracker
 struct iqs915x_two_finger_session
 {
     bool active;
+    bool rebaseline_pending;
     enum iqs915x_two_finger_mode mode;
     int32_t centroid_dx;
     int32_t centroid_dy;
