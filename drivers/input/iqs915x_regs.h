@@ -452,9 +452,6 @@ struct iqs915x_config
     // タイミング設定
     uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
-    // 座標入力モード
-    bool report_absolute; // true=FINGER1_X/Yを内部入力に使い、REL出力へ変換
-
     // 軸設定
     bool switch_xy;
     bool flip_x;

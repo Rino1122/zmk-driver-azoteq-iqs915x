@@ -8,8 +8,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 ## Supported features
 
-- Trackpad movement (relative coordinates).
-- Optional absolute X/Y reporting from FINGER1_X/Y.
+- Trackpad movement from corrected absolute finger coordinates, emitted as relative input.
 - Driver-side single finger tap: Reported as a left click.
 - Driver-side two finger tap: Reported as a right click.
 - Tap-and-hold: A single tap is held briefly; a retouch starts left-button drag, otherwise a click is reported.
@@ -58,9 +57,6 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         scroll-threshold-start = <2>;         /* Arm inertia above this velocity */
         scroll-threshold-stop = <0>;          /* Stop inertia at/below this velocity */
 
-        /* Use FINGER1_X/Y as internal source and emit REL_X/Y deltas */
-        report-absolute;
-
         /* 3/4 finger swipe as one-shot gesture input events */
         three-finger-swipe;
         four-finger-swipe;
@@ -77,23 +73,22 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 };
 ```
 
-When `report-absolute` is enabled, the driver uses raw IQS9150 finger 1
-coordinates from registers `0x1024` and `0x1026` as the internal pointer
-source, computes deltas between consecutive samples, and emits
-`INPUT_REL_X`/`INPUT_REL_Y` to the host. The first sample after touch-down is
-used as a baseline (no cursor move), then relative movement is reported while
-`TP Movement` is asserted. If the property is omitted, the driver uses
-`REL_X`/`REL_Y` registers directly.
+The driver uses IQS9150 finger coordinates from registers `0x1024` and
+`0x1026` as the internal pointer source. It first applies a fixed LUT
+correction for the non-uniform diamond electrode blocks, then computes deltas
+between consecutive samples and emits `INPUT_REL_X`/`INPUT_REL_Y` to the host.
+The first sample after touch-down is used as a baseline (no cursor move), then
+relative movement is reported while `TP Movement` is asserted.
 
 In Event Mode, the driver enables `TP_EVENT` as the only event source and
 disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
 `TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level
 finger up/down transitions. Because `GLOBAL_TP_TOUCH` can miss transitions on
 some IQS9150 devices, touch down/up boundaries are recognized from the
-`NUM_FINGERS` field only. One-finger tap, two-finger tap, and two-finger
-scroll are recognized in the driver from finger count, touch duration, and
-absolute finger coordinates. Tap classification uses the
-IQS9150-style tap profile from init-data: `TAP_TOUCH_TIME` (`0x11FA`),
+`NUM_FINGERS` field only. One-finger tap, two-finger tap, two-finger
+scroll, and 3/4-finger swipes are recognized in the driver from finger count,
+touch duration, and corrected absolute finger coordinates. Tap classification
+uses the IQS9150-style tap profile from init-data: `TAP_TOUCH_TIME` (`0x11FA`),
 `TAP_WAIT_TIME` / air time (`0x11FC`), and `TAP_DISTANCE` (`0x11FE`).
 Single tap is reported after air time elapses. If another touch-down occurs
 within that air time, the pending single tap is canceled and the second contact

@@ -274,8 +274,6 @@ static int iqs915x_read_block(const struct device *dev, uint16_t reg,
 // ストリーミングデータ構造体
 struct iqs915x_stream_data
 {
-  int16_t rel_x;
-  int16_t rel_y;
   uint16_t gesture_x;  // Diagnostics only; driver-side gestures use coordinates.
   uint16_t gesture_y;  // Diagnostics only; driver-side gestures use coordinates.
   uint16_t gesture_sf; // Diagnostics only; not used as a recognition source.
@@ -291,6 +289,148 @@ struct iqs915x_stream_data
   uint16_t finger4_x;
   uint16_t finger4_y;
 };
+
+static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
+                                        uint16_t reg, uint16_t *val);
+
+#define IQS915X_COORD_CORRECTION_LUT_STEPS 32U
+#define IQS915X_COORD_CORRECTION_Q15_SCALE BIT(15)
+#define IQS915X_COORD_CORRECTION_X_BLOCKS 6U
+#define IQS915X_COORD_CORRECTION_Y_BLOCKS 4U
+
+/* Normalized inverse-log-like curve: 0.316 input maps close to 0.5 output. */
+static const uint16_t
+    iqs915x_coord_correction_lut_q15[IQS915X_COORD_CORRECTION_LUT_STEPS + 1] = {
+    0,     4067,  6173,  7880,  9370,  10717, 11961, 13124, 14222,
+    15268, 16267, 17228, 18155, 19051, 19920, 20765, 21588, 22390,
+    23174, 23941, 24692, 25428, 26150, 26860, 27557, 28242, 28917,
+    29582, 30237, 30882, 31519, 32148, 32768};
+
+static uint16_t iqs915x_correct_half_block_distance(uint16_t distance,
+                                                    uint16_t half_block)
+{
+  uint32_t pos;
+  uint32_t idx;
+  uint32_t rem;
+  uint32_t low;
+  uint32_t high;
+  uint32_t corrected_q15;
+
+  if (distance == 0 || half_block == 0)
+  {
+    return 0;
+  }
+
+  if (distance >= half_block)
+  {
+    return half_block;
+  }
+
+  pos = (uint32_t)distance * IQS915X_COORD_CORRECTION_LUT_STEPS;
+  idx = pos / half_block;
+  rem = pos % half_block;
+
+  if (idx >= IQS915X_COORD_CORRECTION_LUT_STEPS)
+  {
+    return half_block;
+  }
+
+  low = iqs915x_coord_correction_lut_q15[idx];
+  high = iqs915x_coord_correction_lut_q15[idx + 1];
+  corrected_q15 = low + (((high - low) * rem) / half_block);
+
+  return (uint16_t)(((uint32_t)half_block * corrected_q15 +
+                     (IQS915X_COORD_CORRECTION_Q15_SCALE / 2U)) /
+                    IQS915X_COORD_CORRECTION_Q15_SCALE);
+}
+
+static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolution,
+                                                uint8_t blocks)
+{
+  uint32_t block;
+  uint32_t block_start;
+  uint32_t block_end;
+  uint32_t block_center;
+  uint16_t half_block;
+  uint16_t distance;
+  uint16_t corrected_distance;
+
+  if (resolution == 0 || blocks == 0)
+  {
+    return raw;
+  }
+
+  if (raw >= resolution)
+  {
+    raw = resolution;
+  }
+
+  block = ((uint32_t)raw * blocks) / resolution;
+  if (block >= blocks)
+  {
+    block = blocks - 1U;
+  }
+
+  block_start = ((uint32_t)resolution * block) / blocks;
+  block_end = ((uint32_t)resolution * (block + 1U)) / blocks;
+  block_center = (block_start + block_end) / 2U;
+
+  if ((uint32_t)raw == block_start || (uint32_t)raw == block_center ||
+      (uint32_t)raw == block_end)
+  {
+    return raw;
+  }
+
+  if ((uint32_t)raw < block_center)
+  {
+    half_block = (uint16_t)(block_center - block_start);
+    distance = (uint16_t)(block_center - raw);
+    corrected_distance = iqs915x_correct_half_block_distance(distance, half_block);
+    return (uint16_t)(block_center - corrected_distance);
+  }
+
+  half_block = (uint16_t)(block_end - block_center);
+  distance = (uint16_t)(raw - block_center);
+  corrected_distance = iqs915x_correct_half_block_distance(distance, half_block);
+  return (uint16_t)(block_center + corrected_distance);
+}
+
+static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *config,
+                                               struct iqs915x_stream_data *data)
+{
+  uint16_t res_x = 0;
+  uint16_t res_y = 0;
+  bool correct_x =
+      iqs915x_get_init_data_reg16(config, IQS915X_X_RESOLUTION, &res_x) &&
+      res_x > 0;
+  bool correct_y =
+      iqs915x_get_init_data_reg16(config, IQS915X_Y_RESOLUTION, &res_y) &&
+      res_y > 0;
+
+  if (correct_x)
+  {
+    data->abs_x = iqs915x_correct_axis_coordinate(
+        data->abs_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
+    data->finger2_x = iqs915x_correct_axis_coordinate(
+        data->finger2_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
+    data->finger3_x = iqs915x_correct_axis_coordinate(
+        data->finger3_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
+    data->finger4_x = iqs915x_correct_axis_coordinate(
+        data->finger4_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
+  }
+
+  if (correct_y)
+  {
+    data->abs_y = iqs915x_correct_axis_coordinate(
+        data->abs_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
+    data->finger2_y = iqs915x_correct_axis_coordinate(
+        data->finger2_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
+    data->finger3_y = iqs915x_correct_axis_coordinate(
+        data->finger3_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
+    data->finger4_y = iqs915x_correct_axis_coordinate(
+        data->finger4_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
+  }
+}
 
 // ストリーミングデータを読み取る
 static int iqs915x_read_stream(const struct device *dev,
@@ -309,8 +449,6 @@ static int iqs915x_read_stream(const struct device *dev,
   }
 
   // リトルエンディアンでデコード
-  data->rel_x = (int16_t)((buf[1] << 8) | buf[0]);
-  data->rel_y = (int16_t)((buf[3] << 8) | buf[2]);
   data->gesture_x = (buf[5] << 8) | buf[4];
   data->gesture_y = (buf[7] << 8) | buf[6];
   data->gesture_sf = (buf[9] << 8) | buf[8];
@@ -325,6 +463,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger3_y = (buf[35] << 8) | buf[34];
   data->finger4_x = (buf[41] << 8) | buf[40];
   data->finger4_y = (buf[43] << 8) | buf[42];
+  iqs915x_correct_stream_coordinates(config, data);
 
   return 0;
 }
@@ -2324,7 +2463,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         // 3/4本指の連続スワイプ出力を優先する。
       }
-      else if (config->report_absolute)
+      else
       {
         bool abs_finger_valid =
             is_touching_now && num_fingers == 1 &&
@@ -2395,40 +2534,6 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
               }
             }
-          }
-        }
-      }
-      else if (tp_movement)
-      {
-        if (!allow_pointer_report)
-        {
-          if (!suppress_pointer)
-          {
-            iqs915x_cancel_scroll_inertia(data);
-          }
-
-          LOG_DBG(
-              "tp_movement suppressed: fingers=%u await0=%u scroll=%u "
-              "gesture_seen=%u rel_x=%d rel_y=%d",
-              num_fingers,
-              data->finger_tracker.awaiting_zero_contact,
-              data->scroll_sequence_active,
-              data->tap_drag_raw_gesture_seen,
-              stream.rel_x, stream.rel_y);
-        }
-        else
-        {
-          // カーソル移動中は慣性スクロールを打ち切る
-          iqs915x_cancel_scroll_inertia(data);
-
-          if (stream.rel_x != 0 || stream.rel_y != 0)
-          {
-            LOG_DBG("tp_movement: rel_x=%d, rel_y=%d", stream.rel_x,
-                    stream.rel_y);
-            input_report_rel(dev, INPUT_REL_X, stream.rel_x, false,
-                             K_FOREVER);
-            input_report_rel(dev, INPUT_REL_Y, stream.rel_y, true,
-                             K_FOREVER);
           }
         }
       }
@@ -2613,7 +2718,6 @@ static int iqs915x_init(const struct device *dev)
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
-      .report_absolute = DT_INST_PROP(n, report_absolute),                                                                                                                                         \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
       .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \
