@@ -75,12 +75,16 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 The driver uses IQS9150 finger coordinates from registers `0x1024` and
 `0x1026` as the internal pointer source. Raw coordinates are calibrated with
-empirical per-axis tables generated from diagonal motion logs, then converted
-to consecutive-sample deltas and emitted as `INPUT_REL_X`/`INPUT_REL_Y` to the
+per-axis LUTs generated from `docs/logs/*.txt`, then converted to
+consecutive-sample deltas and emitted as `INPUT_REL_X`/`INPUT_REL_Y` to the
 host. The first sample after touch-down is used as a baseline (no cursor move),
-then relative movement is reported while `TP Movement` is asserted. Coordinates
-outside the logged active range pass through unchanged so future corner reports
-are still handled.
+then relative movement is reported while `TP Movement` is asserted.
+
+Coordinate calibration assumes 6 X blocks and 4 Y blocks. Each block boundary
+and block center is treated as a fixed point, and the same axis-specific
+half-block LUT is mirrored across every block half, including corner blocks.
+To regenerate the LUTs, collect three X-only and three Y-only raw coordinate
+logs under `docs/logs/` and run `python3 scripts/generate_coord_lut.py`.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
 The driver emits raw touched stream samples before calibration as INFO logs in
