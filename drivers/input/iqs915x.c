@@ -298,13 +298,13 @@ static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
 #define IQS915X_COORD_CORRECTION_X_BLOCKS 6U
 #define IQS915X_COORD_CORRECTION_Y_BLOCKS 4U
 
-/* Normalized inverse-log-like curve: 0.316 input maps close to 0.5 output. */
+/* Normalized log-like curve: 0.5 input maps close to 0.316 output. */
 static const uint16_t
     iqs915x_coord_correction_lut_q15[IQS915X_COORD_CORRECTION_LUT_STEPS + 1] = {
-    0,     4067,  6173,  7880,  9370,  10717, 11961, 13124, 14222,
-    15268, 16267, 17228, 18155, 19051, 19920, 20765, 21588, 22390,
-    23174, 23941, 24692, 25428, 26150, 26860, 27557, 28242, 28917,
-    29582, 30237, 30882, 31519, 32148, 32768};
+    0,     104,   328,   643,   1036,  1501,  2032,  2625,  3277,
+    3985,  4747,  5561,  6426,  7340,  8301,  9309,  10362, 11460,
+    12601, 13785, 15011, 16278, 17586, 18934, 20320, 21746, 23210,
+    24711, 26250, 27825, 29437, 31085, 32768};
 
 static uint16_t iqs915x_correct_half_block_distance(uint16_t distance,
                                                     uint16_t half_block)
