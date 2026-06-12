@@ -324,6 +324,12 @@ properties:
       higher power consumption. If not set, IQS9150 NVM default is used.
       Typical: 10 (100Hz default), 5 (200Hz), 2 (500Hz).
 
+  coordinate-correction:
+    type: boolean
+    description: |
+      Enable driver-side absolute coordinate correction using per-axis block-local
+      LUTs. If unset, the driver uses raw IQS9150 absolute coordinates.
+
   disabled-by-default:
     type: boolean
     description: |

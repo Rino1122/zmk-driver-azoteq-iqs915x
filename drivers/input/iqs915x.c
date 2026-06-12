@@ -499,7 +499,10 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_x = (buf[41] << 8) | buf[40];
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
-  iqs915x_correct_stream_coordinates(dev->data, data);
+  if (config->coordinate_correction)
+  {
+    iqs915x_correct_stream_coordinates(dev->data, data);
+  }
 
   return 0;
 }
@@ -2754,6 +2757,7 @@ static int iqs915x_init(const struct device *dev)
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
+      .coordinate_correction = DT_INST_PROP(n, coordinate_correction),                                                                                                                             \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
       .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
       .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \

@@ -452,6 +452,9 @@ struct iqs915x_config
     // タイミング設定
     uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
 
+    // 座標補正
+    bool coordinate_correction; // true=絶対座標にブロック内LUT補正を適用
+
     // 軸設定
     bool switch_xy;
     bool flip_x;

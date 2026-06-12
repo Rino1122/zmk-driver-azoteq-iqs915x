@@ -57,6 +57,9 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         scroll-threshold-start = <2>;         /* Arm inertia above this velocity */
         scroll-threshold-stop = <0>;          /* Stop inertia at/below this velocity */
 
+        /* Optional absolute coordinate correction; disabled if omitted */
+        coordinate-correction;
+
         /* 3/4 finger swipe as one-shot gesture input events */
         three-finger-swipe;
         four-finger-swipe;
@@ -74,11 +77,12 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 ```
 
 The driver uses IQS9150 finger coordinates from registers `0x1024` and
-`0x1026` as the internal pointer source. Raw coordinates are calibrated with
-per-axis LUTs generated from `docs/logs/*.txt`, then converted to
-consecutive-sample deltas and emitted as `INPUT_REL_X`/`INPUT_REL_Y` to the
-host. The first sample after touch-down is used as a baseline (no cursor move),
-then relative movement is reported while `TP Movement` is asserted.
+`0x1026` as the internal pointer source. If `coordinate-correction` is set, raw
+coordinates are calibrated with per-axis LUTs generated from `docs/logs/*.txt`.
+If the property is omitted, raw IQS9150 absolute coordinates are used directly.
+The driver converts consecutive-sample deltas to `INPUT_REL_X`/`INPUT_REL_Y` for
+the host. The first sample after touch-down is used as a baseline (no cursor
+move), then relative movement is reported while `TP Movement` is asserted.
 
 Coordinate calibration assumes 6 X blocks and 4 Y blocks. Each block boundary
 and block center is treated as a fixed point, and the same axis-specific
