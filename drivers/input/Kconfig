@@ -25,5 +25,14 @@ config INPUT_AZOTEQ_IQS915X_LOG_LEVEL
       Sets log level for IQS915x driver.
       Levels: 0 (Off), 1 (Error), 2 (Warning), 3 (Info), 4 (Debug)
 
+config INPUT_AZOTEQ_IQS915X_COORD_LOG
+    bool "Log raw IQS915x absolute coordinates"
+    default n
+    depends on LOG
+    help
+      Emit one INFO log line per touched stream sample with raw FINGER1-4
+      absolute coordinates. This is intended for calibration data collection
+      and is too noisy for normal use.
+
 
 endif # INPUT_AZOTEQ_IQS915X

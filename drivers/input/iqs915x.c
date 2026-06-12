@@ -290,146 +290,27 @@ struct iqs915x_stream_data
   uint16_t finger4_y;
 };
 
-static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
-                                        uint16_t reg, uint16_t *val);
-
-#define IQS915X_COORD_CORRECTION_LUT_STEPS 32U
-#define IQS915X_COORD_CORRECTION_Q15_SCALE BIT(15)
-#define IQS915X_COORD_CORRECTION_X_BLOCKS 6U
-#define IQS915X_COORD_CORRECTION_Y_BLOCKS 4U
-
-/* Normalized log-like curve: 0.5 input maps close to 0.316 output. */
-static const uint16_t
-    iqs915x_coord_correction_lut_q15[IQS915X_COORD_CORRECTION_LUT_STEPS + 1] = {
-    0,     104,   328,   643,   1036,  1501,  2032,  2625,  3277,
-    3985,  4747,  5561,  6426,  7340,  8301,  9309,  10362, 11460,
-    12601, 13785, 15011, 16278, 17586, 18934, 20320, 21746, 23210,
-    24711, 26250, 27825, 29437, 31085, 32768};
-
-static uint16_t iqs915x_correct_half_block_distance(uint16_t distance,
-                                                    uint16_t half_block)
+static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *data)
 {
-  uint32_t pos;
-  uint32_t idx;
-  uint32_t rem;
-  uint32_t low;
-  uint32_t high;
-  uint32_t corrected_q15;
+  uint8_t fingers;
 
-  if (distance == 0 || half_block == 0)
+  if (!IS_ENABLED(CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG))
   {
-    return 0;
+    return;
   }
 
-  if (distance >= half_block)
+  fingers = data->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
+  if (fingers == 0 && (data->info_flags & IQS915X_GLOBAL_TP_TOUCH) == 0)
   {
-    return half_block;
+    return;
   }
 
-  pos = (uint32_t)distance * IQS915X_COORD_CORRECTION_LUT_STEPS;
-  idx = pos / half_block;
-  rem = pos % half_block;
-
-  if (idx >= IQS915X_COORD_CORRECTION_LUT_STEPS)
-  {
-    return half_block;
-  }
-
-  low = iqs915x_coord_correction_lut_q15[idx];
-  high = iqs915x_coord_correction_lut_q15[idx + 1];
-  corrected_q15 = low + (((high - low) * rem) / half_block);
-
-  return (uint16_t)(((uint32_t)half_block * corrected_q15 +
-                     (IQS915X_COORD_CORRECTION_Q15_SCALE / 2U)) /
-                    IQS915X_COORD_CORRECTION_Q15_SCALE);
-}
-
-static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolution,
-                                                uint8_t blocks)
-{
-  uint32_t block;
-  uint32_t block_start;
-  uint32_t block_end;
-  uint32_t block_center;
-  uint16_t half_block;
-  uint16_t distance;
-  uint16_t corrected_distance;
-
-  if (resolution == 0 || blocks == 0)
-  {
-    return raw;
-  }
-
-  if (raw >= resolution)
-  {
-    raw = resolution;
-  }
-
-  block = ((uint32_t)raw * blocks) / resolution;
-  if (block >= blocks)
-  {
-    block = blocks - 1U;
-  }
-
-  block_start = ((uint32_t)resolution * block) / blocks;
-  block_end = ((uint32_t)resolution * (block + 1U)) / blocks;
-  block_center = (block_start + block_end) / 2U;
-
-  if ((uint32_t)raw == block_start || (uint32_t)raw == block_center ||
-      (uint32_t)raw == block_end)
-  {
-    return raw;
-  }
-
-  if ((uint32_t)raw < block_center)
-  {
-    half_block = (uint16_t)(block_center - block_start);
-    distance = (uint16_t)(block_center - raw);
-    corrected_distance = iqs915x_correct_half_block_distance(distance, half_block);
-    return (uint16_t)(block_center - corrected_distance);
-  }
-
-  half_block = (uint16_t)(block_end - block_center);
-  distance = (uint16_t)(raw - block_center);
-  corrected_distance = iqs915x_correct_half_block_distance(distance, half_block);
-  return (uint16_t)(block_center + corrected_distance);
-}
-
-static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *config,
-                                               struct iqs915x_stream_data *data)
-{
-  uint16_t res_x = 0;
-  uint16_t res_y = 0;
-  bool correct_x =
-      iqs915x_get_init_data_reg16(config, IQS915X_X_RESOLUTION, &res_x) &&
-      res_x > 0;
-  bool correct_y =
-      iqs915x_get_init_data_reg16(config, IQS915X_Y_RESOLUTION, &res_y) &&
-      res_y > 0;
-
-  if (correct_x)
-  {
-    data->abs_x = iqs915x_correct_axis_coordinate(
-        data->abs_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
-    data->finger2_x = iqs915x_correct_axis_coordinate(
-        data->finger2_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
-    data->finger3_x = iqs915x_correct_axis_coordinate(
-        data->finger3_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
-    data->finger4_x = iqs915x_correct_axis_coordinate(
-        data->finger4_x, res_x, IQS915X_COORD_CORRECTION_X_BLOCKS);
-  }
-
-  if (correct_y)
-  {
-    data->abs_y = iqs915x_correct_axis_coordinate(
-        data->abs_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
-    data->finger2_y = iqs915x_correct_axis_coordinate(
-        data->finger2_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
-    data->finger3_y = iqs915x_correct_axis_coordinate(
-        data->finger3_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
-    data->finger4_y = iqs915x_correct_axis_coordinate(
-        data->finger4_y, res_y, IQS915X_COORD_CORRECTION_Y_BLOCKS);
-  }
+  LOG_INF("coord,t=%lld,f=%u,info=0x%04x,flags=0x%04x,"
+          "x1=%u,y1=%u,x2=%u,y2=%u,x3=%u,y3=%u,x4=%u,y4=%u",
+          (long long)k_uptime_get(), fingers, data->info_flags,
+          data->trackpad_flags, data->abs_x, data->abs_y, data->finger2_x,
+          data->finger2_y, data->finger3_x, data->finger3_y, data->finger4_x,
+          data->finger4_y);
 }
 
 // ストリーミングデータを読み取る
@@ -463,7 +344,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger3_y = (buf[35] << 8) | buf[34];
   data->finger4_x = (buf[41] << 8) | buf[40];
   data->finger4_y = (buf[43] << 8) | buf[42];
-  iqs915x_correct_stream_coordinates(config, data);
+  iqs915x_log_stream_coordinates(data);
 
   return 0;
 }
