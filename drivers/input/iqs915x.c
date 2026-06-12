@@ -290,6 +290,125 @@ struct iqs915x_stream_data
   uint16_t finger4_y;
 };
 
+#define IQS915X_COORD_CAL_X_BLOCKS 6U
+#define IQS915X_COORD_CAL_Y_BLOCKS 4U
+#define IQS915X_COORD_CAL_STEPS_PER_BLOCK 8U
+#define IQS915X_COORD_CAL_X_NOMINAL_RES 6000U
+#define IQS915X_COORD_CAL_Y_NOMINAL_RES 4000U
+
+/*
+ * Raw anchors from two diagonal-motion logs, grouped as 8 steps per block.
+ * Coordinates outside the logged active range pass through unchanged because
+ * the physical corners are intentionally tripped in the collected samples.
+ */
+static const uint16_t iqs915x_coord_cal_x_raw[] = {
+    416,  448,  473,  519,  588,  691,  831,  974,  1085, 1182,
+    1283, 1392, 1481, 1582, 1695, 1825, 1973, 2105, 2209, 2308,
+    2400, 2490, 2570, 2659, 2781, 2927, 3074, 3190, 3299, 3414,
+    3520, 3621, 3730, 3863, 4002, 4144, 4270, 4381, 4506, 4621,
+    4727, 4846, 4999, 5158, 5287, 5375, 5458, 5521, 5556};
+
+static const uint16_t iqs915x_coord_cal_y_raw[] = {
+    426,  441,  487,  541,  633,  730,  826,  941,  1057, 1169, 1262,
+    1362, 1461, 1547, 1627, 1705, 1823, 1955, 2082, 2195, 2302, 2409,
+    2520, 2640, 2756, 2880, 3014, 3149, 3266, 3383, 3464, 3531, 3568};
+
+static uint16_t iqs915x_correct_calibrated_axis(uint16_t raw, uint16_t resolution,
+                                                uint16_t nominal_resolution,
+                                                const uint16_t *raw_table,
+                                                size_t table_len)
+{
+  uint32_t raw_nominal;
+  uint32_t corrected_nominal;
+  uint32_t corrected;
+  uint32_t active_start;
+  uint32_t active_span;
+
+  if (resolution == 0 || table_len < 2)
+  {
+    return raw;
+  }
+
+  raw_nominal = ((uint32_t)raw * nominal_resolution) / resolution;
+
+  if (raw_nominal <= raw_table[0])
+  {
+    return raw;
+  }
+
+  if (raw_nominal >= raw_table[table_len - 1])
+  {
+    return raw;
+  }
+
+  active_start = raw_table[0];
+  active_span = raw_table[table_len - 1U] - active_start;
+  for (size_t i = 0; i < table_len - 1U; i++)
+  {
+    uint32_t raw_low = raw_table[i];
+    uint32_t raw_high = raw_table[i + 1U];
+    uint32_t corrected_low =
+        active_start + ((i * active_span) / (table_len - 1U));
+    uint32_t corrected_high =
+        active_start + (((i + 1U) * active_span) / (table_len - 1U));
+
+    if (raw_nominal > raw_high)
+    {
+      continue;
+    }
+
+    if (raw_high <= raw_low)
+    {
+      corrected_nominal = corrected_low;
+    }
+    else
+    {
+      corrected_nominal =
+          corrected_low +
+          (((raw_nominal - raw_low) * (corrected_high - corrected_low)) /
+           (raw_high - raw_low));
+    }
+
+    corrected = (corrected_nominal * resolution) / nominal_resolution;
+    return corrected > resolution ? resolution : (uint16_t)corrected;
+  }
+
+  return resolution;
+}
+
+static void iqs915x_correct_stream_coordinates(const struct iqs915x_data *driver_data,
+                                               struct iqs915x_stream_data *data)
+{
+  uint16_t res_x = driver_data->swipe_resolution_x;
+  uint16_t res_y = driver_data->swipe_resolution_y;
+
+  data->abs_x = iqs915x_correct_calibrated_axis(
+      data->abs_x, res_x, IQS915X_COORD_CAL_X_NOMINAL_RES,
+      iqs915x_coord_cal_x_raw, ARRAY_SIZE(iqs915x_coord_cal_x_raw));
+  data->finger2_x = iqs915x_correct_calibrated_axis(
+      data->finger2_x, res_x, IQS915X_COORD_CAL_X_NOMINAL_RES,
+      iqs915x_coord_cal_x_raw, ARRAY_SIZE(iqs915x_coord_cal_x_raw));
+  data->finger3_x = iqs915x_correct_calibrated_axis(
+      data->finger3_x, res_x, IQS915X_COORD_CAL_X_NOMINAL_RES,
+      iqs915x_coord_cal_x_raw, ARRAY_SIZE(iqs915x_coord_cal_x_raw));
+  data->finger4_x = iqs915x_correct_calibrated_axis(
+      data->finger4_x, res_x, IQS915X_COORD_CAL_X_NOMINAL_RES,
+      iqs915x_coord_cal_x_raw, ARRAY_SIZE(iqs915x_coord_cal_x_raw));
+
+  data->abs_y = iqs915x_correct_calibrated_axis(
+      data->abs_y, res_y, IQS915X_COORD_CAL_Y_NOMINAL_RES,
+      iqs915x_coord_cal_y_raw, ARRAY_SIZE(iqs915x_coord_cal_y_raw));
+  data->finger2_y = iqs915x_correct_calibrated_axis(
+      data->finger2_y, res_y, IQS915X_COORD_CAL_Y_NOMINAL_RES,
+      iqs915x_coord_cal_y_raw, ARRAY_SIZE(iqs915x_coord_cal_y_raw));
+  data->finger3_y = iqs915x_correct_calibrated_axis(
+      data->finger3_y, res_y, IQS915X_COORD_CAL_Y_NOMINAL_RES,
+      iqs915x_coord_cal_y_raw, ARRAY_SIZE(iqs915x_coord_cal_y_raw));
+  data->finger4_y = iqs915x_correct_calibrated_axis(
+      data->finger4_y, res_y, IQS915X_COORD_CAL_Y_NOMINAL_RES,
+      iqs915x_coord_cal_y_raw, ARRAY_SIZE(iqs915x_coord_cal_y_raw));
+}
+
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *data)
 {
   uint8_t fingers;
@@ -345,6 +464,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_x = (buf[41] << 8) | buf[40];
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
+  iqs915x_correct_stream_coordinates(dev->data, data);
 
   return 0;
 }

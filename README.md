@@ -8,7 +8,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 ## Supported features
 
-- Trackpad movement from absolute finger coordinates, emitted as relative input.
+- Trackpad movement from calibrated absolute finger coordinates, emitted as relative input.
 - Driver-side single finger tap: Reported as a left click.
 - Driver-side two finger tap: Reported as a right click.
 - Tap-and-hold: A single tap is held briefly; a retouch starts left-button drag, otherwise a click is reported.
@@ -74,15 +74,18 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 ```
 
 The driver uses IQS9150 finger coordinates from registers `0x1024` and
-`0x1026` as the internal pointer source, computes deltas between consecutive
-samples, and emits `INPUT_REL_X`/`INPUT_REL_Y` to the host. The first sample
-after touch-down is used as a baseline (no cursor move), then relative movement
-is reported while `TP Movement` is asserted.
+`0x1026` as the internal pointer source. Raw coordinates are calibrated with
+empirical per-axis tables generated from diagonal motion logs, then converted
+to consecutive-sample deltas and emitted as `INPUT_REL_X`/`INPUT_REL_Y` to the
+host. The first sample after touch-down is used as a baseline (no cursor move),
+then relative movement is reported while `TP Movement` is asserted. Coordinates
+outside the logged active range pass through unchanged so future corner reports
+are still handled.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
-The driver will emit raw touched stream samples as INFO logs in the form
-`coord,t=...,f=...,x1=...,y1=...`. Keep this disabled for normal use because it
-logs every touched sample.
+The driver emits raw touched stream samples before calibration as INFO logs in
+the form `coord,t=...,f=...,x1=...,y1=...`. Keep this disabled for normal use
+because it logs every touched sample.
 
 In Event Mode, the driver enables `TP_EVENT` as the only event source and
 disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
@@ -91,8 +94,8 @@ finger up/down transitions. Because `GLOBAL_TP_TOUCH` can miss transitions on
 some IQS9150 devices, touch down/up boundaries are recognized from the
 `NUM_FINGERS` field only. One-finger tap, two-finger tap, two-finger
 scroll, and 3/4-finger swipes are recognized in the driver from finger count,
-touch duration, and absolute finger coordinates. Tap classification uses the
-IQS9150-style tap profile from init-data: `TAP_TOUCH_TIME` (`0x11FA`),
+touch duration, and calibrated absolute finger coordinates. Tap classification
+uses the IQS9150-style tap profile from init-data: `TAP_TOUCH_TIME` (`0x11FA`),
 `TAP_WAIT_TIME` / air time (`0x11FC`), and `TAP_DISTANCE` (`0x11FE`).
 Single tap is reported after air time elapses. If another touch-down occurs
 within that air time, the pending single tap is canceled and the second contact
