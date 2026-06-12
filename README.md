@@ -83,8 +83,10 @@ then relative movement is reported while `TP Movement` is asserted.
 Coordinate calibration assumes 6 X blocks and 4 Y blocks. Each block boundary
 and block center is treated as a fixed point, and the same axis-specific
 half-block LUT is mirrored across every block half, including corner blocks.
-To regenerate the LUTs, collect three X-only and three Y-only raw coordinate
-logs under `docs/logs/` and run `python3 scripts/generate_coord_lut.py`.
+The LUT generator learns the curve from fully covered inner blocks, then applies
+that one block-local curve to all blocks. To regenerate the LUTs, collect three
+X-only and three Y-only raw coordinate logs under `docs/logs/` and run
+`python3 scripts/generate_coord_lut.py`.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
 The driver emits raw touched stream samples before calibration as INFO logs in

@@ -75,30 +75,62 @@ def collect_axis_pairs(
     pairs: list[tuple[float, float]] = []
 
     for rows in runs:
-        forward = rows[-1][coord_index] >= rows[0][coord_index]
+        crossing_times = [
+            interpolate_crossing_time(rows, coord_index, block * block_width)
+            for block in range(blocks + 1)
+        ]
 
-        for normalized_time, raw_x, raw_y in rows:
-            raw = raw_x if axis == "x" else raw_y
-            ideal = (normalized_time if forward else 1.0 - normalized_time) * resolution
-            ideal = max(0.0, min(float(resolution), ideal))
+        for block in range(1, blocks - 1):
+            start = block * block_width
+            end = (block + 1) * block_width
+            center = (start + end) / 2
+            start_time = crossing_times[block]
+            end_time = crossing_times[block + 1]
 
-            raw_block = min(blocks - 1, max(0, int(raw / block_width)))
-            ideal_block = min(blocks - 1, max(0, int(ideal / block_width)))
-            if raw_block != ideal_block:
+            if start_time is None or end_time is None or start_time == end_time:
                 continue
 
-            center = (ideal_block + 0.5) * block_width
-            raw_delta = raw - center
-            ideal_delta = ideal - center
-            if raw_delta * ideal_delta < 0:
-                continue
+            for normalized_time, raw_x, raw_y in rows:
+                raw = raw_x if axis == "x" else raw_y
+                if raw < start or raw > end:
+                    continue
 
-            raw_norm = abs(raw_delta) / half_block
-            ideal_norm = abs(ideal_delta) / half_block
-            if 0.0 <= raw_norm <= 1.0 and 0.0 <= ideal_norm <= 1.0:
-                pairs.append((raw_norm, ideal_norm))
+                ideal_ratio = (normalized_time - start_time) / (end_time - start_time)
+                if not 0.0 <= ideal_ratio <= 1.0:
+                    continue
+
+                ideal = start + ideal_ratio * block_width
+                raw_delta = raw - center
+                ideal_delta = ideal - center
+                if raw_delta * ideal_delta < 0:
+                    continue
+
+                raw_norm = abs(raw_delta) / half_block
+                ideal_norm = abs(ideal_delta) / half_block
+                if 0.0 <= raw_norm <= 1.0 and 0.0 <= ideal_norm <= 1.0:
+                    pairs.append((raw_norm, ideal_norm))
 
     return sorted(pairs)
+
+
+def interpolate_crossing_time(
+    rows: list[tuple[float, int, int]], coord_index: int, target: float
+) -> float | None:
+    for (time_a, x_a, y_a), (time_b, x_b, y_b) in zip(rows, rows[1:]):
+        raw_a = x_a if coord_index == 1 else y_a
+        raw_b = x_b if coord_index == 1 else y_b
+
+        if raw_a == target:
+            return time_a
+        if raw_b == target:
+            return time_b
+        if raw_a == raw_b:
+            continue
+        if min(raw_a, raw_b) <= target <= max(raw_a, raw_b):
+            ratio = (target - raw_a) / (raw_b - raw_a)
+            return time_a + (time_b - time_a) * ratio
+
+    return None
 
 
 def build_lut(pairs: list[tuple[float, float]], steps: int) -> list[int]:
