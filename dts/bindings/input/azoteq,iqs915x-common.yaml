@@ -52,11 +52,11 @@ properties:
 
   scroll-divisor:
     type: int
-    default: 1
+    default: 2
     description: |
       Scroll sensitivity divisor applied after the driver normalizes raw
       two-finger centroid motion by the IQS915x X/Y resolution. Smaller values
-      are more sensitive. Default: 1. Increase for slower scrolling.
+      are more sensitive. Default: 2. Increase for slower scrolling.
 
   tap-move-threshold:
     type: int

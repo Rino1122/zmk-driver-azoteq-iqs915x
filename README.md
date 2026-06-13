@@ -151,7 +151,8 @@ coordinates. Raw deltas are normalized by the init-data X/Y resolutions before
 being reported as wheel events, so firmware-side input scaling can stay in a
 coarse preference range such as 1/2 to 1/5 instead of compensating for raw
 sensor units. `scroll-divisor` is an extra coarse divisor applied after that
-normalization; the default is tuned for direct use with a small firmware-side
+normalization; the default of 2 is tuned to keep low-speed output granular
+enough for smooth motion while leaving room for a small firmware-side
 preference scaler. Inertia follows a Q8 fixed-point decay flow with remainder
 preservation and stops when the decayed motion no longer reaches HID output for
 several ticks.
