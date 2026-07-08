@@ -438,6 +438,13 @@ struct iqs915x_config
     bool scroll;
     uint16_t scroll_divisor; // スクロール感度除数
 
+    // ポインタ加速度設定
+    bool pointer_accel;
+    uint16_t pointer_sensitivity_percent;
+    uint16_t pointer_accel_threshold;
+    uint16_t pointer_accel_saturation;
+    uint16_t pointer_accel_max_percent;
+
     struct iqs915x_scroll_inertia_profile scroll_inertia;
     struct iqs915x_inertia_profile pinch_inertia;
 
@@ -525,6 +532,8 @@ struct iqs915x_data
     uint16_t last_abs_x; // 直前に報告したabsolute X座標
     uint16_t last_abs_y; // 直前に報告したabsolute Y座標
     bool last_abs_valid; // absolute座標の直前報告値が有効か
+    int32_t pointer_x_acc; // ポインタ倍率適用時のX剰余（percent単位）
+    int32_t pointer_y_acc; // ポインタ倍率適用時のY剰余（percent単位）
 
     // スクロールアキュムレータ
     int32_t scroll_x_acc;

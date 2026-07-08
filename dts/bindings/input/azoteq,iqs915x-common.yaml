@@ -58,6 +58,39 @@ properties:
       two-finger centroid motion by the IQS915x X/Y resolution. Smaller values
       are more sensitive. Default: 2. Increase for slower scrolling.
 
+  pointer-accel:
+    type: boolean
+    description: |
+      Enable firmware-side pointer acceleration for single-finger cursor motion.
+      This scales only the relative INPUT_REL_X/Y reports emitted by the driver.
+
+  pointer-sensitivity-percent:
+    type: int
+    default: 100
+    description: |
+      Base pointer sensitivity percentage. 100 keeps raw absolute-coordinate
+      deltas unchanged when pointer-accel is disabled.
+
+  pointer-accel-threshold:
+    type: int
+    default: 8
+    description: |
+      Normalized 10 ms pointer speed at or below which only base sensitivity is
+      applied. Speed is max(abs(dx), abs(dy)).
+
+  pointer-accel-saturation:
+    type: int
+    default: 96
+    description: |
+      Normalized 10 ms pointer speed at or above which pointer-accel-max-percent
+      is applied.
+
+  pointer-accel-max-percent:
+    type: int
+    default: 180
+    description: |
+      Maximum pointer scale percentage used when pointer acceleration is enabled.
+
   tap-move-threshold:
     type: int
     default: 0

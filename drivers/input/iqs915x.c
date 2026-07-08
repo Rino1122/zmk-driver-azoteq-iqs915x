@@ -507,11 +507,18 @@ static int iqs915x_read_stream(const struct device *dev,
   return 0;
 }
 
+static void iqs915x_reset_pointer_accumulators(struct iqs915x_data *data)
+{
+  data->pointer_x_acc = 0;
+  data->pointer_y_acc = 0;
+}
+
 static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
 {
   data->last_abs_x = 0;
   data->last_abs_y = 0;
   data->last_abs_valid = false;
+  iqs915x_reset_pointer_accumulators(data);
 }
 
 static uint16_t iqs915x_absolute_discontinuity_threshold(const struct iqs915x_data *data)
@@ -552,6 +559,82 @@ static bool iqs915x_absolute_delta_is_discontinuity(
 static uint32_t iqs915x_axis_movement(int32_t dx, int32_t dy)
 {
   return (uint32_t)MAX(abs(dx), abs(dy));
+}
+
+static uint32_t iqs915x_pointer_speed_10ms(
+    const struct iqs915x_config *config, int32_t rel_x, int32_t rel_y)
+{
+  uint32_t speed = iqs915x_axis_movement(rel_x, rel_y);
+  uint32_t report_rate_ms =
+      config->report_rate_ms > 0 ? config->report_rate_ms : 10U;
+
+  return DIV_ROUND_CLOSEST(speed * 10U, report_rate_ms);
+}
+
+static uint16_t iqs915x_pointer_scale_percent(
+    const struct iqs915x_config *config, int32_t rel_x, int32_t rel_y)
+{
+  uint32_t base_percent = config->pointer_sensitivity_percent;
+  uint32_t max_percent = config->pointer_accel_max_percent;
+  uint32_t threshold = config->pointer_accel_threshold;
+  uint32_t saturation = config->pointer_accel_saturation;
+  uint32_t speed;
+  uint32_t scale;
+
+  if (!config->pointer_accel || max_percent <= base_percent)
+  {
+    return (uint16_t)base_percent;
+  }
+
+  speed = iqs915x_pointer_speed_10ms(config, rel_x, rel_y);
+  if (speed <= threshold)
+  {
+    return (uint16_t)base_percent;
+  }
+
+  if (saturation <= threshold || speed >= saturation)
+  {
+    return (uint16_t)max_percent;
+  }
+
+  scale = base_percent +
+          ((max_percent - base_percent) * (speed - threshold)) /
+              (saturation - threshold);
+
+  return (uint16_t)scale;
+}
+
+static int32_t iqs915x_apply_pointer_scale_axis(
+    int32_t delta, uint16_t scale_percent, int32_t *remainder)
+{
+  int32_t scaled = delta * (int32_t)scale_percent + *remainder;
+  int32_t output = scaled / 100;
+
+  *remainder = scaled - (output * 100);
+
+  return output;
+}
+
+static uint16_t iqs915x_apply_pointer_scale(
+    const struct iqs915x_config *config, struct iqs915x_data *data,
+    int32_t raw_x, int32_t raw_y, int32_t *out_x, int32_t *out_y)
+{
+  uint16_t scale_percent;
+
+  if (!config->pointer_accel && config->pointer_sensitivity_percent == 100U)
+  {
+    *out_x = raw_x;
+    *out_y = raw_y;
+    return 100U;
+  }
+
+  scale_percent = iqs915x_pointer_scale_percent(config, raw_x, raw_y);
+  *out_x = iqs915x_apply_pointer_scale_axis(
+      raw_x, scale_percent, &data->pointer_x_acc);
+  *out_y = iqs915x_apply_pointer_scale_axis(
+      raw_y, scale_percent, &data->pointer_y_acc);
+
+  return scale_percent;
 }
 
 static int16_t iqs915x_clamp_i16(int32_t value)
@@ -2641,6 +2724,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
               if (iqs915x_absolute_delta_is_discontinuity(data, rel_x, rel_y))
               {
+                iqs915x_reset_pointer_accumulators(data);
                 LOG_DBG("tp_absrel discontinuity: rel_x=%d rel_y=%d "
                         "threshold=%u x=%u y=%u",
                         (int)rel_x, (int)rel_y,
@@ -2649,10 +2733,22 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
               }
               else if (rel_x != 0 || rel_y != 0)
               {
-                LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d (x=%u y=%u)",
+                int32_t raw_rel_x = rel_x;
+                int32_t raw_rel_y = rel_y;
+                uint16_t pointer_scale = iqs915x_apply_pointer_scale(
+                    config, data, raw_rel_x, raw_rel_y, &rel_x, &rel_y);
+
+                LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d scale=%u out_x=%d "
+                        "out_y=%d (x=%u y=%u)",
+                        (int)raw_rel_x, (int)raw_rel_y, pointer_scale,
                         (int)rel_x, (int)rel_y, stream.abs_x, stream.abs_y);
-                input_report_rel(dev, INPUT_REL_X, rel_x, false, K_FOREVER);
-                input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
+
+                if (rel_x != 0 || rel_y != 0)
+                {
+                  input_report_rel(dev, INPUT_REL_X, rel_x, false,
+                                   K_FOREVER);
+                  input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
+                }
               }
             }
           }
@@ -2808,6 +2904,11 @@ static int iqs915x_init(const struct device *dev)
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                                                                                           \
       .scroll = DT_INST_PROP(n, scroll),                                                                                                                                                           \
       .scroll_divisor = DT_INST_PROP(n, scroll_divisor),                                                                                                                                           \
+      .pointer_accel = DT_INST_PROP(n, pointer_accel),                                                                                                                                             \
+      .pointer_sensitivity_percent = DT_INST_PROP(n, pointer_sensitivity_percent),                                                                                                                  \
+      .pointer_accel_threshold = DT_INST_PROP(n, pointer_accel_threshold),                                                                                                                          \
+      .pointer_accel_saturation = DT_INST_PROP(n, pointer_accel_saturation),                                                                                                                        \
+      .pointer_accel_max_percent = DT_INST_PROP(n, pointer_accel_max_percent),                                                                                                                      \
       .scroll_inertia = {                                                                                                                                                                          \
           .enabled = DT_INST_PROP(n, scroll_inertia) ||                                                                                                                                            \
                      DT_INST_NODE_HAS_PROP(n, trigger_ms) ||                                                                                                                                       \

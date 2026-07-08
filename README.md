@@ -9,6 +9,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 ## Supported features
 
 - Trackpad movement from calibrated absolute finger coordinates, emitted as relative input.
+- Optional firmware-side pointer acceleration for single-finger cursor motion.
 - Driver-side single finger tap: Reported as a left click.
 - Driver-side two finger tap: Reported as a right click.
 - Tap-and-hold: A single tap is held briefly; a retouch starts left-button drag, otherwise a click is reported.
@@ -60,6 +61,13 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         /* Optional absolute coordinate correction; disabled if omitted */
         coordinate-correction;
 
+        /* Optional firmware-side pointer acceleration; disabled if omitted */
+        pointer-accel;
+        pointer-sensitivity-percent = <90>;
+        pointer-accel-threshold = <8>;
+        pointer-accel-saturation = <96>;
+        pointer-accel-max-percent = <180>;
+
         /* 3/4 finger swipe as one-shot gesture input events */
         three-finger-swipe;
         four-finger-swipe;
@@ -83,6 +91,18 @@ If the property is omitted, raw IQS9150 absolute coordinates are used directly.
 The driver converts consecutive-sample deltas to `INPUT_REL_X`/`INPUT_REL_Y` for
 the host. The first sample after touch-down is used as a baseline (no cursor
 move), then relative movement is reported while `TP Movement` is asserted.
+
+If `pointer-accel` is enabled, the driver applies a lightweight integer-only
+scale curve to single-finger `INPUT_REL_X`/`INPUT_REL_Y` reports immediately
+before emission. Gesture recognition still uses the calibrated absolute
+coordinates before acceleration, so tap, scroll, and swipe thresholds are not
+changed. `pointer-sensitivity-percent` is the base scale; speeds at or below
+`pointer-accel-threshold` use that base scale, speeds at or above
+`pointer-accel-saturation` use `pointer-accel-max-percent`, and speeds between
+them are linearly interpolated. Speeds are normalized to a 10 ms report interval
+using `report-rate-ms` when configured. When `pointer-accel` is omitted and
+`pointer-sensitivity-percent` is left at `100`, pointer output is unchanged from
+the raw absolute-coordinate delta path.
 
 Coordinate calibration assumes 6 X blocks and 4 Y blocks. Each block boundary
 and block center is treated as a fixed point, and the same axis-specific
