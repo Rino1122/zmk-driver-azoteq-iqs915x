@@ -56,6 +56,7 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason);
+struct iqs915x_stream_data;
 
 #if defined(CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS)
 static void iqs915x_rate_diag_note_wake(struct iqs915x_data *data,
@@ -73,43 +74,8 @@ static void iqs915x_rate_diag_note_wake(struct iqs915x_data *data,
   data->rate_diag_last_handled_rdy_seq = rdy_seq;
 }
 
-static void iqs915x_rate_diag_note_stream(struct iqs915x_data *data,
-                                          const struct iqs915x_stream_data *stream)
-{
-  int64_t now_ms = k_uptime_get();
-  bool active_sample =
-      (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 0 ||
-      (stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
-
-  data->rate_diag_stream_reads++;
-  if ((stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0)
-  {
-    data->rate_diag_tp_movement++;
-  }
-
-  if (!active_sample)
-  {
-    data->rate_diag_last_stream_ms = 0;
-    return;
-  }
-
-  if (data->rate_diag_last_stream_ms > 0)
-  {
-    int64_t gap_ms = now_ms - data->rate_diag_last_stream_ms;
-
-    if (gap_ms >= 0 && gap_ms <= UINT32_MAX)
-    {
-      uint32_t gap = (uint32_t)gap_ms;
-
-      data->rate_diag_stream_gap_samples++;
-      data->rate_diag_stream_gap_sum_ms += gap;
-      data->rate_diag_stream_gap_max_ms =
-          MAX(data->rate_diag_stream_gap_max_ms, gap);
-    }
-  }
-
-  data->rate_diag_last_stream_ms = now_ms;
-}
+static void iqs915x_rate_diag_note_stream(
+    struct iqs915x_data *data, const struct iqs915x_stream_data *stream);
 
 static void iqs915x_rate_diag_note_pointer_candidate(
     struct iqs915x_data *data)
@@ -462,6 +428,46 @@ struct iqs915x_stream_data
   uint16_t finger4_x;
   uint16_t finger4_y;
 };
+
+#if defined(CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS)
+static void iqs915x_rate_diag_note_stream(
+    struct iqs915x_data *data, const struct iqs915x_stream_data *stream)
+{
+  int64_t now_ms = k_uptime_get();
+  bool active_sample =
+      (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 0 ||
+      (stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
+
+  data->rate_diag_stream_reads++;
+  if ((stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0)
+  {
+    data->rate_diag_tp_movement++;
+  }
+
+  if (!active_sample)
+  {
+    data->rate_diag_last_stream_ms = 0;
+    return;
+  }
+
+  if (data->rate_diag_last_stream_ms > 0)
+  {
+    int64_t gap_ms = now_ms - data->rate_diag_last_stream_ms;
+
+    if (gap_ms >= 0 && gap_ms <= UINT32_MAX)
+    {
+      uint32_t gap = (uint32_t)gap_ms;
+
+      data->rate_diag_stream_gap_samples++;
+      data->rate_diag_stream_gap_sum_ms += gap;
+      data->rate_diag_stream_gap_max_ms =
+          MAX(data->rate_diag_stream_gap_max_ms, gap);
+    }
+  }
+
+  data->rate_diag_last_stream_ms = now_ms;
+}
+#endif
 
 #define IQS915X_COORD_CAL_X_BLOCKS 6U
 #define IQS915X_COORD_CAL_Y_BLOCKS 4U
