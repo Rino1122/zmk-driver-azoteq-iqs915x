@@ -10,23 +10,23 @@
 
 /* ALP ATI Compensation */
 /* Memory Map Position 0x115C - 0x1175 */
-#define ALP_COMPENSATION_RX0_0                   0x0A
+#define ALP_COMPENSATION_RX0_0                   0x0D
 #define ALP_COMPENSATION_RX0_1                   0x1B
-#define ALP_COMPENSATION_RX1_0                   0xFA
+#define ALP_COMPENSATION_RX1_0                   0xFB
 #define ALP_COMPENSATION_RX1_1                   0x1A
-#define ALP_COMPENSATION_RX2_0                   0x9E
+#define ALP_COMPENSATION_RX2_0                   0x9D
 #define ALP_COMPENSATION_RX2_1                   0x16
 #define ALP_COMPENSATION_RX3_0                   0xF3
 #define ALP_COMPENSATION_RX3_1                   0x1A
-#define ALP_COMPENSATION_RX4_0                   0xA6
-#define ALP_COMPENSATION_RX4_1                   0x16
-#define ALP_COMPENSATION_RX5_0                   0xFC
+#define ALP_COMPENSATION_RX4_0                   0xF3
+#define ALP_COMPENSATION_RX4_1                   0x1A
+#define ALP_COMPENSATION_RX5_0                   0xFB
 #define ALP_COMPENSATION_RX5_1                   0x1A
-#define ALP_COMPENSATION_RX6_0                   0xA5
+#define ALP_COMPENSATION_RX6_0                   0xA6
 #define ALP_COMPENSATION_RX6_1                   0x16
-#define ALP_COMPENSATION_RX7_0                   0x14
+#define ALP_COMPENSATION_RX7_0                   0x12
 #define ALP_COMPENSATION_RX7_1                   0x1B
-#define ALP_COMPENSATION_RX8_0                   0x0E
+#define ALP_COMPENSATION_RX8_0                   0x0A
 #define ALP_COMPENSATION_RX8_1                   0x1B
 #define ALP_COMPENSATION_RX9_0                   0xFF
 #define ALP_COMPENSATION_RX9_1                   0x03
@@ -60,7 +60,7 @@
 #define ALP_ATI_COARSE_RX3_L                     0x87
 #define ALP_ATI_COARSE_RX3_H                     0x60
 #define ALP_ATI_COARSE_RX4_L                     0x87
-#define ALP_ATI_COARSE_RX4_H                     0x60
+#define ALP_ATI_COARSE_RX4_H                     0x62
 #define ALP_ATI_COARSE_RX5_L                     0x87
 #define ALP_ATI_COARSE_RX5_H                     0x5E
 #define ALP_ATI_COARSE_RX6_L                     0x87
@@ -115,7 +115,7 @@
 #define LP1_MODE_TIMEOUT_1                       0x00
 #define ACTIVE_MODE_TIMEOUT_0                    0xDC
 #define ACTIVE_MODE_TIMEOUT_1                    0x05
-#define REATI_RETRY_TIME                         0x03
+#define REATI_RETRY_TIME                         0x01
 #define REF_UPDATE_TIME                          0x08
 #define I2C_TIMEOUT_0                            0x64
 #define I2C_TIMEOUT_1                            0x00
@@ -185,11 +185,11 @@
 #define X_RESOLUTION_1                           0x17
 #define Y_RESOLUTION_0                           0xA0
 #define Y_RESOLUTION_1                           0x0F
-#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0xA0
+#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0x50
 #define XY_DYNAMIC_FILTER_BOTTOM_SPEED_1         0x00
 #define XY_DYNAMIC_FILTER_TOP_SPEED_0            0xAC
 #define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x0D
-#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x50
+#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x3C
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
 #define STATIONARY_TOUCH_MOV_THRESHOLD           0x0F
 #define FINGER_SPLIT_FACTOR                      0x03
