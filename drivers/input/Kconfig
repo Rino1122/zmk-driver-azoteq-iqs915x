@@ -34,5 +34,17 @@ config INPUT_AZOTEQ_IQS915X_COORD_LOG
       absolute coordinates. This is intended for calibration data collection
       and is too noisy for normal use.
 
+config INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS
+    bool "Log aggregated IQS915x pointer pipeline rates"
+    default n
+    depends on LOG
+    help
+      Emit one INFO log line per second while stream data is arriving. The
+      counters cover RDY interrupts, successful stream reads, TP movement
+      samples, pointer candidates and emitted non-zero pointer pairs. It also
+      estimates RDY interrupts coalesced by the binary semaphore and reports
+      average/maximum stream gaps. This is intended for temporary runtime
+      diagnosis and adds no per-sample logging.
+
 
 endif # INPUT_AZOTEQ_IQS915X

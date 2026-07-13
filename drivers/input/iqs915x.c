@@ -51,10 +51,183 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
 #define IQS915X_TAP_DISTANCE_FALLBACK 100U
+#define IQS915X_RATE_DIAG_INTERVAL_MS 1000
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason);
+
+#if defined(CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS)
+static void iqs915x_rate_diag_note_wake(struct iqs915x_data *data,
+                                        bool measure)
+{
+  uint32_t rdy_seq = (uint32_t)atomic_get(&data->rate_diag_rdy_irqs);
+
+  if (measure && data->rate_diag_last_handled_rdy_seq != 0 &&
+      rdy_seq > data->rate_diag_last_handled_rdy_seq + 1U)
+  {
+    data->rate_diag_rdy_merged +=
+        rdy_seq - data->rate_diag_last_handled_rdy_seq - 1U;
+  }
+
+  data->rate_diag_last_handled_rdy_seq = rdy_seq;
+}
+
+static void iqs915x_rate_diag_note_stream(struct iqs915x_data *data,
+                                          const struct iqs915x_stream_data *stream)
+{
+  int64_t now_ms = k_uptime_get();
+  bool active_sample =
+      (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 0 ||
+      (stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0;
+
+  data->rate_diag_stream_reads++;
+  if ((stream->trackpad_flags & IQS915X_TP_MOVEMENT) != 0)
+  {
+    data->rate_diag_tp_movement++;
+  }
+
+  if (!active_sample)
+  {
+    data->rate_diag_last_stream_ms = 0;
+    return;
+  }
+
+  if (data->rate_diag_last_stream_ms > 0)
+  {
+    int64_t gap_ms = now_ms - data->rate_diag_last_stream_ms;
+
+    if (gap_ms >= 0 && gap_ms <= UINT32_MAX)
+    {
+      uint32_t gap = (uint32_t)gap_ms;
+
+      data->rate_diag_stream_gap_samples++;
+      data->rate_diag_stream_gap_sum_ms += gap;
+      data->rate_diag_stream_gap_max_ms =
+          MAX(data->rate_diag_stream_gap_max_ms, gap);
+    }
+  }
+
+  data->rate_diag_last_stream_ms = now_ms;
+}
+
+static void iqs915x_rate_diag_note_pointer_candidate(
+    struct iqs915x_data *data)
+{
+  data->rate_diag_pointer_pairs++;
+}
+
+static void iqs915x_rate_diag_note_pointer_report(struct iqs915x_data *data)
+{
+  data->rate_diag_pointer_nonzero_pairs++;
+}
+
+static void iqs915x_rate_diag_reset_window(struct iqs915x_data *data)
+{
+  data->rate_diag_last_handled_rdy_seq =
+      (uint32_t)atomic_get(&data->rate_diag_rdy_irqs);
+  data->rate_diag_last_stream_ms = 0;
+  data->rate_diag_window_start_ms = 0;
+  data->rate_diag_stream_gap_max_ms = 0;
+}
+
+static void iqs915x_rate_diag_maybe_log(struct iqs915x_data *data)
+{
+  int64_t now_ms = k_uptime_get();
+  uint32_t rdy_irqs = (uint32_t)atomic_get(&data->rate_diag_rdy_irqs);
+
+  if (data->rate_diag_window_start_ms == 0)
+  {
+    data->rate_diag_window_start_ms = now_ms;
+    data->rate_diag_window_rdy_irqs = rdy_irqs;
+    data->rate_diag_window_stream_reads = data->rate_diag_stream_reads;
+    data->rate_diag_window_tp_movement = data->rate_diag_tp_movement;
+    data->rate_diag_window_pointer_pairs = data->rate_diag_pointer_pairs;
+    data->rate_diag_window_pointer_nonzero_pairs =
+        data->rate_diag_pointer_nonzero_pairs;
+    data->rate_diag_window_rdy_merged = data->rate_diag_rdy_merged;
+    data->rate_diag_window_stream_gap_samples =
+        data->rate_diag_stream_gap_samples;
+    data->rate_diag_window_stream_gap_sum_ms =
+        data->rate_diag_stream_gap_sum_ms;
+    return;
+  }
+
+  int64_t elapsed_ms = now_ms - data->rate_diag_window_start_ms;
+  if (elapsed_ms < IQS915X_RATE_DIAG_INTERVAL_MS)
+  {
+    return;
+  }
+
+  uint32_t gap_samples = data->rate_diag_stream_gap_samples -
+                         data->rate_diag_window_stream_gap_samples;
+  uint32_t gap_sum_ms = data->rate_diag_stream_gap_sum_ms -
+                        data->rate_diag_window_stream_gap_sum_ms;
+  uint32_t gap_avg_ms = gap_samples > 0 ? gap_sum_ms / gap_samples : 0;
+  uint32_t gap_max_ms = data->rate_diag_stream_gap_max_ms;
+
+  LOG_INF("rate,ms=%lld,rdy=%u,stream=%u,move=%u,pair=%u,nz=%u,merged=%u,"
+          "gap_avg=%u,gap_max=%u",
+          (long long)elapsed_ms,
+          rdy_irqs - data->rate_diag_window_rdy_irqs,
+          data->rate_diag_stream_reads -
+              data->rate_diag_window_stream_reads,
+          data->rate_diag_tp_movement -
+              data->rate_diag_window_tp_movement,
+          data->rate_diag_pointer_pairs -
+              data->rate_diag_window_pointer_pairs,
+          data->rate_diag_pointer_nonzero_pairs -
+              data->rate_diag_window_pointer_nonzero_pairs,
+          data->rate_diag_rdy_merged -
+              data->rate_diag_window_rdy_merged,
+          gap_avg_ms, gap_max_ms);
+
+  data->rate_diag_window_start_ms = now_ms;
+  data->rate_diag_window_rdy_irqs = rdy_irqs;
+  data->rate_diag_window_stream_reads = data->rate_diag_stream_reads;
+  data->rate_diag_window_tp_movement = data->rate_diag_tp_movement;
+  data->rate_diag_window_pointer_pairs = data->rate_diag_pointer_pairs;
+  data->rate_diag_window_pointer_nonzero_pairs =
+      data->rate_diag_pointer_nonzero_pairs;
+  data->rate_diag_window_rdy_merged = data->rate_diag_rdy_merged;
+  data->rate_diag_window_stream_gap_samples =
+      data->rate_diag_stream_gap_samples;
+  data->rate_diag_window_stream_gap_sum_ms =
+      data->rate_diag_stream_gap_sum_ms;
+  data->rate_diag_stream_gap_max_ms = 0;
+}
+#else
+static inline void iqs915x_rate_diag_note_wake(struct iqs915x_data *data,
+                                               bool measure)
+{
+  ARG_UNUSED(data);
+  ARG_UNUSED(measure);
+}
+static inline void iqs915x_rate_diag_note_stream(
+    struct iqs915x_data *data, const struct iqs915x_stream_data *stream)
+{
+  ARG_UNUSED(data);
+  ARG_UNUSED(stream);
+}
+static inline void iqs915x_rate_diag_note_pointer_candidate(
+    struct iqs915x_data *data)
+{
+  ARG_UNUSED(data);
+}
+static inline void iqs915x_rate_diag_note_pointer_report(
+    struct iqs915x_data *data)
+{
+  ARG_UNUSED(data);
+}
+static inline void iqs915x_rate_diag_reset_window(struct iqs915x_data *data)
+{
+  ARG_UNUSED(data);
+}
+static inline void iqs915x_rate_diag_maybe_log(struct iqs915x_data *data)
+{
+  ARG_UNUSED(data);
+}
+#endif
 
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
 {
@@ -2350,6 +2523,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
     k_sem_take(&data->rdy_sem, K_FOREVER);
+    iqs915x_rate_diag_note_wake(
+        data, data->enabled && data->work_state == WORK_READ_DATA);
 
     if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
         data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE)
@@ -2372,6 +2547,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       LOG_ERR("Failed to read stream: %d", ret);
       continue;
     }
+    iqs915x_rate_diag_note_stream(data, &stream);
 
     // IQS915xのランタイムリセット検出
     // 初期化中のINIT_VERIFY_SHOW_RESET_CLEARでSHOW_RESETクリアを確認済みなので、
@@ -2412,6 +2588,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       // 慣性スクロールもキャンセル
       iqs915x_reset_scroll_inertia(data);
       data->gesture_pointer_suppress_ticks = 0;
+      iqs915x_rate_diag_reset_window(data);
       continue;
     }
 
@@ -2735,6 +2912,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
               {
                 int32_t raw_rel_x = rel_x;
                 int32_t raw_rel_y = rel_y;
+                iqs915x_rate_diag_note_pointer_candidate(data);
                 uint16_t pointer_scale = iqs915x_apply_pointer_scale(
                     config, data, raw_rel_x, raw_rel_y, &rel_x, &rel_y);
 
@@ -2745,6 +2923,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
                 if (rel_x != 0 || rel_y != 0)
                 {
+                  iqs915x_rate_diag_note_pointer_report(data);
                   input_report_rel(dev, INPUT_REL_X, rel_x, false,
                                    K_FOREVER);
                   input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
@@ -2755,6 +2934,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
       }
     }
+    iqs915x_rate_diag_maybe_log(data);
   }
 }
 
@@ -2767,6 +2947,9 @@ static void iqs915x_rdy_handler(const struct device *port,
 {
   struct iqs915x_data *data = CONTAINER_OF(cb, struct iqs915x_data, rdy_cb);
 
+#if defined(CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS)
+  atomic_inc(&data->rate_diag_rdy_irqs);
+#endif
   LOG_DBG("rdy_handler called");
   k_sem_give(&data->rdy_sem);
 }
@@ -2970,6 +3153,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
   {
     // ===== 無効化: 即座にイベント破棄を開始し、LP2へ遷移 =====
     data->enabled = false;
+    iqs915x_rate_diag_reset_window(data);
 
     // 進行中の操作を安全に解除
     // ドラッグ中の場合はボタンリリースを送信
@@ -3022,6 +3206,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
   {
     // ===== 有効化: Active modeへの復帰開始 =====
     data->enabled = true;
+    iqs915x_rate_diag_reset_window(data);
     data->gesture_pointer_suppress_ticks = 0;
     if (data->tap_and_hold_release_pending)
     {

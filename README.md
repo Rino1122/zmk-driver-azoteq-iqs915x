@@ -117,6 +117,16 @@ The driver emits raw touched stream samples before calibration as INFO logs in
 the form `coord,t=...,f=...,x1=...,y1=...`. Keep this disabled for normal use
 because it logs every touched sample.
 
+For low-overhead pointer-rate diagnosis, enable
+`CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS=y`. While stream data is arriving,
+the driver emits one aggregate INFO line per second in the form
+`rate,ms=...,rdy=...,stream=...,move=...,pair=...,nz=...,merged=...,gap_avg=...,gap_max=...`.
+`pair` counts non-zero calibrated pointer candidates before pointer scaling,
+`nz` counts pairs that remain non-zero after scaling, and `merged` estimates
+RDY edges coalesced while the binary semaphore was already pending. Keep raw
+coordinate logging disabled during this measurement so logging does not alter
+the path being measured.
+
 In Event Mode, the driver enables `TP_EVENT` as the only event source and
 disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
 `TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level

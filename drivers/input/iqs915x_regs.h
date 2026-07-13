@@ -20,6 +20,7 @@
 #define IQS915X_REGS_H_
 
 #include <zephyr/device.h>
+#include <zephyr/sys/atomic.h>
 #include <stdint.h>
 
 /* ============================================================
@@ -569,6 +570,30 @@ struct iqs915x_data
     bool enabled;        // トラックパッド有効フラグ（falseでイベント破棄）
     bool lp2_pending;    // IQS915xへのLP2遷移待ち
     bool active_pending; // IQS915xのActive mode復帰待ち
+
+#if defined(CONFIG_INPUT_AZOTEQ_IQS915X_RATE_DIAGNOSTICS)
+    // 低負荷レート診断。ISR更新値はatomic、その他は専用スレッドのみが更新する。
+    atomic_t rate_diag_rdy_irqs;
+    uint32_t rate_diag_last_handled_rdy_seq;
+    uint32_t rate_diag_stream_reads;
+    uint32_t rate_diag_tp_movement;
+    uint32_t rate_diag_pointer_pairs;
+    uint32_t rate_diag_pointer_nonzero_pairs;
+    uint32_t rate_diag_rdy_merged;
+    uint32_t rate_diag_stream_gap_samples;
+    uint32_t rate_diag_stream_gap_sum_ms;
+    uint32_t rate_diag_stream_gap_max_ms;
+    int64_t rate_diag_last_stream_ms;
+    int64_t rate_diag_window_start_ms;
+    uint32_t rate_diag_window_rdy_irqs;
+    uint32_t rate_diag_window_stream_reads;
+    uint32_t rate_diag_window_tp_movement;
+    uint32_t rate_diag_window_pointer_pairs;
+    uint32_t rate_diag_window_pointer_nonzero_pairs;
+    uint32_t rate_diag_window_rdy_merged;
+    uint32_t rate_diag_window_stream_gap_samples;
+    uint32_t rate_diag_window_stream_gap_sum_ms;
+#endif
 };
 
 #endif /* IQS915X_REGS_H_ */
