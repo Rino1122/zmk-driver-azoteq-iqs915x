@@ -10,23 +10,23 @@
 
 /* ALP ATI Compensation */
 /* Memory Map Position 0x115C - 0x1175 */
-#define ALP_COMPENSATION_RX0_0                   0x0D
+#define ALP_COMPENSATION_RX0_0                   0x03
 #define ALP_COMPENSATION_RX0_1                   0x1B
-#define ALP_COMPENSATION_RX1_0                   0xFB
-#define ALP_COMPENSATION_RX1_1                   0x1A
-#define ALP_COMPENSATION_RX2_0                   0x9D
-#define ALP_COMPENSATION_RX2_1                   0x16
-#define ALP_COMPENSATION_RX3_0                   0xF3
-#define ALP_COMPENSATION_RX3_1                   0x1A
-#define ALP_COMPENSATION_RX4_0                   0xF3
-#define ALP_COMPENSATION_RX4_1                   0x1A
-#define ALP_COMPENSATION_RX5_0                   0xFB
+#define ALP_COMPENSATION_RX1_0                   0xA7
+#define ALP_COMPENSATION_RX1_1                   0x16
+#define ALP_COMPENSATION_RX2_0                   0x03
+#define ALP_COMPENSATION_RX2_1                   0x1B
+#define ALP_COMPENSATION_RX3_0                   0x18
+#define ALP_COMPENSATION_RX3_1                   0x1B
+#define ALP_COMPENSATION_RX4_0                   0x18
+#define ALP_COMPENSATION_RX4_1                   0x1B
+#define ALP_COMPENSATION_RX5_0                   0xF6
 #define ALP_COMPENSATION_RX5_1                   0x1A
-#define ALP_COMPENSATION_RX6_0                   0xA6
+#define ALP_COMPENSATION_RX6_0                   0x9C
 #define ALP_COMPENSATION_RX6_1                   0x16
-#define ALP_COMPENSATION_RX7_0                   0x12
+#define ALP_COMPENSATION_RX7_0                   0x0B
 #define ALP_COMPENSATION_RX7_1                   0x1B
-#define ALP_COMPENSATION_RX8_0                   0x0A
+#define ALP_COMPENSATION_RX8_0                   0x0D
 #define ALP_COMPENSATION_RX8_1                   0x1B
 #define ALP_COMPENSATION_RX9_0                   0xFF
 #define ALP_COMPENSATION_RX9_1                   0x03
@@ -50,17 +50,17 @@
 /* ATI Multipliers / Dividers */
 /* Memory Map Position 0x117A - 0x1195 */
 #define TP_ATI_MULTDIV_L                         0x21
-#define TP_ATI_MULTDIV_H                         0x4B
+#define TP_ATI_MULTDIV_H                         0x4D
 #define ALP_ATI_COARSE_RX0_L                     0x87
 #define ALP_ATI_COARSE_RX0_H                     0x60
 #define ALP_ATI_COARSE_RX1_L                     0x87
-#define ALP_ATI_COARSE_RX1_H                     0x62
+#define ALP_ATI_COARSE_RX1_H                     0x60
 #define ALP_ATI_COARSE_RX2_L                     0x87
 #define ALP_ATI_COARSE_RX2_H                     0x60
 #define ALP_ATI_COARSE_RX3_L                     0x87
 #define ALP_ATI_COARSE_RX3_H                     0x60
 #define ALP_ATI_COARSE_RX4_L                     0x87
-#define ALP_ATI_COARSE_RX4_H                     0x62
+#define ALP_ATI_COARSE_RX4_H                     0x60
 #define ALP_ATI_COARSE_RX5_L                     0x87
 #define ALP_ATI_COARSE_RX5_H                     0x5E
 #define ALP_ATI_COARSE_RX6_L                     0x87
@@ -80,7 +80,7 @@
 
 /* ATI Settings */
 /* Memory Map Position 0x1196 - 0x11A1 */
-#define TP_ATI_TARGET_0                          0x5E
+#define TP_ATI_TARGET_0                          0xF4
 #define TP_ATI_TARGET_1                          0x01
 #define ALP_ATI_TARGET_0                         0x90
 #define ALP_ATI_TARGET_1                         0x01
