@@ -86,10 +86,10 @@
 #define ALP_ATI_TARGET_1                         0x01
 #define ALP_BASE_TARGET_0                        0x46
 #define ALP_BASE_TARGET_1                        0x00
-#define TP_NEG_DELTA_REATI_0                     0x64
+#define TP_NEG_DELTA_REATI_0                     0x32
 #define TP_NEG_DELTA_REATI_1                     0x00
-#define TP_POS_DELTA_REATI_0                     0x98
-#define TP_POS_DELTA_REATI_1                     0x08
+#define TP_POS_DELTA_REATI_0                     0xE8
+#define TP_POS_DELTA_REATI_1                     0x03
 #define TP_REF_DRIFT_LIMIT                       0xC8
 #define ALP_LTA_DRIFT_LIMIT                      0xC8
 
@@ -115,7 +115,7 @@
 #define LP1_MODE_TIMEOUT_1                       0x00
 #define ACTIVE_MODE_TIMEOUT_0                    0xDC
 #define ACTIVE_MODE_TIMEOUT_1                    0x05
-#define REATI_RETRY_TIME                         0x1E
+#define REATI_RETRY_TIME                         0x05
 #define REF_UPDATE_TIME                          0x08
 #define I2C_TIMEOUT_0                            0x64
 #define I2C_TIMEOUT_1                            0x00
@@ -126,7 +126,7 @@
 /* Memory Map Position 0x11BC - 0x11C1 */
 #define SYSTEM_CONTROL_0                         0x00
 #define SYSTEM_CONTROL_1                         0x00
-#define CONFIG_SETTINGS_0                        0x8A
+#define CONFIG_SETTINGS_0                        0x8E
 #define CONFIG_SETTINGS_1                        0x0E
 #define OTHER_SETTINGS_0                         0x0C
 #define OTHER_SETTINGS_1                         0x00
@@ -146,8 +146,8 @@
 
 /* Thresholds and Debounce Settings */
 /* Memory Map Position 0x11CC - 0x11D3 */
-#define TRACKPAD_TOUCH_SET_THRESHOLD             0x28
-#define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x1E
+#define TRACKPAD_TOUCH_SET_THRESHOLD             0x64
+#define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x55
 #define ALP_THRESHOLD                            0x14
 #define ALP_AUTOPROX_THRESHOLD                   0x7F
 #define ALP_SET_DEBOUNCE                         0x02
