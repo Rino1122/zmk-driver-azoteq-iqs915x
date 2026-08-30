@@ -80,8 +80,8 @@
 
 /* ATI Settings */
 /* Memory Map Position 0x1196 - 0x11A1 */
-#define TP_ATI_TARGET_0                          0xC2
-#define TP_ATI_TARGET_1                          0x01
+#define TP_ATI_TARGET_0                          0x58
+#define TP_ATI_TARGET_1                          0x02
 #define ALP_ATI_TARGET_0                         0x90
 #define ALP_ATI_TARGET_1                         0x01
 #define ALP_BASE_TARGET_0                        0x46
@@ -124,7 +124,7 @@
 
 /* System Settings */
 /* Memory Map Position 0x11BC - 0x11C1 */
-#define SYSTEM_CONTROL_0                         0x00
+#define SYSTEM_CONTROL_0                         0x08
 #define SYSTEM_CONTROL_1                         0x00
 #define CONFIG_SETTINGS_0                        0x8E
 #define CONFIG_SETTINGS_1                        0x0E
@@ -286,47 +286,47 @@
 
 /* TP Channel Disables */
 /* Memory Map Position 0x1246 - 0x129D */
-#define TPCHANNELDISABLE_0                       0xFF
-#define TPCHANNELDISABLE_1                       0xFF
-#define TPCHANNELDISABLE_2                       0x03
+#define TPCHANNELDISABLE_0                       0x00
+#define TPCHANNELDISABLE_1                       0x00
+#define TPCHANNELDISABLE_2                       0x02
 #define TPCHANNELDISABLE_3                       0x00
-#define TPCHANNELDISABLE_4                       0x01
+#define TPCHANNELDISABLE_4                       0x00
 #define TPCHANNELDISABLE_5                       0x00
 #define TPCHANNELDISABLE_6                       0x02
 #define TPCHANNELDISABLE_7                       0x00
-#define TPCHANNELDISABLE_8                       0x01
+#define TPCHANNELDISABLE_8                       0x00
 #define TPCHANNELDISABLE_9                       0x00
 #define TPCHANNELDISABLE_10                      0x02
 #define TPCHANNELDISABLE_11                      0x00
-#define TPCHANNELDISABLE_12                      0x01
+#define TPCHANNELDISABLE_12                      0x00
 #define TPCHANNELDISABLE_13                      0x00
 #define TPCHANNELDISABLE_14                      0x02
 #define TPCHANNELDISABLE_15                      0x00
-#define TPCHANNELDISABLE_16                      0x01
+#define TPCHANNELDISABLE_16                      0x00
 #define TPCHANNELDISABLE_17                      0x00
 #define TPCHANNELDISABLE_18                      0x02
 #define TPCHANNELDISABLE_19                      0x00
-#define TPCHANNELDISABLE_20                      0x01
+#define TPCHANNELDISABLE_20                      0x00
 #define TPCHANNELDISABLE_21                      0x00
 #define TPCHANNELDISABLE_22                      0x02
 #define TPCHANNELDISABLE_23                      0x00
-#define TPCHANNELDISABLE_24                      0x01
+#define TPCHANNELDISABLE_24                      0x00
 #define TPCHANNELDISABLE_25                      0x00
 #define TPCHANNELDISABLE_26                      0x02
 #define TPCHANNELDISABLE_27                      0x00
-#define TPCHANNELDISABLE_28                      0x01
+#define TPCHANNELDISABLE_28                      0x00
 #define TPCHANNELDISABLE_29                      0x00
 #define TPCHANNELDISABLE_30                      0x02
 #define TPCHANNELDISABLE_31                      0x00
-#define TPCHANNELDISABLE_32                      0x7F
+#define TPCHANNELDISABLE_32                      0x00
 #define TPCHANNELDISABLE_33                      0x00
 #define TPCHANNELDISABLE_34                      0x02
 #define TPCHANNELDISABLE_35                      0x00
-#define TPCHANNELDISABLE_36                      0x7F
+#define TPCHANNELDISABLE_36                      0x3F
 #define TPCHANNELDISABLE_37                      0x00
 #define TPCHANNELDISABLE_38                      0x02
 #define TPCHANNELDISABLE_39                      0x00
-#define TPCHANNELDISABLE_40                      0x7F
+#define TPCHANNELDISABLE_40                      0x3F
 #define TPCHANNELDISABLE_41                      0x00
 #define TPCHANNELDISABLE_42                      0x02
 #define TPCHANNELDISABLE_43                      0x00
