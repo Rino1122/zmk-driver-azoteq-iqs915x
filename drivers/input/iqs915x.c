@@ -51,10 +51,73 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
 #define IQS915X_TAP_DISTANCE_FALLBACK 100U
+#define IQS915X_POINTER_RESUME_GUARD_FRAMES 2U
 
 static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason);
+
+static uint32_t iqs915x_request_generation(const struct iqs915x_data *data)
+{
+  return (uint32_t)atomic_get(&data->request_generation);
+}
+
+static bool iqs915x_output_is_enabled(const struct iqs915x_data *data)
+{
+  return atomic_get(&data->output_enabled) != 0;
+}
+
+static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
+                                            uint32_t generation)
+{
+  return iqs915x_output_is_enabled(data) &&
+         generation == iqs915x_request_generation(data);
+}
+
+static bool iqs915x_report_event(struct iqs915x_data *data, uint16_t type,
+                                 uint16_t code, int32_t value, bool sync)
+{
+  if (!iqs915x_output_is_enabled(data))
+  {
+    return false;
+  }
+
+  return input_report(data->dev, type, code, value, sync, K_FOREVER) == 0;
+}
+
+static bool iqs915x_report_key(struct iqs915x_data *data, uint16_t code,
+                               int32_t value, bool sync)
+{
+  if (!iqs915x_output_is_enabled(data))
+  {
+    return false;
+  }
+
+  return input_report_key(data->dev, code, value, sync, K_FOREVER) == 0;
+}
+
+static bool iqs915x_report_rel(struct iqs915x_data *data, uint16_t code,
+                               int32_t value, bool sync)
+{
+  if (!iqs915x_output_is_enabled(data))
+  {
+    return false;
+  }
+
+  return input_report_rel(data->dev, code, value, sync, K_FOREVER) == 0;
+}
+
+static void iqs915x_report_pointer_pair(struct iqs915x_data *data,
+                                        int32_t x, int32_t y)
+{
+  if (!iqs915x_output_is_enabled(data))
+  {
+    return;
+  }
+
+  input_report_rel(data->dev, INPUT_REL_X, x, false, K_FOREVER);
+  input_report_rel(data->dev, INPUT_REL_Y, y, true, K_FOREVER);
+}
 
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
 {
@@ -862,8 +925,15 @@ static uint16_t iqs915x_get_multifinger_swipe_gesture(uint8_t fingers, int32_t d
 
 static void iqs915x_emit_gesture_tap(const struct device *dev, uint16_t gesture_code)
 {
-  input_report(dev, IQS915X_INPUT_EV_GESTURE, gesture_code, 1, false, K_FOREVER);
-  input_report(dev, IQS915X_INPUT_EV_GESTURE, gesture_code, 0, true, K_FOREVER);
+  struct iqs915x_data *data = dev->data;
+
+  if (!iqs915x_report_event(data, IQS915X_INPUT_EV_GESTURE,
+                            gesture_code, 1, false))
+  {
+    return;
+  }
+  iqs915x_report_event(data, IQS915X_INPUT_EV_GESTURE,
+                       gesture_code, 0, true);
 }
 
 static void iqs915x_update_finger_state(struct iqs915x_data *data,
@@ -1248,6 +1318,30 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
     data->work_state = WORK_READ_DATA;
     LOG_INF("Event Mode relatch: enabling (CONFIG_SETTINGS=0x%04x)", cfg);
     LOG_INF("Event Mode relatch: complete");
+
+    if (data->relatch_target_enabled &&
+        data->transition_generation == iqs915x_request_generation(data) &&
+        atomic_get(&data->requested_enabled) != 0)
+    {
+      iqs915x_reset_absolute_tracking(data);
+      data->is_touching = false;
+      data->pointer_resume_guard_frames =
+          IQS915X_POINTER_RESUME_GUARD_FRAMES;
+      data->enabled = true;
+      atomic_set(&data->output_enabled, 1);
+      LOG_INF("Trackpad output enabled: generation=%u guard_frames=%u",
+              data->transition_generation,
+              data->pointer_resume_guard_frames);
+    }
+    else
+    {
+      data->enabled = false;
+      atomic_clear(&data->output_enabled);
+      LOG_INF("Trackpad output remains disabled: transition_generation=%u "
+              "request_generation=%u",
+              data->transition_generation,
+              iqs915x_request_generation(data));
+    }
     break;
   }
 
@@ -1265,6 +1359,12 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, button_release_work);
 
+  if (!iqs915x_work_session_is_current(data,
+                                       data->button_work_generation))
+  {
+    return;
+  }
+
   for (int i = 0; i < 3; i++)
   {
     if (data->buttons_pressed & BIT(i))
@@ -1274,8 +1374,10 @@ static void iqs915x_button_release_work_handler(struct k_work *work)
       {
         continue;
       }
-      input_report_key(data->dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
-      data->buttons_pressed &= ~BIT(i);
+      if (iqs915x_report_key(data, INPUT_BTN_0 + i, 0, true))
+      {
+        data->buttons_pressed &= ~BIT(i);
+      }
     }
   }
 }
@@ -1284,8 +1386,12 @@ static void iqs915x_report_button_tap(struct iqs915x_data *data,
                                       uint16_t button_code)
 {
   k_work_cancel_delayable(&data->button_release_work);
-  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
+  if (!iqs915x_report_key(data, button_code, 1, true))
+  {
+    return;
+  }
   data->buttons_pressed |= BIT(button_code - INPUT_BTN_0);
+  data->button_work_generation = iqs915x_request_generation(data);
   k_work_schedule(&data->button_release_work,
                   K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
 }
@@ -1298,14 +1404,23 @@ static void iqs915x_report_button_double_tap(struct iqs915x_data *data,
   k_work_cancel_delayable(&data->button_release_work);
   if (data->buttons_pressed & button_bit)
   {
-    input_report_key(data->dev, button_code, 0, true, K_FOREVER);
-    data->buttons_pressed &= ~button_bit;
+    if (iqs915x_report_key(data, button_code, 0, true))
+    {
+      data->buttons_pressed &= ~button_bit;
+    }
   }
 
-  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
-  input_report_key(data->dev, button_code, 0, true, K_FOREVER);
-  input_report_key(data->dev, button_code, 1, true, K_FOREVER);
+  if (!iqs915x_report_key(data, button_code, 1, true))
+  {
+    return;
+  }
+  iqs915x_report_key(data, button_code, 0, true);
+  if (!iqs915x_report_key(data, button_code, 1, true))
+  {
+    return;
+  }
   data->buttons_pressed |= button_bit;
+  data->button_work_generation = iqs915x_request_generation(data);
   k_work_schedule(&data->button_release_work,
                   K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
 }
@@ -1328,7 +1443,11 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
   data->tap_and_hold_start_pending = false;
   data->single_tap_pending = false;
   data->tap_sequence_second_touch = false;
-  input_report_key(data->dev, LEFT_BUTTON_CODE, 1, true, K_FOREVER);
+  if (!iqs915x_report_key(data, LEFT_BUTTON_CODE, 1, true))
+  {
+    data->active_tap_hold = false;
+    return;
+  }
   data->buttons_pressed |= BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
   LOG_DBG("tap-and-drag started: %s", reason);
 }
@@ -1410,7 +1529,10 @@ static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
   }
 
   output = *accumulator / denom;
-  input_report_rel(data->dev, code, output, true, K_FOREVER);
+  if (!iqs915x_report_rel(data, code, output, true))
+  {
+    return false;
+  }
   *accumulator %= denom;
   return output != 0;
 }
@@ -1482,6 +1604,8 @@ static bool iqs915x_handle_two_finger_scroll(
     {
       data->scroll_inertia_state.active = true;
       data->scroll_inertia_state.is_inertial = false;
+      data->scroll_inertia_work_generation =
+          iqs915x_request_generation(data);
       k_work_reschedule(&data->scroll_inertia_work,
                         K_MSEC(config->scroll_inertia.trigger_ms));
     }
@@ -1517,6 +1641,12 @@ static void iqs915x_single_tap_work_handler(struct k_work *work)
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, single_tap_work);
 
+  if (!iqs915x_work_session_is_current(
+          data, data->single_tap_work_generation))
+  {
+    return;
+  }
+
   if (!data->single_tap_pending)
   {
     return;
@@ -1542,6 +1672,12 @@ static void iqs915x_tap_and_hold_start_work_handler(struct k_work *work)
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_start_work);
 
+  if (!iqs915x_work_session_is_current(
+          data, data->tap_and_hold_start_work_generation))
+  {
+    return;
+  }
+
   if (!data->tap_and_hold_start_pending || !data->tap_sequence_second_touch ||
       !data->is_touching)
   {
@@ -1558,6 +1694,12 @@ static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
   struct iqs915x_data *data =
       CONTAINER_OF(dwork, struct iqs915x_data, tap_and_hold_release_work);
 
+  if (!iqs915x_work_session_is_current(
+          data, data->tap_and_hold_release_work_generation))
+  {
+    return;
+  }
+
   data->tap_and_hold_release_pending = false;
 
   if (!data->active_tap_hold)
@@ -1572,8 +1714,10 @@ static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
   }
 
   data->active_tap_hold = false;
-  input_report_key(data->dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-  data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+  if (iqs915x_report_key(data, LEFT_BUTTON_CODE, 0, true))
+  {
+    data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+  }
   LOG_DBG("tap-and-hold release timeout fired: drag released");
 }
 
@@ -1639,7 +1783,9 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   int16_t decay_factor_q8;
   bool emitted = false;
 
-  if (!state->active || !profile->enabled)
+  if (!iqs915x_work_session_is_current(
+          data, data->scroll_inertia_work_generation) ||
+      !state->active || !profile->enabled)
   {
     return;
   }
@@ -2194,6 +2340,26 @@ static void iqs915x_init_step_handler(const struct device *dev)
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = cfg;
       iqs915x_reset_event_mode_relatch_state(data);
+      data->applied_generation = iqs915x_request_generation(data);
+      data->transition_generation = data->applied_generation;
+      data->active_pending = false;
+      if (atomic_get(&data->requested_enabled) != 0)
+      {
+        iqs915x_reset_absolute_tracking(data);
+        data->is_touching = false;
+        data->pointer_resume_guard_frames =
+            IQS915X_POINTER_RESUME_GUARD_FRAMES;
+        data->lp2_pending = false;
+        data->enabled = true;
+        atomic_set(&data->output_enabled, 1);
+      }
+      else
+      {
+        data->pointer_resume_guard_frames = 0;
+        data->lp2_pending = true;
+        data->enabled = false;
+        atomic_clear(&data->output_enabled);
+      }
       LOG_INF("IQS915x initialization complete");
       break;
     }
@@ -2276,6 +2442,81 @@ static void iqs915x_init_step_handler(const struct device *dev)
   }
 }
 
+static void iqs915x_reset_input_session(struct iqs915x_data *data)
+{
+  const struct device *dev = data->dev;
+  struct k_work_sync button_sync;
+  struct k_work_sync tap_release_sync;
+  struct k_work_sync single_tap_sync;
+  struct k_work_sync tap_start_sync;
+  struct k_work_sync inertia_sync;
+  uint8_t pressed;
+
+  k_work_cancel_delayable_sync(&data->tap_and_hold_release_work,
+                               &tap_release_sync);
+  k_work_cancel_delayable_sync(&data->single_tap_work, &single_tap_sync);
+  k_work_cancel_delayable_sync(&data->tap_and_hold_start_work,
+                               &tap_start_sync);
+  k_work_cancel_delayable_sync(&data->button_release_work, &button_sync);
+  k_work_cancel_delayable_sync(&data->scroll_inertia_work, &inertia_sync);
+  pressed = data->buttons_pressed;
+
+  if (data->active_tap_hold &&
+      (pressed & BIT(LEFT_BUTTON_CODE - INPUT_BTN_0)) == 0)
+  {
+    input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
+  }
+
+  for (int i = 0; i < 3; i++)
+  {
+    if (pressed & BIT(i))
+    {
+      input_report_key(dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
+    }
+  }
+
+  data->buttons_pressed = 0;
+  data->active_tap_hold = false;
+  data->tap_and_hold_release_pending = false;
+  data->single_tap_pending = false;
+  data->tap_sequence_second_touch = false;
+  data->tap_and_hold_start_pending = false;
+  data->is_touching = false;
+  data->last_touch_down_time = 0;
+  data->gesture_pointer_suppress_ticks = 0;
+  data->pointer_resume_guard_frames = 0;
+  iqs915x_reset_absolute_tracking(data);
+  iqs915x_reset_runtime_gesture_state(data);
+  iqs915x_reset_scroll_inertia(data);
+  data->scroll_x_acc = 0;
+  data->scroll_y_acc = 0;
+}
+
+static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
+{
+  uint32_t generation = iqs915x_request_generation(data);
+  bool requested_enabled;
+
+  if (generation == data->applied_generation)
+  {
+    return;
+  }
+
+  requested_enabled = atomic_get(&data->requested_enabled) != 0;
+  atomic_clear(&data->output_enabled);
+  data->enabled = false;
+  iqs915x_reset_input_session(data);
+
+  data->applied_generation = generation;
+  data->transition_generation = generation;
+  data->relatch_target_enabled = false;
+  data->active_pending = requested_enabled;
+  data->lp2_pending = !requested_enabled;
+
+  LOG_INF("Trackpad power request applied: generation=%u requested=%u",
+          generation, requested_enabled);
+}
+
 /* ============================================================
  * メインスレッド
  *
@@ -2310,6 +2551,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
+    iqs915x_apply_pending_power_request(data);
+
     // ===== Active/LP2 pending処理 =====
     // iqs915x_set_enabled()から設定されたpendingフラグを処理する
 
@@ -2319,8 +2562,23 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->active_pending = false;
-        iqs915x_schedule_event_mode_relatch(data, "Active mode transition");
-        LOG_INF("Trackpad entered Active mode");
+        if (data->transition_generation ==
+                iqs915x_request_generation(data) &&
+            atomic_get(&data->requested_enabled) != 0)
+        {
+          data->relatch_target_enabled = true;
+          iqs915x_schedule_event_mode_relatch(data,
+                                              "Active mode transition");
+          LOG_INF("Trackpad entered Active mode: generation=%u",
+                  data->transition_generation);
+        }
+        else
+        {
+          LOG_INF("Ignoring stale Active transition: transition_generation=%u "
+                  "request_generation=%u",
+                  data->transition_generation,
+                  iqs915x_request_generation(data));
+        }
       }
       else
       {
@@ -2337,8 +2595,23 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (ret == 0)
       {
         data->lp2_pending = false;
-        iqs915x_schedule_event_mode_relatch(data, "LP2 mode transition");
-        LOG_INF("Trackpad entered LP2 mode");
+        if (data->transition_generation ==
+                iqs915x_request_generation(data) &&
+            atomic_get(&data->requested_enabled) == 0)
+        {
+          data->relatch_target_enabled = false;
+          iqs915x_schedule_event_mode_relatch(data,
+                                              "LP2 mode transition");
+          LOG_INF("Trackpad entered LP2 mode: generation=%u",
+                  data->transition_generation);
+        }
+        else
+        {
+          LOG_INF("Ignoring stale LP2 transition: transition_generation=%u "
+                  "request_generation=%u",
+                  data->transition_generation,
+                  iqs915x_request_generation(data));
+        }
       }
       else
       {
@@ -2359,17 +2632,27 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     // ===== トラックパッド無効時はRDYを待つだけで何もしない =====
-    if (!data->enabled)
+    if (!data->enabled || !iqs915x_output_is_enabled(data))
     {
       continue;
     }
 
     // ストリーミングデータをraw読み取り
+    uint32_t frame_generation = iqs915x_request_generation(data);
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
     if (ret < 0)
     {
       LOG_ERR("Failed to read stream: %d", ret);
+      continue;
+    }
+
+    if (!iqs915x_output_is_enabled(data) ||
+        frame_generation != iqs915x_request_generation(data))
+    {
+      LOG_DBG("Discarding stale input frame: frame_generation=%u "
+              "request_generation=%u",
+              frame_generation, iqs915x_request_generation(data));
       continue;
     }
 
@@ -2390,6 +2673,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = 0;
       data->work_state = WORK_READ_DATA;
+      data->enabled = false;
+      atomic_clear(&data->output_enabled);
       iqs915x_reset_event_mode_relatch_state(data);
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
       if (data->active_tap_hold)
@@ -2555,6 +2840,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         if (config->tap_and_hold)
         {
           data->tap_and_hold_start_pending = true;
+          data->tap_and_hold_start_work_generation =
+              iqs915x_request_generation(data);
           k_work_schedule(&data->tap_and_hold_start_work,
                           K_MSEC(data->tap_touch_time_ms));
         }
@@ -2592,6 +2879,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         {
           data->single_tap_pending = true;
           data->pending_tap_up_time = now_ms;
+          data->single_tap_work_generation =
+              iqs915x_request_generation(data);
           k_work_schedule(&data->single_tap_work,
                           K_MSEC(data->tap_air_time_ms));
           LOG_DBG("single tap pending: duration=%lld ms movement=%u "
@@ -2646,6 +2935,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         }
         else if (touch_up && !data->tap_and_hold_release_pending)
         {
+          data->tap_and_hold_release_work_generation =
+              iqs915x_request_generation(data);
           k_work_schedule(&data->tap_and_hold_release_work,
                           K_MSEC(config->tap_and_hold_release_timeout_ms));
           data->tap_and_hold_release_pending = true;
@@ -2707,7 +2998,19 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
           if (touch_down || tp_movement)
           {
-            if (!data->last_abs_valid)
+            if (data->pointer_resume_guard_frames > 0)
+            {
+              data->last_abs_x = stream.abs_x;
+              data->last_abs_y = stream.abs_y;
+              data->last_abs_valid = true;
+              iqs915x_reset_pointer_accumulators(data);
+              data->pointer_resume_guard_frames--;
+              LOG_DBG("tp_resume_baseline: generation=%u remaining=%u x=%u y=%u",
+                      iqs915x_request_generation(data),
+                      data->pointer_resume_guard_frames,
+                      stream.abs_x, stream.abs_y);
+            }
+            else if (!data->last_abs_valid)
             {
               // 初回は基準点のみ保存し、次フレーム以降をデルタ報告する
               data->last_abs_x = stream.abs_x;
@@ -2745,9 +3048,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
                 if (rel_x != 0 || rel_y != 0)
                 {
-                  input_report_rel(dev, INPUT_REL_X, rel_x, false,
-                                   K_FOREVER);
-                  input_report_rel(dev, INPUT_REL_Y, rel_y, true, K_FOREVER);
+                  iqs915x_report_pointer_pair(data, rel_x, rel_y);
                 }
               }
             }
@@ -2799,7 +3100,19 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_event_mode_relatch_state(data);
   // disabled-by-defaultの場合は初期化完了後にLP2へ移行し、mode遷移後に
   // Event Modeを再ラッチする。
-  data->enabled = !config->disabled_by_default;
+  atomic_set(&data->requested_enabled, !config->disabled_by_default);
+  atomic_clear(&data->output_enabled);
+  atomic_set(&data->request_generation, 0);
+  data->applied_generation = 0;
+  data->transition_generation = 0;
+  data->relatch_target_enabled = false;
+  data->pointer_resume_guard_frames = 0;
+  data->button_work_generation = 0;
+  data->tap_and_hold_release_work_generation = 0;
+  data->single_tap_work_generation = 0;
+  data->tap_and_hold_start_work_generation = 0;
+  data->scroll_inertia_work_generation = 0;
+  data->enabled = false;
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
   iqs915x_reset_absolute_tracking(data);
@@ -2960,89 +3273,30 @@ DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)
 int iqs915x_set_enabled(const struct device *dev, bool enabled)
 {
   struct iqs915x_data *data = dev->data;
+  atomic_val_t previous;
 
-  if (data->enabled == enabled)
+  while (true)
   {
-    return 0; // 既に同じ状態
+    previous = atomic_get(&data->requested_enabled);
+    if ((previous != 0) == enabled)
+    {
+      return 0;
+    }
+
+    atomic_clear(&data->output_enabled);
+    if (atomic_cas(&data->requested_enabled, previous, enabled ? 1 : 0))
+    {
+      break;
+    }
   }
 
-  if (!enabled)
-  {
-    // ===== 無効化: 即座にイベント破棄を開始し、LP2へ遷移 =====
-    data->enabled = false;
+  /* Both directions close the gate. Enable reopens it only after the
+   * dedicated thread has completed Active mode + Event Mode relatch. */
+  atomic_inc(&data->request_generation);
+  k_sem_give(&data->rdy_sem);
 
-    // 進行中の操作を安全に解除
-    // ドラッグ中の場合はボタンリリースを送信
-    if (data->active_tap_hold)
-    {
-      input_report_key(dev, LEFT_BUTTON_CODE, 0, true, K_FOREVER);
-      data->active_tap_hold = false;
-    }
-    k_work_cancel_delayable(&data->tap_and_hold_release_work);
-    k_work_cancel_delayable(&data->single_tap_work);
-    k_work_cancel_delayable(&data->tap_and_hold_start_work);
-    data->tap_and_hold_release_pending = false;
-    data->single_tap_pending = false;
-    data->tap_sequence_second_touch = false;
-    data->tap_and_hold_start_pending = false;
-
-    // 押下中のボタンをすべてリリース
-    for (int i = 0; i < 3; i++)
-    {
-      if (data->buttons_pressed & BIT(i))
-      {
-        input_report_key(dev, INPUT_BTN_0 + i, 0, true, K_FOREVER);
-      }
-    }
-    data->buttons_pressed = 0;
-    k_work_cancel_delayable(&data->button_release_work);
-
-    // 慣性スクロールをキャンセル
-    iqs915x_reset_scroll_inertia(data);
-    data->gesture_pointer_suppress_ticks = 0;
-
-    // タッチ状態をリセット
-    data->is_touching = false;
-    data->last_touch_down_time = 0;
-    iqs915x_reset_absolute_tracking(data);
-    iqs915x_reset_runtime_gesture_state(data);
-    data->scroll_x_acc = 0;
-    data->scroll_y_acc = 0;
-
-    // IQS915xへのLP2遷移を予約
-    data->lp2_pending = true;
-    data->active_pending = false;
-
-    // メインスレッドを起こしてlp2_pendingを処理させる
-    k_sem_give(&data->rdy_sem);
-
-    LOG_INF("Trackpad disabled (LP2 pending)");
-  }
-  else
-  {
-    // ===== 有効化: Active modeへの復帰開始 =====
-    data->enabled = true;
-    data->gesture_pointer_suppress_ticks = 0;
-    if (data->tap_and_hold_release_pending)
-    {
-      k_work_cancel_delayable(&data->tap_and_hold_release_work);
-      data->tap_and_hold_release_pending = false;
-    }
-    k_work_cancel_delayable(&data->single_tap_work);
-    k_work_cancel_delayable(&data->tap_and_hold_start_work);
-    data->single_tap_pending = false;
-    data->tap_sequence_second_touch = false;
-    data->tap_and_hold_start_pending = false;
-
-    // IQS915xのActive mode復帰を予約
-    data->active_pending = true;
-    data->lp2_pending = false;
-
-    // メインスレッドを起こしてactive_pendingを処理させる
-    k_sem_give(&data->rdy_sem);
-
-    LOG_INF("Trackpad enabled (Active pending)");
-  }
+  LOG_INF("Trackpad power requested: generation=%u enabled=%u",
+          iqs915x_request_generation(data), enabled);
 
   return 0;
 }
@@ -3050,5 +3304,5 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled)
 bool iqs915x_get_enabled(const struct device *dev)
 {
   struct iqs915x_data *data = dev->data;
-  return data->enabled;
+  return atomic_get(&data->requested_enabled) != 0;
 }

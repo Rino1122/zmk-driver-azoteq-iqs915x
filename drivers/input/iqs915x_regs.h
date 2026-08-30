@@ -20,6 +20,7 @@
 #define IQS915X_REGS_H_
 
 #include <zephyr/device.h>
+#include <zephyr/sys/atomic.h>
 #include <stdint.h>
 
 /* ============================================================
@@ -566,7 +567,19 @@ struct iqs915x_data
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
-    bool enabled;        // トラックパッド有効フラグ（falseでイベント破棄）
+    atomic_t requested_enabled; // API利用側が要求した論理状態
+    atomic_t output_enabled;    // 現在のセッションで入力出力を許可するゲート
+    atomic_t request_generation; // enable/disable要求の世代番号
+    uint32_t applied_generation; // 専用スレッドが取り込んだ要求世代
+    uint32_t transition_generation; // 実行中のpower遷移が属する世代
+    bool relatch_target_enabled; // Event Mode再ラッチ完了後に出力を開くか
+    uint8_t pointer_resume_guard_frames; // Active復帰後に基準取得へ使うフレーム数
+    uint32_t button_work_generation;
+    uint32_t tap_and_hold_release_work_generation;
+    uint32_t single_tap_work_generation;
+    uint32_t tap_and_hold_start_work_generation;
+    uint32_t scroll_inertia_work_generation;
+    bool enabled;        // 専用スレッドが確定した実動作状態
     bool lp2_pending;    // IQS915xへのLP2遷移待ち
     bool active_pending; // IQS915xのActive mode復帰待ち
 };
