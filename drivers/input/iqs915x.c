@@ -30,13 +30,10 @@
 
 #include <dt-bindings/input/iqs915x_gestures.h>
 #include <iqs915x.h>
-#include "iqs915x_init_data_bretagne_array.h"
-#include "iqs915x_regs.h"
+#include "iqs915x_internal.h"
+#include "iqs915x_power.h"
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
-
-BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_SIZE,
-             "Built-in init-data size must match IQS915X_INIT_DATA_TOTAL_SIZE");
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
@@ -47,13 +44,14 @@ BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_bretagne) == IQS915X_INIT_DATA_TOTAL_S
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
+#define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
+#define IQS915X_POWER_TRANSITION_WAIT_MS 250
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
 #define IQS915X_TAP_DISTANCE_FALLBACK 100U
 #define IQS915X_POINTER_RESUME_GUARD_FRAMES 2U
 
-static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data);
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason);
 
@@ -74,8 +72,27 @@ static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
          generation == iqs915x_request_generation(data);
 }
 
-static bool iqs915x_report_event(struct iqs915x_data *data, uint16_t type,
-                                 uint16_t code, int32_t value, bool sync)
+static uint32_t iqs915x_power_retry_backoff_ms(uint8_t retry)
+{
+  static const uint16_t backoff_ms[] = {20, 50, 100};
+
+  return backoff_ms[MIN(retry, ARRAY_SIZE(backoff_ms) - 1)];
+}
+
+static void iqs915x_complete_transition(struct iqs915x_data *data, int result)
+{
+  /* A rapid request reversal supersedes the old transition. Never wake a
+   * synchronous PM caller with a result belonging to that stale generation. */
+  if (data->transition_generation != iqs915x_request_generation(data)) {
+    return;
+  }
+
+  atomic_set(&data->transition_result, result);
+  k_sem_give(&data->transition_sem);
+}
+
+bool iqs915x_report_event(struct iqs915x_data *data, uint16_t type,
+                          uint16_t code, int32_t value, bool sync)
 {
   if (!iqs915x_output_is_enabled(data))
   {
@@ -115,8 +132,8 @@ static void iqs915x_report_pointer_pair(struct iqs915x_data *data,
     return;
   }
 
-  input_report_rel(data->dev, INPUT_REL_X, x, false, K_FOREVER);
-  input_report_rel(data->dev, INPUT_REL_Y, y, true, K_FOREVER);
+  (void)iqs915x_report_rel(data, INPUT_REL_X, x, false);
+  (void)iqs915x_report_rel(data, INPUT_REL_Y, y, true);
 }
 
 static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data)
@@ -167,16 +184,6 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
   return i2c_write_dt(&config->i2c, buf, sizeof(buf));
 }
 
-// 8bitレジスタに書き込む
-static int iqs915x_write_reg8(const struct device *dev, uint16_t reg,
-                              uint8_t val)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint8_t buf[3] = {reg & 0xFF, reg >> 8, val};
-
-  return i2c_write_dt(&config->i2c, buf, sizeof(buf));
-}
-
 // 16bitレジスタを読み込む
 static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
                               uint16_t *val)
@@ -191,85 +198,6 @@ static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
   }
   *val = (buf[1] << 8) | buf[0];
   return 0;
-}
-
-// 8bitレジスタを読み込む
-static int iqs915x_read_reg8(const struct device *dev, uint16_t reg,
-                             uint8_t *val)
-{
-  const struct iqs915x_config *config = dev->config;
-  uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
-  return i2c_write_read_dt(&config->i2c, reg_addr, 2, val, 1);
-}
-
-// 16bitレジスタを読み出し、値が異なる場合のみ書き込む
-// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
-static int iqs915x_update_reg16(const struct device *dev, uint16_t reg,
-                                uint16_t val)
-{
-  uint16_t current_val = 0;
-  int ret = iqs915x_read_reg16(dev, reg, &current_val);
-  if (ret < 0)
-    return ret;
-  if (current_val == val)
-    return 0;
-  ret = iqs915x_write_reg16(dev, reg, val);
-  if (ret < 0)
-    return ret;
-  return 1; // 書き込みが発生したことを示す
-}
-
-// 8bitレジスタを読み出し、値が異なる場合のみ書き込む
-// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
-static int iqs915x_update_reg8(const struct device *dev, uint16_t reg,
-                               uint8_t val)
-{
-  uint8_t current_val = 0;
-  int ret = iqs915x_read_reg8(dev, reg, &current_val);
-  if (ret < 0)
-    return ret;
-  if (current_val == val)
-    return 0;
-  ret = iqs915x_write_reg8(dev, reg, val);
-  if (ret < 0)
-    return ret;
-  return 1; // 書き込みが発生したことを示す
-}
-
-// 16bitレジスタの特定ビットを変更する（リード・モディファイ・ライト）
-// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
-static int iqs915x_modify_reg16(const struct device *dev, uint16_t reg,
-                                uint16_t clear_mask, uint16_t set_mask)
-{
-  uint16_t current_val = 0;
-  int ret = iqs915x_read_reg16(dev, reg, &current_val);
-  if (ret < 0)
-    return ret;
-  uint16_t new_val = (current_val & ~clear_mask) | set_mask;
-  if (current_val == new_val)
-    return 0;
-  ret = iqs915x_write_reg16(dev, reg, new_val);
-  if (ret < 0)
-    return ret;
-  return 1; // 書き込みが発生したことを示す
-}
-
-// 8bitレジスタの特定ビットを変更する
-// 戻り値: 0=変更なし, 1=書き込み発生, 負値=エラー
-static int iqs915x_modify_reg8(const struct device *dev, uint16_t reg,
-                               uint8_t clear_mask, uint8_t set_mask)
-{
-  uint8_t current_val = 0;
-  int ret = iqs915x_read_reg8(dev, reg, &current_val);
-  if (ret < 0)
-    return ret;
-  uint8_t new_val = (current_val & ~clear_mask) | set_mask;
-  if (current_val == new_val)
-    return 0;
-  ret = iqs915x_write_reg8(dev, reg, new_val);
-  if (ret < 0)
-    return ret;
-  return 1; // 書き込みが発生したことを示す
 }
 
 // バイトブロックを指定アドレスに書き込む（init-data用）
@@ -334,45 +262,8 @@ static int iqs915x_read_block(const struct device *dev, uint16_t reg,
  *   [42-43]: FINGER4_Y (uint16)
  * ============================================================ */
 
-// ストリーミングデータ構造体
-struct iqs915x_stream_data
-{
-  uint16_t gesture_x;  // Diagnostics only; driver-side gestures use coordinates.
-  uint16_t gesture_y;  // Diagnostics only; driver-side gestures use coordinates.
-  uint16_t gesture_sf; // Diagnostics only; not used as a recognition source.
-  uint16_t gesture_tf; // Diagnostics only; not used as a recognition source.
-  uint16_t info_flags;
-  uint16_t trackpad_flags;
-  uint16_t abs_x;
-  uint16_t abs_y;
-  uint16_t finger2_x;
-  uint16_t finger2_y;
-  uint16_t finger3_x;
-  uint16_t finger3_y;
-  uint16_t finger4_x;
-  uint16_t finger4_y;
-};
-
-#define IQS915X_COORD_CAL_X_BLOCKS 6U
-#define IQS915X_COORD_CAL_Y_BLOCKS 4U
-#define IQS915X_COORD_LUT_STEPS 16U
 #define IQS915X_COORD_LUT_Q15_SCALE BIT(15)
 
-/*
- * Half-block correction curves generated from docs/logs/*.txt. Block boundaries
- * and centers are fixed points; the same per-axis curve is mirrored across each
- * block half.
- */
-static const uint16_t iqs915x_coord_lut_x_q15[] = {
-    0,     3596,  4314,  6980,  9152,  11723, 14282, 15850, 17002,
-    19860, 21795, 23755, 25945, 27475, 29719, 30583, 32768};
-
-static const uint16_t iqs915x_coord_lut_y_q15[] = {
-    0,     3901,  3933,  6509,  9466,  10858, 13425, 14987, 17489,
-    19561, 21659, 23583, 25359, 27318, 29356, 31054, 32768};
-
-BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_x_q15) == IQS915X_COORD_LUT_STEPS + 1U);
-BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_y_q15) == IQS915X_COORD_LUT_STEPS + 1U);
 
 static uint16_t iqs915x_correct_half_block_distance(uint16_t distance,
                                                     uint16_t half_block,
@@ -474,37 +365,38 @@ static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolutio
   return (uint16_t)(block_center + corrected_distance);
 }
 
-static void iqs915x_correct_stream_coordinates(const struct iqs915x_data *driver_data,
+static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *config,
+                                               const struct iqs915x_data *driver_data,
                                                struct iqs915x_stream_data *data)
 {
   uint16_t res_x = driver_data->swipe_resolution_x;
   uint16_t res_y = driver_data->swipe_resolution_y;
 
   data->abs_x = iqs915x_correct_axis_coordinate(
-      data->abs_x, res_x, IQS915X_COORD_CAL_X_BLOCKS, iqs915x_coord_lut_x_q15,
-      ARRAY_SIZE(iqs915x_coord_lut_x_q15));
+      data->abs_x, res_x, config->coord_x_blocks, config->coord_lut_x_q15,
+      config->coord_lut_x_len);
   data->finger2_x = iqs915x_correct_axis_coordinate(
-      data->finger2_x, res_x, IQS915X_COORD_CAL_X_BLOCKS,
-      iqs915x_coord_lut_x_q15, ARRAY_SIZE(iqs915x_coord_lut_x_q15));
+      data->finger2_x, res_x, config->coord_x_blocks,
+      config->coord_lut_x_q15, config->coord_lut_x_len);
   data->finger3_x = iqs915x_correct_axis_coordinate(
-      data->finger3_x, res_x, IQS915X_COORD_CAL_X_BLOCKS,
-      iqs915x_coord_lut_x_q15, ARRAY_SIZE(iqs915x_coord_lut_x_q15));
+      data->finger3_x, res_x, config->coord_x_blocks,
+      config->coord_lut_x_q15, config->coord_lut_x_len);
   data->finger4_x = iqs915x_correct_axis_coordinate(
-      data->finger4_x, res_x, IQS915X_COORD_CAL_X_BLOCKS,
-      iqs915x_coord_lut_x_q15, ARRAY_SIZE(iqs915x_coord_lut_x_q15));
+      data->finger4_x, res_x, config->coord_x_blocks,
+      config->coord_lut_x_q15, config->coord_lut_x_len);
 
   data->abs_y = iqs915x_correct_axis_coordinate(
-      data->abs_y, res_y, IQS915X_COORD_CAL_Y_BLOCKS, iqs915x_coord_lut_y_q15,
-      ARRAY_SIZE(iqs915x_coord_lut_y_q15));
+      data->abs_y, res_y, config->coord_y_blocks, config->coord_lut_y_q15,
+      config->coord_lut_y_len);
   data->finger2_y = iqs915x_correct_axis_coordinate(
-      data->finger2_y, res_y, IQS915X_COORD_CAL_Y_BLOCKS,
-      iqs915x_coord_lut_y_q15, ARRAY_SIZE(iqs915x_coord_lut_y_q15));
+      data->finger2_y, res_y, config->coord_y_blocks,
+      config->coord_lut_y_q15, config->coord_lut_y_len);
   data->finger3_y = iqs915x_correct_axis_coordinate(
-      data->finger3_y, res_y, IQS915X_COORD_CAL_Y_BLOCKS,
-      iqs915x_coord_lut_y_q15, ARRAY_SIZE(iqs915x_coord_lut_y_q15));
+      data->finger3_y, res_y, config->coord_y_blocks,
+      config->coord_lut_y_q15, config->coord_lut_y_len);
   data->finger4_y = iqs915x_correct_axis_coordinate(
-      data->finger4_y, res_y, IQS915X_COORD_CAL_Y_BLOCKS,
-      iqs915x_coord_lut_y_q15, ARRAY_SIZE(iqs915x_coord_lut_y_q15));
+      data->finger4_y, res_y, config->coord_y_blocks,
+      config->coord_lut_y_q15, config->coord_lut_y_len);
 }
 
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *data)
@@ -564,7 +456,7 @@ static int iqs915x_read_stream(const struct device *dev,
   iqs915x_log_stream_coordinates(data);
   if (config->coordinate_correction)
   {
-    iqs915x_correct_stream_coordinates(dev->data, data);
+    iqs915x_correct_stream_coordinates(config, dev->data, data);
   }
 
   return 0;
@@ -619,7 +511,7 @@ static bool iqs915x_absolute_delta_is_discontinuity(
   return abs(rel_x) > threshold || abs(rel_y) > threshold;
 }
 
-static uint32_t iqs915x_axis_movement(int32_t dx, int32_t dy)
+uint32_t iqs915x_axis_movement(int32_t dx, int32_t dy)
 {
   return (uint32_t)MAX(abs(dx), abs(dy));
 }
@@ -715,75 +607,6 @@ static int16_t iqs915x_clamp_i16(int32_t value)
   return (int16_t)value;
 }
 
-static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
-{
-  memset(&data->two_finger, 0, sizeof(data->two_finger));
-  memset(&data->pinch_motion_history, 0, sizeof(data->pinch_motion_history));
-  memset(&data->pinch_inertia_state, 0, sizeof(data->pinch_inertia_state));
-}
-
-static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
-{
-  memset(&data->finger_tracker, 0, sizeof(data->finger_tracker));
-  memset(&data->scroll_motion_history, 0, sizeof(data->scroll_motion_history));
-  memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
-  data->swipe_last_centroid_x = 0;
-  data->swipe_last_centroid_y = 0;
-  data->swipe_centroid_valid = false;
-  data->swipe_active_fingers = 0;
-  data->swipe_valid_frames = 0;
-  data->swipe_triggered = false;
-  data->multifinger_swipe_latched = false;
-  data->scroll_sequence_active = false;
-  data->scroll_blocked_until_low_contact = false;
-  data->tap_drag_raw_max_fingers = 0;
-  data->tap_drag_raw_gesture_seen = false;
-  data->raw_single_tap_reported = false;
-  data->raw_two_finger_tap_reported = false;
-  data->tap_start_valid = false;
-  data->tap_start_x = 0;
-  data->tap_start_y = 0;
-  data->tap_max_movement = 0;
-  data->completed_two_finger_movement = 0;
-  data->single_tap_pending = false;
-  data->tap_sequence_second_touch = false;
-  data->tap_and_hold_start_pending = false;
-  data->pending_tap_up_time = 0;
-  iqs915x_reset_two_finger_session(data);
-}
-
-static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
-{
-  data->swipe_last_centroid_x = 0;
-  data->swipe_last_centroid_y = 0;
-  data->swipe_centroid_valid = false;
-  data->swipe_active_fingers = 0;
-  data->swipe_valid_frames = 0;
-  data->swipe_triggered = false;
-}
-
-static void iqs915x_update_sequence_gates(struct iqs915x_data *data)
-{
-  struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
-
-  if (tracker->stable_count <= 1)
-  {
-    data->multifinger_swipe_latched = false;
-    data->scroll_blocked_until_low_contact = false;
-    iqs915x_reset_multifinger_swipe_state(data);
-
-    if (tracker->stable_count == 0)
-    {
-      data->scroll_sequence_active = false;
-    }
-    return;
-  }
-
-  if (tracker->sequence_max_count >= 3)
-  {
-    data->scroll_blocked_until_low_contact = true;
-  }
-}
 
 static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
                                         uint16_t reg, uint16_t *val)
@@ -897,347 +720,6 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
           IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK);
 }
 
-static uint16_t iqs915x_get_multifinger_swipe_gesture(uint8_t fingers, int32_t dx,
-                                                      int32_t dy)
-{
-  bool horizontal = abs(dx) >= abs(dy);
-
-  if (fingers == 3)
-  {
-    if (horizontal)
-    {
-      return dx > 0 ? IQS915X_GESTURE_3F_RIGHT : IQS915X_GESTURE_3F_LEFT;
-    }
-    return dy > 0 ? IQS915X_GESTURE_3F_DOWN : IQS915X_GESTURE_3F_UP;
-  }
-
-  if (fingers == 4)
-  {
-    if (horizontal)
-    {
-      return dx > 0 ? IQS915X_GESTURE_4F_RIGHT : IQS915X_GESTURE_4F_LEFT;
-    }
-    return dy > 0 ? IQS915X_GESTURE_4F_DOWN : IQS915X_GESTURE_4F_UP;
-  }
-
-  return 0;
-}
-
-static void iqs915x_emit_gesture_tap(const struct device *dev, uint16_t gesture_code)
-{
-  struct iqs915x_data *data = dev->data;
-
-  if (!iqs915x_report_event(data, IQS915X_INPUT_EV_GESTURE,
-                            gesture_code, 1, false))
-  {
-    return;
-  }
-  iqs915x_report_event(data, IQS915X_INPUT_EV_GESTURE,
-                       gesture_code, 0, true);
-}
-
-static void iqs915x_update_finger_state(struct iqs915x_data *data,
-                                        const struct iqs915x_stream_data *stream,
-                                        bool is_touching_now,
-                                        bool touch_down_event,
-                                        bool touch_up_event)
-{
-  struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
-  struct iqs915x_two_finger_session *two_finger = &data->two_finger;
-  uint8_t reported_count = stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-  bool global_tp_touch = (stream->info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
-  uint8_t raw_count = reported_count;
-  uint8_t stable_before = tracker->stable_count;
-
-  tracker->current_count = raw_count;
-  tracker->previous_count = stable_before;
-
-  if (touch_down_event)
-  {
-    // GLOBAL_TP_TOUCHは取りこぼしがあるため、接触境界はNUM_FINGERSだけで判定する。
-    tracker->completed_one_tap_path = false;
-    tracker->completed_two_tap_path = false;
-    tracker->sequence_active = false;
-    tracker->sequence_max_count = 0;
-    tracker->sequence_seen_one = false;
-    tracker->sequence_seen_two = false;
-  }
-
-  tracker->stable_count = raw_count;
-
-  if (tracker->stable_count != stable_before)
-  {
-    LOG_DBG("finger count changed: %u -> %u raw=%u reported=%u "
-            "touch_down=%u touch_up=%u global_tp_touch=%u "
-            "flags=0x%04x info=0x%04x",
-            stable_before, tracker->stable_count, raw_count, reported_count,
-            touch_down_event, touch_up_event, global_tp_touch,
-            stream->trackpad_flags, stream->info_flags);
-  }
-
-  if (stable_before == 0 && tracker->stable_count > 0)
-  {
-    tracker->sequence_active = true;
-    tracker->sequence_max_count = tracker->stable_count;
-    tracker->sequence_seen_one = tracker->stable_count == 1;
-    tracker->sequence_seen_two = tracker->stable_count == 2;
-    tracker->completed_one_tap_path = false;
-    tracker->completed_two_tap_path = false;
-  }
-  else if (tracker->sequence_active && tracker->stable_count > 0)
-  {
-    if (tracker->stable_count > tracker->sequence_max_count)
-    {
-      tracker->sequence_max_count = tracker->stable_count;
-    }
-
-    if (tracker->stable_count == 1)
-    {
-      tracker->sequence_seen_one = true;
-    }
-    else if (tracker->stable_count == 2)
-    {
-      tracker->sequence_seen_two = true;
-    }
-  }
-
-  if (stable_before > 0 && tracker->stable_count == 0)
-  {
-    tracker->completed_one_tap_path =
-        tracker->sequence_active && tracker->sequence_seen_one &&
-        tracker->sequence_max_count == 1;
-    tracker->completed_two_tap_path =
-        tracker->sequence_active && tracker->sequence_seen_two &&
-        tracker->sequence_max_count == 2;
-    if (tracker->completed_two_tap_path && two_finger->active)
-    {
-      data->completed_two_finger_movement = two_finger->max_centroid_movement;
-    }
-    tracker->sequence_active = false;
-    tracker->sequence_max_count = 0;
-    tracker->sequence_seen_one = false;
-    tracker->sequence_seen_two = false;
-  }
-
-  tracker->tail_suppressed =
-      stable_before == 2 && tracker->stable_count == 1;
-
-  if (stable_before >= 2 && tracker->stable_count == 1)
-  {
-    // 2本以上から1本へ遷移したら、0本接触を確認するまで
-    // 単指ポインタを再開しない。
-    tracker->awaiting_zero_contact = true;
-  }
-
-  if (!is_touching_now)
-  {
-    // 0本遷移はNUM_FINGERS==0だけで判定する。
-    tracker->awaiting_zero_contact = false;
-  }
-
-  if (tracker->stable_count != 2 || raw_count < 2)
-  {
-    if (tracker->stable_count == 1 && data->scroll_sequence_active &&
-        two_finger->active && two_finger->mode == IQS915X_2F_MODE_SCROLL)
-    {
-      two_finger->rebaseline_pending = true;
-      two_finger->centroid_dx = 0;
-      two_finger->centroid_dy = 0;
-      two_finger->distance_delta = 0;
-    }
-    else
-    {
-      iqs915x_reset_two_finger_session(data);
-    }
-    return;
-  }
-
-  int32_t centroid_x = ((int32_t)stream->abs_x + (int32_t)stream->finger2_x) / 2;
-  int32_t centroid_y = ((int32_t)stream->abs_y + (int32_t)stream->finger2_y) / 2;
-  int32_t finger_dx = (int32_t)stream->abs_x - (int32_t)stream->finger2_x;
-  int32_t finger_dy = (int32_t)stream->abs_y - (int32_t)stream->finger2_y;
-  int32_t distance = abs(finger_dx) + abs(finger_dy);
-
-  if (!two_finger->active)
-  {
-    two_finger->active = true;
-    two_finger->rebaseline_pending = false;
-    two_finger->mode = IQS915X_2F_MODE_NONE;
-    two_finger->centroid_last_x = centroid_x;
-    two_finger->centroid_last_y = centroid_y;
-    two_finger->centroid_start_x = centroid_x;
-    two_finger->centroid_start_y = centroid_y;
-    two_finger->max_centroid_movement = 0;
-    two_finger->distance_last = distance;
-    return;
-  }
-
-  if (two_finger->rebaseline_pending)
-  {
-    two_finger->rebaseline_pending = false;
-    two_finger->centroid_dx = 0;
-    two_finger->centroid_dy = 0;
-    two_finger->distance_delta = 0;
-    two_finger->centroid_last_x = centroid_x;
-    two_finger->centroid_last_y = centroid_y;
-    two_finger->distance_last = distance;
-    return;
-  }
-
-  two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
-  two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
-  two_finger->distance_delta = distance - two_finger->distance_last;
-  two_finger->max_centroid_movement =
-      MAX(two_finger->max_centroid_movement,
-          iqs915x_axis_movement(centroid_x - two_finger->centroid_start_x,
-                                centroid_y - two_finger->centroid_start_y));
-  two_finger->centroid_last_x = centroid_x;
-  two_finger->centroid_last_y = centroid_y;
-  two_finger->distance_last = distance;
-}
-
-static bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config,
-                                             struct iqs915x_data *data,
-                                             const struct iqs915x_stream_data *stream)
-{
-  uint8_t stable_fingers = data->finger_tracker.stable_count;
-  bool enabled = (stable_fingers == 3 && config->three_finger_swipe) ||
-                 (stable_fingers == 4 && config->four_finger_swipe);
-  int32_t centroid_x;
-  int32_t centroid_y;
-  int32_t dx;
-  int32_t dy;
-  bool horizontal;
-  int32_t axis_delta;
-  int32_t abs_dx;
-  int32_t abs_dy;
-  int32_t major_delta;
-  int32_t minor_delta;
-  uint16_t lock_num;
-  uint16_t lock_den;
-  uint16_t axis_threshold;
-  uint16_t gesture_code;
-
-  if (!enabled)
-  {
-    iqs915x_reset_multifinger_swipe_state(data);
-    return false;
-  }
-
-  if (data->multifinger_swipe_latched || data->scroll_sequence_active ||
-      (stable_fingers == 3 && data->finger_tracker.sequence_max_count >= 4))
-  {
-    iqs915x_reset_multifinger_swipe_state(data);
-    return true;
-  }
-
-  centroid_x = (int32_t)stream->abs_x + (int32_t)stream->finger2_x +
-               (int32_t)stream->finger3_x;
-  centroid_y = (int32_t)stream->abs_y + (int32_t)stream->finger2_y +
-               (int32_t)stream->finger3_y;
-  if (stable_fingers == 4)
-  {
-    centroid_x += (int32_t)stream->finger4_x;
-    centroid_y += (int32_t)stream->finger4_y;
-  }
-  centroid_x /= stable_fingers;
-  centroid_y /= stable_fingers;
-
-  if (!data->swipe_centroid_valid || data->swipe_active_fingers != stable_fingers)
-  {
-    data->swipe_last_centroid_x = centroid_x;
-    data->swipe_last_centroid_y = centroid_y;
-    data->swipe_centroid_valid = true;
-    data->swipe_active_fingers = stable_fingers;
-    data->swipe_valid_frames = 0;
-    data->swipe_triggered = false;
-    return true;
-  }
-
-  if (data->swipe_triggered)
-  {
-    return true;
-  }
-
-  // スワイプ開始時の重心位置を基準に方向を判定し、
-  // 1本以下を経由するまで一度だけgesture eventを発火する。
-  dx = centroid_x - data->swipe_last_centroid_x;
-  dy = centroid_y - data->swipe_last_centroid_y;
-
-  if (data->swipe_valid_frames < UINT16_MAX)
-  {
-    data->swipe_valid_frames++;
-  }
-
-  if (data->swipe_valid_frames <= config->swipe_direction_settle_frames)
-  {
-    return true;
-  }
-
-  abs_dx = abs(dx);
-  abs_dy = abs(dy);
-  horizontal = abs_dx >= abs_dy;
-  axis_delta = horizontal ? dx : dy;
-  major_delta = horizontal ? abs_dx : abs_dy;
-  minor_delta = horizontal ? abs_dy : abs_dx;
-  axis_threshold = horizontal ? data->swipe_threshold_x : data->swipe_threshold_y;
-
-  if (abs(axis_delta) < axis_threshold)
-  {
-    return true;
-  }
-
-  lock_num = config->swipe_direction_lock_numerator > 0
-                 ? config->swipe_direction_lock_numerator
-                 : 3;
-  lock_den = config->swipe_direction_lock_denominator > 0
-                 ? config->swipe_direction_lock_denominator
-                 : 2;
-
-  if ((int64_t)major_delta * lock_den < (int64_t)minor_delta * lock_num)
-  {
-    LOG_DBG("Gesture direction undecided: %uF dx=%d dy=%d lock=%u/%u frames=%u",
-            stable_fingers, (int)dx, (int)dy, lock_num, lock_den,
-            data->swipe_valid_frames);
-    return true;
-  }
-
-  gesture_code = iqs915x_get_multifinger_swipe_gesture(stable_fingers, dx, dy);
-  if (gesture_code == 0)
-  {
-    return true;
-  }
-
-  iqs915x_cancel_scroll_inertia(data);
-  LOG_INF(
-      "Gesture emit before: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u "
-      "lock=%u/%u frames=%u flags=0x%04x sf=0x%04x tf=0x%04x "
-      "latched=%d triggered=%d",
-      stable_fingers,
-      horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
-      gesture_code, (int)dx, (int)dy, data->swipe_threshold_x,
-      data->swipe_threshold_y, lock_num, lock_den, data->swipe_valid_frames,
-      stream->trackpad_flags, stream->gesture_sf, stream->gesture_tf,
-      data->multifinger_swipe_latched, data->swipe_triggered);
-  iqs915x_emit_gesture_tap(data->dev, gesture_code);
-  LOG_INF(
-      "Gesture emit after: %uF %s gesture=%u dx=%d dy=%d flags=0x%04x sf=0x%04x "
-      "tf=0x%04x",
-      stable_fingers,
-      horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
-      gesture_code, (int)dx, (int)dy, stream->trackpad_flags, stream->gesture_sf,
-      stream->gesture_tf);
-  data->swipe_triggered = true;
-  data->multifinger_swipe_latched = true;
-  data->tap_drag_raw_gesture_seen = true;
-  LOG_INF("Gesture triggered: %uF %s gesture=%u dx=%d dy=%d thr_x=%u thr_y=%u",
-          stable_fingers,
-          horizontal ? (dx > 0 ? "RIGHT" : "LEFT") : (dy > 0 ? "DOWN" : "UP"),
-          gesture_code, (int)dx, (int)dy, data->swipe_threshold_x,
-          data->swipe_threshold_y);
-
-  return true;
-}
 
 /* ============================================================
  * Power mode control
@@ -1283,6 +765,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       {
         data->initialized = false;
         iqs915x_restart_initialization(dev, "Event Mode relatch disable failed");
+        iqs915x_complete_transition(data, -EIO);
       }
       return;
     }
@@ -1309,6 +792,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       {
         data->initialized = false;
         iqs915x_restart_initialization(dev, "Event Mode relatch enable failed");
+        iqs915x_complete_transition(data, -EIO);
       }
       return;
     }
@@ -1341,6 +825,10 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
               "request_generation=%u",
               data->transition_generation,
               iqs915x_request_generation(data));
+    }
+
+    if (data->transition_generation == iqs915x_request_generation(data)) {
+      iqs915x_complete_transition(data, 0);
     }
     break;
   }
@@ -1452,35 +940,6 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
   LOG_DBG("tap-and-drag started: %s", reason);
 }
 
-static void iqs915x_update_single_tap_movement(
-    struct iqs915x_data *data, const struct iqs915x_stream_data *stream,
-    uint8_t num_fingers)
-{
-  if (num_fingers != 1 ||
-      (stream->trackpad_flags & IQS915X_FINGER1_CONFIDENCE) == 0)
-  {
-    return;
-  }
-
-  if (!data->tap_start_valid)
-  {
-    data->tap_start_x = stream->abs_x;
-    data->tap_start_y = stream->abs_y;
-    data->tap_start_valid = true;
-    data->tap_max_movement = 0;
-    return;
-  }
-
-  data->tap_max_movement =
-      MAX(data->tap_max_movement,
-          iqs915x_axis_movement((int32_t)stream->abs_x - data->tap_start_x,
-                                (int32_t)stream->abs_y - data->tap_start_y));
-
-  if (data->tap_max_movement >= data->tap_distance)
-  {
-    data->tap_drag_raw_gesture_seen = true;
-  }
-}
 
 #define IQS915X_SCROLL_UNITS_PER_AXIS 512
 #define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
@@ -1842,7 +1301,7 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
 }
 
 // スクロール慣性を打ち切る（新しい操作が入った場合に呼ばれる）
-static void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
+void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
 {
   if (data->scroll_inertia_state.active)
   {
@@ -1996,6 +1455,8 @@ static void iqs915x_restart_initialization(const struct device *dev,
   data->init_chunk_retry_count = 0;
   data->init_pending_cfg = 0;
   data->confirmed_config_settings = 0;
+  data->power_retry_count = 0;
+  atomic_set(&data->transition_result, 0);
   iqs915x_reset_event_mode_relatch_state(data);
   LOG_WRN("Init: restarting via software reset (%u/%u): %s",
           data->init_restart_count, IQS915X_INIT_MAX_RESTARTS, reason);
@@ -2509,6 +1970,7 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
 
   data->applied_generation = generation;
   data->transition_generation = generation;
+  data->power_retry_count = 0;
   data->relatch_target_enabled = false;
   data->active_pending = requested_enabled;
   data->lp2_pending = !requested_enabled;
@@ -2547,7 +2009,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         k_sem_give(&data->rdy_sem);
       }
       ret = k_sem_take(&data->rdy_sem, K_MSEC(2000));
-      iqs915x_init_step_handler(dev);
+      if (ret == 0) {
+        iqs915x_init_step_handler(dev);
+      } else {
+        LOG_WRN("Timed out waiting for IQS915x RDY during initialization");
+      }
       continue;
     }
 
@@ -2558,10 +2024,16 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (data->active_pending)
     {
+      if (gpio_pin_get_dt(&config->rdy_gpio) <= 0) {
+        (void)k_sem_take(&data->rdy_sem, K_MSEC(250));
+        continue;
+      }
+
       ret = iqs915x_write_power_mode(dev, IQS915X_MODE_ACTIVE);
       if (ret == 0)
       {
         data->active_pending = false;
+        data->power_retry_count = 0;
         if (data->transition_generation ==
                 iqs915x_request_generation(data) &&
             atomic_get(&data->requested_enabled) != 0)
@@ -2582,19 +2054,34 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else
       {
-        LOG_ERR("Failed to enter Active mode, will retry");
-        // リトライのためにセマフォをgiveして即座に再試行
-        k_sem_give(&data->rdy_sem);
+        data->power_retry_count++;
+        LOG_ERR("Failed to enter Active mode (%d), retry %u/%u", ret,
+                data->power_retry_count, IQS915X_POWER_TRANSITION_MAX_RETRIES);
+        if (data->power_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES) {
+          data->active_pending = false;
+          data->enabled = false;
+          atomic_clear(&data->output_enabled);
+          iqs915x_complete_transition(data, ret);
+        } else {
+          k_sleep(K_MSEC(iqs915x_power_retry_backoff_ms(
+              data->power_retry_count - 1U)));
+        }
       }
       continue;
     }
 
     if (data->lp2_pending)
     {
+      if (gpio_pin_get_dt(&config->rdy_gpio) <= 0) {
+        (void)k_sem_take(&data->rdy_sem, K_MSEC(250));
+        continue;
+      }
+
       ret = iqs915x_write_power_mode(dev, IQS915X_MODE_LP2);
       if (ret == 0)
       {
         data->lp2_pending = false;
+        data->power_retry_count = 0;
         if (data->transition_generation ==
                 iqs915x_request_generation(data) &&
             atomic_get(&data->requested_enabled) == 0)
@@ -2615,8 +2102,18 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       }
       else
       {
-        LOG_ERR("Failed to enter LP2 mode: %d, will retry", ret);
-        k_sem_give(&data->rdy_sem);
+        data->power_retry_count++;
+        LOG_ERR("Failed to enter LP2 mode: %d, retry %u/%u", ret,
+                data->power_retry_count, IQS915X_POWER_TRANSITION_MAX_RETRIES);
+        if (data->power_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES) {
+          data->lp2_pending = false;
+          data->enabled = false;
+          atomic_clear(&data->output_enabled);
+          iqs915x_complete_transition(data, ret);
+        } else {
+          k_sleep(K_MSEC(iqs915x_power_retry_backoff_ms(
+              data->power_retry_count - 1U)));
+        }
       }
       continue;
     }
@@ -3115,6 +2612,7 @@ static int iqs915x_init(const struct device *dev)
   data->enabled = false;
   data->lp2_pending = config->disabled_by_default;
   data->active_pending = false;
+  data->pm_saved_enabled = false;
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
@@ -3125,6 +2623,7 @@ static int iqs915x_init(const struct device *dev)
   data->tap_and_hold_start_pending = false;
 
   k_sem_init(&data->rdy_sem, 0, 1);
+  k_sem_init(&data->transition_sem, 0, 1);
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
   k_work_init_delayable(&data->tap_and_hold_release_work,
@@ -3135,13 +2634,6 @@ static int iqs915x_init(const struct device *dev)
                         iqs915x_tap_and_hold_start_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
-
-  // 専用スレッドの起動 (優先度: 高め K_PRIO_COOP(2))
-  k_thread_create(&data->thread, data->thread_stack,
-                  K_KERNEL_STACK_SIZEOF(data->thread_stack),
-                  iqs915x_thread_main, data, NULL, NULL, K_PRIO_COOP(2), 0,
-                  K_NO_WAIT);
-  k_thread_name_set(&data->thread, "iqs915x");
 
   // リセットGPIOの設定（オプショナル）
   if (config->reset_gpio.port)
@@ -3196,6 +2688,14 @@ static int iqs915x_init(const struct device *dev)
     return ret;
   }
 
+  /* Start only after I2C, GPIO, and the RDY interrupt are ready. */
+  k_thread_create(&data->thread, data->thread_stack,
+                  K_KERNEL_STACK_SIZEOF(data->thread_stack),
+                  iqs915x_thread_main, data, NULL, NULL,
+                  K_PRIO_PREEMPT(CONFIG_INPUT_AZOTEQ_IQS915X_THREAD_PRIORITY),
+                  0, K_NO_WAIT);
+  k_thread_name_set(&data->thread, "iqs915x");
+
   LOG_INF("IQS915x driver loaded, waiting for first RDY...");
 
   return 0;
@@ -3206,12 +2706,26 @@ static int iqs915x_init(const struct device *dev)
  * ============================================================ */
 #define IQS915X_INIT(n)                                                                                                                                                                            \
   static struct iqs915x_data iqs915x_data_##n;                                                                                                                                                     \
+  static const uint8_t iqs915x_init_data_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), init_data);                                                                                                \
+  static const uint16_t iqs915x_coord_lut_x_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_lut_q15);                                                                                \
+  static const uint16_t iqs915x_coord_lut_y_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_lut_q15);                                                                                \
+  BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_##n) == IQS915X_INIT_DATA_TOTAL_SIZE, "IQS915x profile init-data must be 1174 bytes");                                                           \
+  BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_x_##n) == 17, "IQS915x X coordinate LUT must have 17 entries");                                                                                     \
+  BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_y_##n) == 17, "IQS915x Y coordinate LUT must have 17 entries");                                                                                     \
+  BUILD_ASSERT(DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_blocks) > 0, "IQS915x X coordinate block count must be positive");                                                            \
+  BUILD_ASSERT(DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_blocks) > 0, "IQS915x Y coordinate block count must be positive");                                                            \
   static const struct iqs915x_config iqs915x_config_##n = {                                                                                                                                        \
       .i2c = I2C_DT_SPEC_INST_GET(n),                                                                                                                                                              \
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                                                                                                                             \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                                                                                                                                 \
-      .init_data = iqs915x_init_data_bretagne,                                                                                                                                                     \
-      .init_data_len = IQS915X_INIT_DATA_TOTAL_SIZE,                                                                                                                                               \
+      .init_data = iqs915x_init_data_##n,                                                                                                                                                           \
+      .init_data_len = ARRAY_SIZE(iqs915x_init_data_##n),                                                                                                                                          \
+      .coord_lut_x_q15 = iqs915x_coord_lut_x_##n,                                                                                                                                                  \
+      .coord_lut_x_len = ARRAY_SIZE(iqs915x_coord_lut_x_##n),                                                                                                                                      \
+      .coord_lut_y_q15 = iqs915x_coord_lut_y_##n,                                                                                                                                                  \
+      .coord_lut_y_len = ARRAY_SIZE(iqs915x_coord_lut_y_##n),                                                                                                                                      \
+      .coord_x_blocks = DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_blocks),                                                                                                                 \
+      .coord_y_blocks = DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_blocks),                                                                                                                 \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                                                                                           \
       .tap_and_hold = DT_INST_PROP(n, tap_and_hold),                                                                                                                                               \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                                                                                           \
@@ -3229,20 +2743,11 @@ static int iqs915x_init(const struct device *dev)
                      DT_INST_NODE_HAS_PROP(n, scroll_report_interval_ms) ||                                                                                                                        \
                      DT_INST_NODE_HAS_PROP(n, scroll_threshold_start) ||                                                                                                                           \
                      DT_INST_NODE_HAS_PROP(n, scroll_threshold_stop),                                                                                                                              \
-          .trigger_ms = DT_INST_NODE_HAS_PROP(n, trigger_ms) ? DT_INST_PROP(n, trigger_ms) : DT_INST_PROP_OR(n, scroll_inertia_stale_gap_ms, 35),                                                  \
-          .decay_factor_int = DT_INST_NODE_HAS_PROP(n, scroll_decay_factor_int) ? DT_INST_PROP(n, scroll_decay_factor_int) : DIV_ROUND_CLOSEST(DT_INST_PROP_OR(n, scroll_inertia_decay, 850), 10), \
-          .interval_ms = DT_INST_NODE_HAS_PROP(n, scroll_report_interval_ms) ? DT_INST_PROP(n, scroll_report_interval_ms) : DT_INST_PROP_OR(n, scroll_inertia_interval_ms, 65),                    \
-          .threshold_start = DT_INST_NODE_HAS_PROP(n, scroll_threshold_start) ? DT_INST_PROP(n, scroll_threshold_start) : DT_INST_PROP_OR(n, scroll_inertia_min_avg_speed, 2),                     \
-          .threshold_stop = DT_INST_NODE_HAS_PROP(n, scroll_threshold_stop) ? DT_INST_PROP(n, scroll_threshold_stop) : DT_INST_PROP_OR(n, scroll_inertia_min_avg_speed, 0),                        \
-      },                                                                                                                                                                                           \
-      .pinch_inertia = {                                                                                                                                                                           \
-          .enabled = DT_INST_PROP(n, pinch_inertia),                                                                                                                                               \
-          .interval_ms = DT_INST_PROP_OR(n, pinch_inertia_interval_ms, 10),                                                                                                                        \
-          .decay_x1000 = DT_INST_PROP_OR(n, pinch_inertia_decay, 980),                                                                                                                             \
-          .recent_window_ms = DT_INST_PROP_OR(n, pinch_inertia_recent_window_ms, 60),                                                                                                              \
-          .stale_gap_ms = DT_INST_PROP_OR(n, pinch_inertia_stale_gap_ms, 35),                                                                                                                      \
-          .min_samples = DT_INST_PROP_OR(n, pinch_inertia_min_samples, 1),                                                                                                                         \
-          .min_avg_speed = DT_INST_PROP_OR(n, pinch_inertia_min_avg_speed, 4),                                                                                                                     \
+          .trigger_ms = DT_INST_PROP(n, trigger_ms),                                                                                                                                              \
+          .decay_factor_int = DT_INST_PROP(n, scroll_decay_factor_int),                                                                                                                           \
+          .interval_ms = DT_INST_PROP(n, scroll_report_interval_ms),                                                                                                                              \
+          .threshold_start = DT_INST_PROP(n, scroll_threshold_start),                                                                                                                             \
+          .threshold_stop = DT_INST_PROP(n, scroll_threshold_stop),                                                                                                                              \
       },                                                                                                                                                                                           \
       .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                                                                                                                                   \
       .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                                                                                                                                     \
@@ -3260,49 +2765,9 @@ static int iqs915x_init(const struct device *dev)
       .flip_y = DT_INST_PROP(n, flip_y),                                                                                                                                                           \
       .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                                                                                                                                 \
   };                                                                                                                                                                                               \
-  DEVICE_DT_INST_DEFINE(n, iqs915x_init, NULL, &iqs915x_data_##n,                                                                                                                                  \
+  IQS915X_PM_DEVICE_DEFINE(n);                                                                                                                                                                    \
+  DEVICE_DT_INST_DEFINE(n, iqs915x_init, IQS915X_PM_DEVICE_GET(n), &iqs915x_data_##n,                                                                                                             \
                         &iqs915x_config_##n, POST_KERNEL,                                                                                                                                          \
-                        CONFIG_INPUT_INIT_PRIORITY, NULL);
+                        CONFIG_INPUT_AZOTEQ_IQS915X_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)
-
-/* ============================================================
- * 公開API: power mode制御
- * ============================================================ */
-
-int iqs915x_set_enabled(const struct device *dev, bool enabled)
-{
-  struct iqs915x_data *data = dev->data;
-  atomic_val_t previous;
-
-  while (true)
-  {
-    previous = atomic_get(&data->requested_enabled);
-    if ((previous != 0) == enabled)
-    {
-      return 0;
-    }
-
-    atomic_clear(&data->output_enabled);
-    if (atomic_cas(&data->requested_enabled, previous, enabled ? 1 : 0))
-    {
-      break;
-    }
-  }
-
-  /* Both directions close the gate. Enable reopens it only after the
-   * dedicated thread has completed Active mode + Event Mode relatch. */
-  atomic_inc(&data->request_generation);
-  k_sem_give(&data->rdy_sem);
-
-  LOG_INF("Trackpad power requested: generation=%u enabled=%u",
-          iqs915x_request_generation(data), enabled);
-
-  return 0;
-}
-
-bool iqs915x_get_enabled(const struct device *dev)
-{
-  struct iqs915x_data *data = dev->data;
-  return atomic_get(&data->requested_enabled) != 0;
-}

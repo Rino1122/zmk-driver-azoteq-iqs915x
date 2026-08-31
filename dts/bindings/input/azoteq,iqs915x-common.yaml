@@ -1,4 +1,9 @@
 properties:
+  profile:
+    type: phandle
+    required: true
+    description: Board-specific initialization and coordinate calibration profile.
+
   rdy-gpios:
     type: phandle-array
     required: true
@@ -15,15 +20,6 @@ properties:
   tap-and-hold:
     type: boolean
     description: "Enable tap-and-hold drag using single tap followed by a retouch"
-
-  tap-and-hold-reentry-timeout-ms:
-    type: int
-    deprecated: true
-    description: |
-      Deprecated compatibility property. The driver no longer uses this value.
-      Tap/double-tap/tap-and-drag air time is read from the IQS9150 init-data
-      TAP_WAIT_TIME register.
-    default: 300
 
   tap-and-hold-release-timeout-ms:
     type: int
@@ -91,15 +87,6 @@ properties:
     description: |
       Maximum pointer scale percentage used when pointer acceleration is enabled.
 
-  tap-move-threshold:
-    type: int
-    default: 0
-    deprecated: true
-    description: |
-      Deprecated compatibility property. The driver no longer uses this value.
-      Tap movement distance is read from the IQS9150 init-data TAP_DISTANCE
-      register.
-
   scroll-inertia:
     type: boolean
     description: |
@@ -138,102 +125,6 @@ properties:
     description: |
       Minimum decayed scroll velocity required to continue inertia.
       Inertia stops when both axes are below or equal to this value.
-
-  scroll-inertia-decay:
-    type: int
-    default: 850
-    deprecated: true
-    description: |
-      Deprecated fallback for scroll-decay-factor-int.
-      x/1000 retention units (850 -> 85%).
-
-  scroll-inertia-interval-ms:
-    type: int
-    default: 65
-    deprecated: true
-    description: |
-      Deprecated fallback for scroll-report-interval-ms.
-
-  scroll-inertia-recent-window-ms:
-    type: int
-    default: 60
-    deprecated: true
-    description: |
-      Deprecated legacy property. Not used by the current scroll inertia model.
-
-  scroll-inertia-stale-gap-ms:
-    type: int
-    default: 35
-    deprecated: true
-    description: |
-      Deprecated fallback for trigger-ms.
-
-  scroll-inertia-min-samples:
-    type: int
-    default: 1
-    deprecated: true
-    description: |
-      Deprecated legacy property. Not used by the current scroll inertia model.
-
-  scroll-inertia-min-avg-speed:
-    type: int
-    default: 4
-    deprecated: true
-    description: |
-      Deprecated fallback for scroll-threshold-start/stop.
-
-  pinch-inertia:
-    type: boolean
-    description: |
-      Enable pinch wheel inertia. This remains disabled by default until
-      coordinate-based pinch output is fully wired.
-
-  pinch-inertia-decay:
-    type: int
-    default: 980
-    description: |
-      Pinch inertia decay in x/1000 units. Larger values decay more slowly.
-
-  pinch-inertia-interval-ms:
-    type: int
-    default: 10
-    description: |
-      Interval in ms between pinch inertia ticks. Default: 10.
-
-  pinch-inertia-recent-window-ms:
-    type: int
-    default: 60
-    description: |
-      Recent motion window in ms used to seed pinch inertia.
-
-  pinch-inertia-stale-gap-ms:
-    type: int
-    default: 35
-    description: |
-      Maximum allowed time in ms between the last pinch sample and
-      release when seeding pinch inertia.
-
-  pinch-inertia-min-samples:
-    type: int
-    default: 1
-    description: |
-      Minimum number of recent pinch samples required to seed
-      pinch inertia.
-
-  pinch-inertia-min-avg-speed:
-    type: int
-    default: 4
-    description: |
-      Minimum average recent pinch speed required to seed pinch inertia.
-
-  finger-debounce-frames:
-    type: int
-    default: 2
-    deprecated: true
-    description: |
-      Deprecated compatibility property. Finger count now follows
-      GLOBAL_TP_TOUCH and NUM_FINGERS_MASK directly without RDY-frame-based
-      debounce.
 
   three-finger-swipe:
     type: boolean
@@ -294,62 +185,6 @@ properties:
     description: |
       Denominator of the dominant-axis lock ratio for 3/4-finger swipes.
       Default 3/2 means the dominant axis must be about 1.5x the other axis.
-
-  three-finger-swipe-up-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 3-finger swipe up.
-      Current builds emit IQS915X_GESTURE_3F_UP on IQS915X_INPUT_EV_GESTURE.
-
-  three-finger-swipe-down-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 3-finger swipe down.
-      Current builds emit IQS915X_GESTURE_3F_DOWN on IQS915X_INPUT_EV_GESTURE.
-
-  three-finger-swipe-left-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 3-finger swipe left.
-      Current builds emit IQS915X_GESTURE_3F_LEFT on IQS915X_INPUT_EV_GESTURE.
-
-  three-finger-swipe-right-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 3-finger swipe right.
-      Current builds emit IQS915X_GESTURE_3F_RIGHT on IQS915X_INPUT_EV_GESTURE.
-
-  four-finger-swipe-up-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 4-finger swipe up.
-      Current builds emit IQS915X_GESTURE_4F_UP on IQS915X_INPUT_EV_GESTURE.
-
-  four-finger-swipe-down-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 4-finger swipe down.
-      Current builds emit IQS915X_GESTURE_4F_DOWN on IQS915X_INPUT_EV_GESTURE.
-
-  four-finger-swipe-left-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 4-finger swipe left.
-      Current builds emit IQS915X_GESTURE_4F_LEFT on IQS915X_INPUT_EV_GESTURE.
-
-  four-finger-swipe-right-key:
-    type: int
-    description: |
-      Deprecated. Older builds emitted this key code for 4-finger swipe right.
-      Current builds emit IQS915X_GESTURE_4F_RIGHT on IQS915X_INPUT_EV_GESTURE.
-
-  tap-time:
-    type: int
-    deprecated: true
-    description: |
-      Deprecated compatibility property. The driver no longer writes this DTS
-      value into init-data or uses it for tap classification. Tap touch time is
-      read from the IQS9150 init-data TAP_TOUCH_TIME register.
 
   report-rate-ms:
     type: int

@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-IQS9150/IQS9151 初期化ヘッダーファイル → 配列ヘッダー変換スクリプト
+IQS9150/IQS9151 初期化ヘッダーファイル → profile DTS変換スクリプト
 
 Azoteq GUIが出力する IQS9150_init.h を読み込み、
-ドライバが参照する配列ヘッダー内容を標準出力に生成する。
+ボードの azoteq,iqs915x-profile ノードへ貼り付ける init-data 配列を生成する。
 
 使い方:
     python3 scripts/convert_init_header.py <path_to_IQS9150_init.h>
 
-出力例:
-    #ifndef IQS915X_INIT_DATA_BRETAGNE_ARRAY_H
-    #define IQS915X_INIT_DATA_BRETAGNE_ARRAY_H
-    static const uint8_t iqs915x_init_data_bretagne[] = {
-        /* ALP ATI Compensation (0x115C, 26 bytes) */
+既定の出力:
+    init-data = [
         0x00, 0x00, 0x00, ...
-        ...
-    };
-    #endif
+    ];
+
+旧形式のC配列が必要な場合だけ `--c-header` を指定する。
 """
 
 import re
@@ -137,15 +134,37 @@ def format_c_array_output(values: list[int]) -> str:
     return "\n".join(lines)
 
 
+def format_dts_output(values: list[int]) -> str:
+    """Generate the init-data property used by azoteq,iqs915x-profile."""
+    lines = ["/* Generated from an Azoteq GUI IQS9150_init.h export. */",
+             "init-data = ["]
+    for i in range(0, len(values), 16):
+        chunk = values[i : i + 16]
+        lines.append("    " + ", ".join(f"0x{b:02X}" for b in chunk) + ",")
+    lines.append("];" )
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert Azoteq IQS9150_init.h to built-in array header content"
+        description="Convert Azoteq IQS9150_init.h to profile DTS init-data"
     )
     parser.add_argument("input", help="Path to IQS9150_init.h")
     parser.add_argument(
         "--output",
         "-o",
         help="Optional output file path. If omitted, prints to stdout.",
+    )
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
+        "--dts",
+        action="store_true",
+        help="Explicitly emit an init-data DTS property (the default).",
+    )
+    output_group.add_argument(
+        "--c-header",
+        action="store_true",
+        help="Emit the legacy C array header format.",
     )
     return parser.parse_args()
 
@@ -173,7 +192,7 @@ def main():
         sys.exit(1)
 
     # 配列ヘッダー形式で出力
-    output = format_c_array_output(values)
+    output = format_c_array_output(values) if args.c_header else format_dts_output(values)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)
@@ -181,10 +200,8 @@ def main():
     else:
         print(output)
 
-    print(
-        f"\nDone: {len(values)} bytes formatted as array header content.",
-        file=sys.stderr,
-    )
+    output_kind = "legacy array header content" if args.c_header else "DTS init-data property"
+    print(f"\nDone: {len(values)} bytes formatted as {output_kind}.", file=sys.stderr)
 
 
 if __name__ == "__main__":

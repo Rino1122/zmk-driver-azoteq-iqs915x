@@ -13,11 +13,10 @@
   - 任意: `reset-gpios`
   - 機能フラグ: `one-finger-tap`, `press-and-hold`, `two-finger-tap`, `scroll`, `scroll-inertia`, `three-finger-swipe`, `four-finger-swipe`, `report-absolute`, `disabled-by-default`
   - 調整値: スクロール慣性、スワイプ閾値、タップ/ホールド時間、report rate、軸入れ替え/反転など
-- IQS915x 向け初期化データはビルトイン方式です。
-  - 入力: `drivers/input/IQS9150_init.h`
-  - 変換: `scripts/convert_init_header.py`
-  - 生成物: build directory 配下の `generated/iqs915x_init_data_bretagne_array.h`
-  - `drivers/input/CMakeLists.txt` がビルド時に変換を走らせ、`iqs915x.c` が生成ヘッダーを include します。
+- IQS915x 向け初期化データと座標補正は `azoteq,iqs915x-profile` DTS
+  phandle から供給します。ドライバはボード固有データを内蔵しません。
+  - Azoteq export の検証用原本: `drivers/input/IQS9150_init.h`
+  - 利用側の profile は 1174 bytes の init-data と軸別 LUT を持ちます。
 - `drivers/input/iqs915x.c` は IQS915x 専用の実装です。
   - 16-bit little-endian register read/write を実装しています。
   - RDY GPIO 割り込みで専用スレッドを起こし、1 RDY 期間に 1 I2C transaction で処理する設計です。
@@ -36,13 +35,12 @@
   - `disabled-by-default` と `iqs915x_set_enabled()`/`iqs915x_get_enabled()` による Active/LP2 runtime 切り替え API があります。
 - `drivers/input/iqs915x_regs.h` は IQS915x の register map、bit flag、state/data/config 構造体をまとめています。
 - `include/iqs915x.h` は runtime enable/disable API の公開ヘッダーです。
-- `drivers/input/iqs5xx.c` と `iqs5xx.h` は旧 IQS5xx 系の実装として残っていますが、現在の IQS915x ドライバとは別 compatible です。
 
 ## 未完了または注意が必要な点
 
-- `pinch-inertia` 系の DTS プロパティと構造体はありますが、現状の `iqs915x.c` では pinch 出力処理は実質未接続です。binding の説明にも「fully wired まで disabled by default」とあります。
+- pinch inertia は未接続のため binding から削除しました。
 - `iqs915x.c` 冒頭コメントには「raw read を使う」とある一方、実装の `iqs915x_read_stream()` は `i2c_write_read_dt()` で `IQS915X_REL_X` から 44 bytes を読んでいます。I2C シーケンス前提を変更する場合はコメントと実装を必ず同期してください。
-- `INIT_FINAL_ACK_RESET` と `INIT_VERIFY_RESET` 付近には古いステップが残っています。初期化 sequence を触るときは、到達可能な state と実機での SHOW_RESET/Re-ATI 挙動を確認してください。
+- Device PM の suspend/resume は既存の Active/LP2 state machine を通り、遅延 work と入力状態をリセットしてから復帰します。
 - `.gitignore` で `docs/` は無視されています。ローカルには datasheet や調整メモがある場合がありますが、追跡済みファイルとしては扱わないでください。
 - Zephyr/ZMK のビルド環境はこのリポジトリ単体には含まれていません。変更確認は、利用側 firmware workspace から ZMK build で行う前提です。ローカルでのwestビルドは行わないこと。
 

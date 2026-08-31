@@ -13,7 +13,10 @@
  * processor should consume IQS915X_INPUT_EV_GESTURE and map the gesture codes to
  * keymap positions or behaviors.
  */
-#define IQS915X_INPUT_EV_GESTURE 0x7f
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/* INPUT_EV_DEVICE is the Zephyr-reserved device/vendor event class. */
+#define IQS915X_INPUT_EV_GESTURE INPUT_EV_DEVICE
 
 #define IQS915X_GESTURE_3F_LEFT  1
 #define IQS915X_GESTURE_3F_UP    2

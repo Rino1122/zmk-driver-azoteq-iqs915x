@@ -21,6 +21,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/sys/atomic.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* ============================================================
@@ -121,11 +122,6 @@
  * ============================================================ */
 // Bit 2-0: 現在の動作モード
 #define IQS915X_CHARGING_MODE_MASK 0x0007
-#define IQS915X_MODE_ACTIVE 0x0000     // Activeモード
-#define IQS915X_MODE_IDLE_TOUCH 0x0001 // Idle-Touchモード
-#define IQS915X_MODE_IDLE 0x0002       // Idleモード
-#define IQS915X_MODE_LP1 0x0003        // LP1モード
-#define IQS915X_MODE_LP2 0x0004        // LP2モード
 // Bit 3: ATI Error - トラックパッドATIエラー
 #define IQS915X_ATI_ERROR BIT(3)
 // Bit 4: Re-ATI Occurred - トラックパッドRe-ATI完了
@@ -307,8 +303,6 @@ enum iqs915x_init_step
 // 通常動作時のワークハンドラステート
 enum iqs915x_work_state
 {
-    WORK_READ_INFO_FLAGS, // Info Flags読み取り（リセット検知）
-    WORK_ACK_RESET,       // リセットACK書き込み
     WORK_READ_DATA,       // トラックパッドデータ一括読み取り
     WORK_RELATCH_EVENT_MODE_DISABLE, // Event Mode再ラッチ: EVENT_MODE clear
     WORK_RELATCH_EVENT_MODE_ENABLE,  // Event Mode再ラッチ: EVENT_MODE set
@@ -320,18 +314,6 @@ enum iqs915x_two_finger_mode
 {
     IQS915X_2F_MODE_NONE = 0,
     IQS915X_2F_MODE_SCROLL,
-    IQS915X_2F_MODE_PINCH,
-};
-
-struct iqs915x_inertia_profile
-{
-    bool enabled;
-    uint16_t interval_ms;
-    uint16_t decay_x1000;
-    uint16_t recent_window_ms;
-    uint16_t stale_gap_ms;
-    uint8_t min_samples;
-    uint16_t min_avg_speed;
 };
 
 struct iqs915x_scroll_inertia_profile
@@ -356,17 +338,6 @@ struct iqs915x_motion_history
     struct iqs915x_motion_sample samples[IQS915X_INERTIA_MOTION_HISTORY_SIZE];
     uint8_t head;
     uint8_t count;
-};
-
-struct iqs915x_inertia_state
-{
-    bool active;
-    int32_t velocity_x_fp;
-    int32_t velocity_y_fp;
-    int32_t accum_x_fp;
-    int32_t accum_y_fp;
-    int64_t last_ms;
-    uint32_t elapsed_ms;
 };
 
 struct iqs915x_scroll_inertia_state
@@ -404,14 +375,12 @@ struct iqs915x_two_finger_session
     enum iqs915x_two_finger_mode mode;
     int32_t centroid_dx;
     int32_t centroid_dy;
-    int32_t distance_delta;
     int32_t centroid_last_x;
     int32_t centroid_last_y;
     int32_t centroid_start_x;
     int32_t centroid_start_y;
     uint32_t max_centroid_movement;
     int32_t distance_last;
-    int32_t pinch_wheel_remainder;
 };
 
 /* ============================================================
@@ -426,8 +395,14 @@ struct iqs915x_config
     struct gpio_dt_spec reset_gpio;
 
     // 初期化データ（NVM非搭載デバイス用）
-    const uint8_t *init_data; // ドライバ内蔵バイト配列
-    uint16_t init_data_len;   // バイト配列の長さ（IQS915X_INIT_DATA_TOTAL_SIZE固定）
+    const uint8_t *init_data;
+    uint16_t init_data_len;
+    const uint16_t *coord_lut_x_q15;
+    size_t coord_lut_x_len;
+    const uint16_t *coord_lut_y_q15;
+    size_t coord_lut_y_len;
+    uint8_t coord_x_blocks;
+    uint8_t coord_y_blocks;
 
     // ジェスチャー設定
     bool one_finger_tap;
@@ -447,8 +422,6 @@ struct iqs915x_config
     uint16_t pointer_accel_max_percent;
 
     struct iqs915x_scroll_inertia_profile scroll_inertia;
-    struct iqs915x_inertia_profile pinch_inertia;
-
     // 3/4本指スワイプ設定（専用gesture input event）
     bool three_finger_swipe;
     bool four_finger_swipe;
@@ -482,8 +455,9 @@ struct iqs915x_data
 
     // 専用スレッド用
     struct k_sem rdy_sem;
+    struct k_sem transition_sem;
     struct k_thread thread;
-    K_KERNEL_STACK_MEMBER(thread_stack, 2048);
+    K_KERNEL_STACK_MEMBER(thread_stack, CONFIG_INPUT_AZOTEQ_IQS915X_THREAD_STACK_SIZE);
 
     struct k_work_delayable button_release_work;
     struct k_work_delayable tap_and_hold_release_work;
@@ -501,6 +475,8 @@ struct iqs915x_data
     uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
     uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
     uint8_t event_mode_relatch_retry_count; // EVENT_MODE再有効化確認リトライ回数
+    uint8_t power_retry_count;
+    atomic_t transition_result;
 
     // 前回読み取ったInfo Flags（リセット判定用、RDYをまたいで保持）
     uint16_t last_info_flags;
@@ -543,9 +519,7 @@ struct iqs915x_data
     struct iqs915x_finger_tracker finger_tracker;
     struct iqs915x_two_finger_session two_finger;
     struct iqs915x_motion_history scroll_motion_history;
-    struct iqs915x_motion_history pinch_motion_history;
     struct iqs915x_scroll_inertia_state scroll_inertia_state;
-    struct iqs915x_inertia_state pinch_inertia_state;
 
     // 3/4本指スワイプ（重心追跡）
     int32_t swipe_last_centroid_x;
@@ -582,6 +556,7 @@ struct iqs915x_data
     bool enabled;        // 専用スレッドが確定した実動作状態
     bool lp2_pending;    // IQS915xへのLP2遷移待ち
     bool active_pending; // IQS915xのActive mode復帰待ち
+    bool pm_saved_enabled;
 };
 
 #endif /* IQS915X_REGS_H_ */

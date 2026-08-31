@@ -17,6 +17,22 @@ config INPUT_AZOTEQ_IQS915X_INIT_PRIORITY
       Driver initialization priority for the IQS915x driver.
       Lower values initialize earlier.
 
+config INPUT_AZOTEQ_IQS915X_THREAD_STACK_SIZE
+    int "Azoteq IQS915x worker thread stack size"
+    default 2048
+    range 1024 4096
+    help
+      Stack size for the interrupt-driven IQS915x worker thread.
+
+config INPUT_AZOTEQ_IQS915X_THREAD_PRIORITY
+    int "Azoteq IQS915x worker thread priority"
+    default 6
+    range 0 15
+    help
+      Preemptive priority for the IQS915x worker. Keep its scheduling priority
+      below latency-sensitive Bluetooth and keyboard threads (Zephyr uses
+      larger numbers for lower priority).
+
 config INPUT_AZOTEQ_IQS915X_LOG_LEVEL
     int "Log level for Azoteq IQS915x driver"
     default 3

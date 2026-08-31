@@ -36,6 +36,8 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         status = "okay";
         compatible = "azoteq,iqs915x";
         reg = <0x56>;
+        /* Required board profile: init-data and coordinate calibration. */
+        profile = <&board_iqs915x_profile>;
 
         reset-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
         rdy-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
@@ -177,35 +179,34 @@ preference scaler. Inertia follows a Q8 fixed-point decay flow with remainder
 preservation and stops when the decayed motion no longer reaches HID output for
 several ticks.
 
-Legacy properties (`scroll-inertia-decay`, `scroll-inertia-interval-ms`,
-`scroll-inertia-stale-gap-ms`, `scroll-inertia-min-avg-speed`) are still
-accepted as fallback for compatibility, but new configurations should use
-`trigger-ms` and `scroll-*` properties shown above.
-
 See [docs/scroll_parameters_ja.md](docs/scroll_parameters_ja.md) for a
 practical Japanese guide to each scroll parameter and tuning workflow.
 
 ## Initialization data (IQS9150/IQS9151)
 
 The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot.
-This driver now uses a built-in init-data profile and no longer accepts an `azoteq,init-data` DTS property.
+The board supplies an `azoteq,iqs915x-profile` phandle containing the complete
+initialization byte stream and coordinate calibration tables. This keeps the
+driver reusable across boards while preserving the existing 1174-byte export.
 
-- Base profile source: `drivers/input/IQS9150_init.h` (Azoteq export format)
-- Generated array: build directory (`drivers/input` target binary dir under `generated/`)
-- Total length: 1174 bytes (`0x115C..0x15EB` + `0x2000..0x2005`)
+- `init-data`: 1174 bytes (`0x115C..0x15EB` + `0x2000..0x2005`)
+- `x/y-coordinate-lut-q15`: per-axis half-block correction curves
+- `x/y-coordinate-blocks`: profile-specific block counts
 
-### Updating the built-in init-data profile
+The original `drivers/input/IQS9150_init.h` is retained as the Azoteq export
+source for byte-count validation and future profile regeneration. It is not
+compiled into the driver.
 
-1. Use the **Azoteq GUI** to configure your trackpad and export a new `IQS9150_init.h`.
-2. Replace `drivers/input/IQS9150_init.h` with the exported header as-is.
-3. Build firmware. The array header is generated automatically before compiling `iqs915x.c`.
-4. Keep DTS tuning properties (`report-rate-ms`, scroll settings, etc.) in your overlay as needed.
+### Updating a board profile
 
-The generated array header is a build artifact and does not need to be committed.
+1. Export a new `IQS9150_init.h` with the **Azoteq GUI**.
+2. Convert its values into the board's `azoteq,iqs915x-profile` DTS node.
+3. Verify the profile contains exactly 1174 bytes and keep DTS tuning
+   properties (`report-rate-ms`, scroll settings, etc.) in the sensor node.
 
 ### Priority
 
-The driver writes built-in init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides.
+The driver writes the profile-provided init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides. The conversion script emits the profile DTS array by default; use `--c-header` only for legacy tooling.
 This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
 
 ## Key differences from IQS5xx driver

@@ -1,0 +1,27 @@
+description: Board-specific IQS915x initialization and coordinate profile
+
+compatible: "azoteq,iqs915x-profile"
+
+properties:
+  init-data:
+    type: uint8-array
+    required: true
+    description: Complete IQS915x initialization byte stream.
+
+  x-coordinate-lut-q15:
+    type: array
+    required: true
+    description: X-axis half-block correction LUT in Q15 format.
+
+  y-coordinate-lut-q15:
+    type: array
+    required: true
+    description: Y-axis half-block correction LUT in Q15 format.
+
+  x-coordinate-blocks:
+    type: int
+    required: true
+
+  y-coordinate-blocks:
+    type: int
+    required: true
