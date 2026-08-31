@@ -20,6 +20,8 @@
 #define IQS915X_REGS_H_
 
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/i2c.h>
 #include <zephyr/sys/atomic.h>
 #include <stddef.h>
 #include <stdint.h>
