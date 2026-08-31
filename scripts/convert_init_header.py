@@ -10,7 +10,7 @@ Azoteq GUIが出力する IQS9150_init.h を読み込み、
 
 既定の出力:
     init-data = [
-        0x00, 0x00, 0x00, ...
+        00, 00, 00, ...
     ];
 
 旧形式のC配列が必要な場合だけ `--c-header` を指定する。
@@ -140,7 +140,8 @@ def format_dts_output(values: list[int]) -> str:
              "init-data = ["]
     for i in range(0, len(values), 16):
         chunk = values[i : i + 16]
-        lines.append("    " + ", ".join(f"0x{b:02X}" for b in chunk) + ",")
+        # Devicetree byte-array syntax requires bare two-digit hex bytes.
+        lines.append("    " + ", ".join(f"{b:02X}" for b in chunk) + ",")
     lines.append("];" )
     return "\n".join(lines)
 
