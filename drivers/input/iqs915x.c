@@ -46,6 +46,7 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 #define IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES 3
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
 #define IQS915X_POWER_TRANSITION_WAIT_MS 250
+#define IQS915X_LP2_RESEED_INTERVAL_MS 10000
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
@@ -727,7 +728,7 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * Manual Control有効時は、ホストがSystem ControlのMode Selectで
  * Active/LP2を切り替える。イベントモード中はRDY待ちのない期間も
  * あるため、power API由来のモード変更はForce Comms前提で
- * i2c_writeを発行する。power APIの遷移ではTP Reseedは行わない。
+ * i2c_writeを発行する。LP2中の定期TP Reseedは専用state machineが管理する。
  * ============================================================ */
 
 static int iqs915x_write_power_mode(const struct device *dev, uint16_t mode)
@@ -741,6 +742,252 @@ static int iqs915x_write_power_mode(const struct device *dev, uint16_t mode)
   }
 
   return 0;
+}
+
+static void iqs915x_reseed_work_handler(struct k_work *work)
+{
+  struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+  struct iqs915x_data *data =
+      CONTAINER_OF(dwork, struct iqs915x_data, reseed_work);
+
+  if (atomic_get(&data->pm_suspended) == 0 &&
+      atomic_get(&data->requested_enabled) == 0)
+  {
+    atomic_set(&data->reseed_due, 1);
+    k_sem_give(&data->rdy_sem);
+  }
+}
+
+void iqs915x_schedule_lp2_reseed(struct iqs915x_data *data)
+{
+  if (data->initialized && data->reseed_state == RESEED_IDLE &&
+      atomic_get(&data->requested_enabled) == 0 &&
+      atomic_get(&data->pm_suspended) == 0)
+  {
+    atomic_clear(&data->reseed_due);
+    k_work_reschedule(&data->reseed_work,
+                      K_MSEC(IQS915X_LP2_RESEED_INTERVAL_MS));
+  }
+}
+
+static void iqs915x_reseed_retry_after_lp2(const struct device *dev,
+                                           const char *reason)
+{
+  struct iqs915x_data *data = dev->data;
+
+  LOG_WRN("LP2 Reseed deferred: %s", reason);
+  data->reseed_state = RESEED_IDLE;
+  data->reseed_retry_count = 0;
+  iqs915x_schedule_lp2_reseed(data);
+}
+
+static void iqs915x_reseed_runtime_reset(const struct device *dev,
+                                         uint16_t info_flags)
+{
+  struct iqs915x_data *data = dev->data;
+
+  LOG_WRN("IQS915x runtime reset detected during LP2 Reseed (flags=0x%04x)",
+          info_flags);
+  k_work_cancel_delayable(&data->reseed_work);
+  atomic_clear(&data->reseed_due);
+  data->reseed_state = RESEED_IDLE;
+  data->initialized = false;
+  data->init_step = INIT_CHECK_SHOW_RESET;
+  data->init_data_offset = 0;
+  data->wait_count = 0;
+  data->init_chunk_retry_count = 0;
+  data->init_restart_count = 0;
+  data->init_pending_cfg = 0;
+  data->confirmed_config_settings = 0;
+  data->work_state = WORK_READ_DATA;
+  atomic_clear(&data->output_enabled);
+  iqs915x_reset_event_mode_relatch_state(data);
+}
+
+/* Perform at most one I2C transaction. In Event Mode, the register helpers
+ * use the configured clock-stretch Force Comms behavior between RDY events. */
+static void iqs915x_handle_lp2_reseed_step(const struct device *dev)
+{
+  struct iqs915x_data *data = dev->data;
+  uint16_t info_flags = 0;
+  int ret;
+
+  if (atomic_get(&data->pm_suspended) != 0 &&
+      data->reseed_state != RESEED_WAIT_TP_SCAN)
+  {
+    if (data->reseed_state == RESEED_CHECK_LP2_TOUCH ||
+        data->reseed_state == RESEED_ENTER_IDLE)
+    {
+      data->reseed_state = RESEED_IDLE;
+    }
+    else
+    {
+      data->reseed_state = RESEED_RETURN_LP2;
+    }
+    return;
+  }
+
+  switch (data->reseed_state)
+  {
+  case RESEED_CHECK_LP2_TOUCH:
+    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
+    if (ret < 0)
+    {
+      LOG_WRN("LP2 Reseed: failed to read Info Flags: %d", ret);
+      iqs915x_reseed_retry_after_lp2(dev, "LP2 status unavailable");
+      return;
+    }
+    if (info_flags & IQS915X_SHOW_RESET)
+    {
+      iqs915x_reseed_runtime_reset(dev, info_flags);
+      return;
+    }
+    if ((info_flags & IQS915X_CHARGING_MODE_MASK) != IQS915X_MODE_LP2)
+    {
+      iqs915x_reseed_retry_after_lp2(dev, "device is not confirmed in LP2");
+      return;
+    }
+    if (info_flags & (IQS915X_ALP_PROX_STATUS | IQS915X_GLOBAL_TP_TOUCH))
+    {
+      iqs915x_reseed_retry_after_lp2(dev, "touch/proximity is active");
+      return;
+    }
+    data->reseed_retry_count = 0;
+    data->reseed_state = RESEED_ENTER_IDLE;
+    return;
+
+  case RESEED_ENTER_IDLE:
+    ret = iqs915x_write_power_mode(dev, IQS915X_MODE_IDLE);
+    if (ret < 0)
+    {
+      LOG_ERR("LP2 Reseed: failed to enter Idle mode: %d", ret);
+      data->reseed_state = RESEED_RETURN_LP2;
+      return;
+    }
+    data->reseed_state = RESEED_WAIT_IDLE_RELATCH;
+    iqs915x_schedule_event_mode_relatch(data, "LP2 Reseed Idle scan");
+    return;
+
+  case RESEED_CHECK_IDLE_TOUCH_1:
+  case RESEED_CHECK_IDLE_TOUCH_2:
+    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
+    if (ret < 0)
+    {
+      LOG_WRN("LP2 Reseed: failed to read Idle touch status: %d", ret);
+      data->reseed_state = RESEED_RETURN_LP2;
+      return;
+    }
+    if (info_flags & IQS915X_SHOW_RESET)
+    {
+      iqs915x_reseed_runtime_reset(dev, info_flags);
+      return;
+    }
+    if ((info_flags & IQS915X_CHARGING_MODE_MASK) != IQS915X_MODE_IDLE)
+    {
+      LOG_WRN("LP2 Reseed: expected Idle mode, Info Flags=0x%04x",
+              info_flags);
+      data->reseed_state = RESEED_RETURN_LP2;
+      return;
+    }
+    if (info_flags & IQS915X_GLOBAL_TP_TOUCH)
+    {
+      data->reseed_state = RESEED_RETURN_LP2;
+      return;
+    }
+    if (data->reseed_state == RESEED_CHECK_IDLE_TOUCH_1)
+    {
+      data->reseed_state = RESEED_CHECK_IDLE_TOUCH_2;
+    }
+    else
+    {
+      data->reseed_state = RESEED_ISSUE_TP_RESEED;
+    }
+    return;
+
+  case RESEED_ISSUE_TP_RESEED:
+    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
+                              IQS915X_MODE_IDLE | IQS915X_TP_RESEED);
+    if (ret < 0)
+    {
+      LOG_ERR("LP2 Reseed: failed to request TP Reseed: %d", ret);
+      /* The write may have reached the IC despite the bus error. Drain one
+       * TP scan before changing modes so a queued reseed cannot run on resume. */
+      data->reseed_state = RESEED_WAIT_TP_SCAN;
+      return;
+    }
+    LOG_INF("LP2 Reseed: TP Reseed queued after two no-touch Idle scans");
+    data->reseed_state = RESEED_WAIT_TP_SCAN;
+    return;
+
+  case RESEED_WAIT_TP_SCAN:
+    ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info_flags);
+    if (ret < 0)
+    {
+      LOG_WRN("LP2 Reseed: failed to confirm scan after request: %d", ret);
+      data->reseed_retry_count++;
+      if (data->reseed_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
+      {
+        data->initialized = false;
+        data->reseed_state = RESEED_IDLE;
+        iqs915x_restart_initialization(dev,
+                                      "LP2 Reseed scan could not be confirmed");
+      }
+      return;
+    }
+    if (info_flags & IQS915X_SHOW_RESET)
+    {
+      iqs915x_reseed_runtime_reset(dev, info_flags);
+      return;
+    }
+    if ((info_flags & IQS915X_CHARGING_MODE_MASK) != IQS915X_MODE_IDLE)
+    {
+      LOG_WRN("LP2 Reseed: Idle scan was not observed after request");
+      data->initialized = false;
+      data->reseed_state = RESEED_IDLE;
+      iqs915x_restart_initialization(dev,
+                                    "LP2 Reseed scan could not be confirmed");
+      return;
+    }
+    if (atomic_get(&data->requested_enabled) != 0)
+    {
+      data->reseed_state = RESEED_IDLE;
+      data->reseed_retry_count = 0;
+      data->active_pending = true;
+      data->transition_generation = iqs915x_request_generation(data);
+      return;
+    }
+    data->reseed_retry_count = 0;
+    data->reseed_state = RESEED_RETURN_LP2;
+    return;
+
+  case RESEED_RETURN_LP2:
+    ret = iqs915x_write_power_mode(dev, IQS915X_MODE_LP2);
+    if (ret < 0)
+    {
+      data->reseed_retry_count++;
+      LOG_ERR("LP2 Reseed: failed to return to LP2 (%u/%u): %d",
+              data->reseed_retry_count, IQS915X_POWER_TRANSITION_MAX_RETRIES,
+              ret);
+      if (data->reseed_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
+      {
+        data->initialized = false;
+        data->reseed_state = RESEED_IDLE;
+        iqs915x_restart_initialization(dev,
+                                      "LP2 Reseed could not restore LP2 mode");
+      }
+      return;
+    }
+    data->reseed_state = RESEED_WAIT_LP2_RELATCH;
+    data->reseed_retry_count = 0;
+    iqs915x_schedule_event_mode_relatch(data, "LP2 Reseed complete");
+    return;
+
+  case RESEED_IDLE:
+  case RESEED_WAIT_IDLE_RELATCH:
+  case RESEED_WAIT_LP2_RELATCH:
+  default:
+    return;
+  }
 }
 
 static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
@@ -763,6 +1010,8 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       if (data->event_mode_relatch_retry_count >
           IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
       {
+        k_work_cancel_delayable(&data->reseed_work);
+        data->reseed_state = RESEED_IDLE;
         data->initialized = false;
         iqs915x_restart_initialization(dev, "Event Mode relatch disable failed");
         iqs915x_complete_transition(data, -EIO);
@@ -790,6 +1039,8 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       if (data->event_mode_relatch_retry_count >
           IQS915X_EVENT_MODE_RELATCH_MAX_RETRIES)
       {
+        k_work_cancel_delayable(&data->reseed_work);
+        data->reseed_state = RESEED_IDLE;
         data->initialized = false;
         iqs915x_restart_initialization(dev, "Event Mode relatch enable failed");
         iqs915x_complete_transition(data, -EIO);
@@ -825,6 +1076,21 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
               "request_generation=%u",
               data->transition_generation,
               iqs915x_request_generation(data));
+    }
+
+    if (data->reseed_state == RESEED_WAIT_IDLE_RELATCH)
+    {
+      data->reseed_state = RESEED_CHECK_IDLE_TOUCH_1;
+    }
+    else if (data->reseed_state == RESEED_WAIT_LP2_RELATCH)
+    {
+      data->reseed_state = RESEED_IDLE;
+      data->reseed_retry_count = 0;
+      iqs915x_schedule_lp2_reseed(data);
+    }
+    else
+    {
+      iqs915x_schedule_lp2_reseed(data);
     }
 
     if (data->transition_generation == iqs915x_request_generation(data)) {
@@ -1957,6 +2223,7 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
 {
   uint32_t generation = iqs915x_request_generation(data);
   bool requested_enabled;
+  bool reseed_waiting_for_scan;
 
   if (generation == data->applied_generation)
   {
@@ -1964,6 +2231,9 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   }
 
   requested_enabled = atomic_get(&data->requested_enabled) != 0;
+  reseed_waiting_for_scan = data->reseed_state == RESEED_WAIT_TP_SCAN;
+  k_work_cancel_delayable(&data->reseed_work);
+  atomic_clear(&data->reseed_due);
   atomic_clear(&data->output_enabled);
   data->enabled = false;
   iqs915x_reset_input_session(data);
@@ -1972,8 +2242,12 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   data->transition_generation = generation;
   data->power_retry_count = 0;
   data->relatch_target_enabled = false;
-  data->active_pending = requested_enabled;
-  data->lp2_pending = !requested_enabled;
+  data->active_pending = requested_enabled && !reseed_waiting_for_scan;
+  data->lp2_pending = !requested_enabled && !reseed_waiting_for_scan;
+  if (!reseed_waiting_for_scan)
+  {
+    data->reseed_state = RESEED_IDLE;
+  }
 
   LOG_INF("Trackpad power request applied: generation=%u requested=%u",
           generation, requested_enabled);
@@ -2018,6 +2292,23 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     iqs915x_apply_pending_power_request(data);
+
+    if ((data->reseed_state == RESEED_WAIT_IDLE_RELATCH ||
+         data->reseed_state == RESEED_WAIT_LP2_RELATCH) &&
+        (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
+         data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE))
+    {
+      iqs915x_handle_event_mode_relatch_step(dev);
+      continue;
+    }
+
+    if (data->reseed_state != RESEED_IDLE &&
+        data->reseed_state != RESEED_WAIT_IDLE_RELATCH &&
+        data->reseed_state != RESEED_WAIT_LP2_RELATCH)
+    {
+      iqs915x_handle_lp2_reseed_step(dev);
+      continue;
+    }
 
     // ===== Active/LP2 pending処理 =====
     // iqs915x_set_enabled()から設定されたpendingフラグを処理する
@@ -2128,7 +2419,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // ===== トラックパッド無効時はRDYを待つだけで何もしない =====
+    if (data->reseed_state == RESEED_IDLE &&
+        atomic_get(&data->reseed_due) != 0 &&
+        atomic_get(&data->requested_enabled) == 0 &&
+        atomic_get(&data->pm_suspended) == 0)
+    {
+      atomic_clear(&data->reseed_due);
+      data->reseed_state = RESEED_CHECK_LP2_TOUCH;
+      continue;
+    }
+
+    // ===== トラックパッド無効時はRDYまたは定期Reseed要求を待つ =====
     if (!data->enabled || !iqs915x_output_is_enabled(data))
     {
       continue;
@@ -2172,6 +2473,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       data->work_state = WORK_READ_DATA;
       data->enabled = false;
       atomic_clear(&data->output_enabled);
+      k_work_cancel_delayable(&data->reseed_work);
+      atomic_clear(&data->reseed_due);
+      data->reseed_state = RESEED_IDLE;
       iqs915x_reset_event_mode_relatch_state(data);
       // ドラッグ中だった場合はZMKへボタンリリースを確実に通知する
       if (data->active_tap_hold)
@@ -2624,6 +2928,10 @@ static int iqs915x_init(const struct device *dev)
 
   k_sem_init(&data->rdy_sem, 0, 1);
   k_sem_init(&data->transition_sem, 0, 1);
+  atomic_clear(&data->pm_suspended);
+  atomic_clear(&data->reseed_due);
+  data->reseed_state = RESEED_IDLE;
+  data->reseed_retry_count = 0;
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
   k_work_init_delayable(&data->tap_and_hold_release_work,
@@ -2634,6 +2942,8 @@ static int iqs915x_init(const struct device *dev)
                         iqs915x_tap_and_hold_start_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
+  k_work_init_delayable(&data->reseed_work,
+                        iqs915x_reseed_work_handler);
 
   // リセットGPIOの設定（オプショナル）
   if (config->reset_gpio.port)

@@ -11,6 +11,9 @@
 #include <zephyr/pm/device.h>
 #include <zephyr/sys/util.h>
 
+struct iqs915x_data;
+void iqs915x_schedule_lp2_reseed(struct iqs915x_data *data);
+
 #if IS_ENABLED(CONFIG_PM_DEVICE)
 int iqs915x_pm_action(const struct device *dev, enum pm_device_action action);
 #define IQS915X_PM_DEVICE_DEFINE(n) PM_DEVICE_DT_INST_DEFINE(n, iqs915x_pm_action)

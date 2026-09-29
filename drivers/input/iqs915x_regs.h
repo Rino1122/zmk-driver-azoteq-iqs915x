@@ -310,6 +310,21 @@ enum iqs915x_work_state
     WORK_RELATCH_EVENT_MODE_ENABLE,  // Event Mode再ラッチ: EVENT_MODE set
 };
 
+// LP2中の定期Reseed用ステート
+enum iqs915x_reseed_state
+{
+    RESEED_IDLE,
+    RESEED_CHECK_LP2_TOUCH,
+    RESEED_ENTER_IDLE,
+    RESEED_WAIT_IDLE_RELATCH,
+    RESEED_CHECK_IDLE_TOUCH_1,
+    RESEED_CHECK_IDLE_TOUCH_2,
+    RESEED_ISSUE_TP_RESEED,
+    RESEED_WAIT_TP_SCAN,
+    RESEED_RETURN_LP2,
+    RESEED_WAIT_LP2_RELATCH,
+};
+
 #define IQS915X_INERTIA_MOTION_HISTORY_SIZE 12
 
 enum iqs915x_two_finger_mode
@@ -540,6 +555,7 @@ struct iqs915x_data
 
     // スクロール慣性用
     struct k_work_delayable scroll_inertia_work; // 慣性スクロールタイマー
+    struct k_work_delayable reseed_work; // LP2中の定期Reseedスケジューラ
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
@@ -559,6 +575,10 @@ struct iqs915x_data
     bool lp2_pending;    // IQS915xへのLP2遷移待ち
     bool active_pending; // IQS915xのActive mode復帰待ち
     bool pm_saved_enabled;
+    atomic_t pm_suspended; // Device PM suspend中は定期Reseedを停止
+    atomic_t reseed_due; // 周期workから専用スレッドへ渡す要求
+    enum iqs915x_reseed_state reseed_state;
+    uint8_t reseed_retry_count; // Reseed後の走査確認／LP2復帰リトライ
 };
 
 #endif /* IQS915X_REGS_H_ */
