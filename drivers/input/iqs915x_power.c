@@ -17,6 +17,17 @@
 
 #define IQS915X_POWER_TRANSITION_WAIT_MS 250
 
+static void iqs915x_set_pm_suspended(struct iqs915x_data *data, bool suspended)
+{
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  if (suspended) {
+    atomic_set(&data->pm_suspended, 1);
+  } else {
+    atomic_clear(&data->pm_suspended);
+  }
+  k_mutex_unlock(&data->settings_lock);
+}
+
 static int iqs915x_request_enabled(const struct device *dev, bool enabled,
                                    bool wait_for_completion)
 {
@@ -78,13 +89,13 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
   switch (action) {
   case PM_DEVICE_ACTION_SUSPEND:
     data->pm_saved_enabled = atomic_get(&data->requested_enabled) != 0;
-    atomic_set(&data->pm_suspended, 1);
+    iqs915x_set_pm_suspended(data, true);
     k_work_cancel_delayable(&data->reseed_work);
     atomic_clear(&data->reseed_due);
     {
       int ret = iqs915x_request_enabled(dev, false, true);
       if (ret < 0) {
-        atomic_clear(&data->pm_suspended);
+        iqs915x_set_pm_suspended(data, false);
         iqs915x_schedule_lp2_reseed(data);
       }
       return ret;
@@ -92,7 +103,7 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
   case PM_DEVICE_ACTION_RESUME:
     {
       int ret = iqs915x_request_enabled(dev, data->pm_saved_enabled, true);
-      atomic_clear(&data->pm_suspended);
+      iqs915x_set_pm_suspended(data, false);
       if (ret == 0 && !data->pm_saved_enabled) {
         iqs915x_schedule_lp2_reseed(data);
       }

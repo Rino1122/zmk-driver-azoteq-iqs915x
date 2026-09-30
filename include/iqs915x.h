@@ -8,6 +8,56 @@
 
 #include <zephyr/device.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+#define IQS915X_SETTINGS_VERSION_1 1U
+
+/** Runtime pointer acceleration controls. */
+struct iqs915x_pointer_settings {
+  bool enabled;
+  uint16_t sensitivity_percent;
+  uint16_t threshold;
+  uint16_t saturation;
+  uint16_t max_percent;
+};
+
+/** Runtime scroll inertia controls. Times are in milliseconds. */
+struct iqs915x_scroll_inertia_settings {
+  bool enabled;
+  uint16_t trigger_ms;
+  uint16_t decay_factor_percent;
+  uint16_t interval_ms;
+  uint16_t threshold_start;
+  uint16_t threshold_stop;
+  uint16_t max_duration_ms; /* 0 preserves the legacy unlimited duration. */
+};
+
+/** Versioned settings controlled by the Harbour trackpad settings UI. */
+struct iqs915x_settings {
+  uint16_t version;
+  struct iqs915x_pointer_settings pointer;
+  struct iqs915x_scroll_inertia_settings scroll_inertia;
+};
+
+struct iqs915x_setting_range {
+  uint16_t min;
+  uint16_t max;
+};
+
+/** Supported numeric ranges for version 1 settings. */
+struct iqs915x_settings_limits {
+  uint16_t version;
+  struct iqs915x_setting_range pointer_sensitivity_percent;
+  struct iqs915x_setting_range pointer_threshold;
+  struct iqs915x_setting_range pointer_saturation;
+  struct iqs915x_setting_range pointer_max_percent;
+  struct iqs915x_setting_range inertia_trigger_ms;
+  struct iqs915x_setting_range inertia_decay_factor_percent;
+  struct iqs915x_setting_range inertia_interval_ms;
+  struct iqs915x_setting_range inertia_threshold_start;
+  struct iqs915x_setting_range inertia_threshold_stop;
+  struct iqs915x_setting_range inertia_max_duration_ms;
+};
 
 /**
  * @brief トラックパッドの有効/無効を設定する
@@ -39,5 +89,39 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled);
  * @return true=有効(Active要求中を含む), false=無効(LP2要求中を含む)
  */
 bool iqs915x_get_enabled(const struct device *dev);
+
+/**
+ * @brief Get the currently applied runtime settings.
+ *
+ * Settings can be read while the trackpad is disabled. Returns -EAGAIN before
+ * initialization completes or while the device is recovering from a reset,
+ * -EBUSY while Device PM has suspended the device, and -ENODEV for an invalid
+ * or unready device.
+ */
+int iqs915x_get_settings(const struct device *dev,
+                         struct iqs915x_settings *settings);
+
+/**
+ * Get supported version 1 setting ranges. For max_duration_ms, zero is also a
+ * special accepted value meaning no duration limit; otherwise the range is
+ * 50–5000 ms.
+ */
+int iqs915x_get_settings_limits(struct iqs915x_settings_limits *limits);
+
+/** Validate a versioned settings object without changing device state. */
+int iqs915x_validate_settings(const struct iqs915x_settings *settings);
+
+/**
+ * @brief Atomically apply a complete runtime settings object.
+ *
+ * The call is synchronous. On success, all subsequent pointer and scroll
+ * processing uses the new values. Existing touch/button/gesture state is
+ * preserved, while pointer remainders and active scroll inertia are cleared.
+ * Returns -EINVAL for unsupported versions or invalid settings, -EAGAIN before
+ * initialization completes or during reset recovery, -EBUSY during PM suspend,
+ * and -ENODEV for an invalid or unready device.
+ */
+int iqs915x_apply_settings(const struct device *dev,
+                           const struct iqs915x_settings *settings);
 
 #endif /* ZMK_DRIVER_IQS915X_H_ */

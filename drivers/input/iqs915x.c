@@ -17,6 +17,7 @@
 
 #define DT_DRV_COMPAT azoteq_iqs915x
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zephyr/device.h>
@@ -37,6 +38,8 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
+static const uint8_t iqs915x_device_api = 0;
+
 #define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
 #define IQS915X_INIT_CHUNK_WRITE_MAX_RETRIES 3
 #define IQS915X_INIT_MAX_RESTARTS 3
@@ -55,6 +58,22 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason);
+static void iqs915x_stop_scroll_inertia_locked(struct iqs915x_data *data);
+
+static void iqs915x_mark_initialized(struct iqs915x_data *data, bool initialized)
+{
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  data->initialized = initialized;
+  if (initialized)
+  {
+    atomic_set(&data->settings_ready, 1);
+  }
+  else
+  {
+    atomic_clear(&data->settings_ready);
+  }
+  k_mutex_unlock(&data->settings_lock);
+}
 
 static uint32_t iqs915x_request_generation(const struct iqs915x_data *data)
 {
@@ -465,8 +484,10 @@ static int iqs915x_read_stream(const struct device *dev,
 
 static void iqs915x_reset_pointer_accumulators(struct iqs915x_data *data)
 {
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
   data->pointer_x_acc = 0;
   data->pointer_y_acc = 0;
+  k_mutex_unlock(&data->settings_lock);
 }
 
 static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
@@ -528,16 +549,18 @@ static uint32_t iqs915x_pointer_speed_10ms(
 }
 
 static uint16_t iqs915x_pointer_scale_percent(
-    const struct iqs915x_config *config, int32_t rel_x, int32_t rel_y)
+    const struct iqs915x_config *config,
+    const struct iqs915x_pointer_settings *settings,
+    int32_t rel_x, int32_t rel_y)
 {
-  uint32_t base_percent = config->pointer_sensitivity_percent;
-  uint32_t max_percent = config->pointer_accel_max_percent;
-  uint32_t threshold = config->pointer_accel_threshold;
-  uint32_t saturation = config->pointer_accel_saturation;
+  uint32_t base_percent = settings->sensitivity_percent;
+  uint32_t max_percent = settings->max_percent;
+  uint32_t threshold = settings->threshold;
+  uint32_t saturation = settings->saturation;
   uint32_t speed;
   uint32_t scale;
 
-  if (!config->pointer_accel || max_percent <= base_percent)
+  if (!settings->enabled || max_percent <= base_percent)
   {
     return (uint16_t)base_percent;
   }
@@ -575,16 +598,19 @@ static uint16_t iqs915x_apply_pointer_scale(
     const struct iqs915x_config *config, struct iqs915x_data *data,
     int32_t raw_x, int32_t raw_y, int32_t *out_x, int32_t *out_y)
 {
+  /* Caller holds settings_lock across scaling and the corresponding report. */
   uint16_t scale_percent;
+  const struct iqs915x_pointer_settings *settings =
+      &data->runtime_settings.pointer;
 
-  if (!config->pointer_accel && config->pointer_sensitivity_percent == 100U)
+  if (!settings->enabled && settings->sensitivity_percent == 100U)
   {
     *out_x = raw_x;
     *out_y = raw_y;
     return 100U;
   }
 
-  scale_percent = iqs915x_pointer_scale_percent(config, raw_x, raw_y);
+  scale_percent = iqs915x_pointer_scale_percent(config, settings, raw_x, raw_y);
   *out_x = iqs915x_apply_pointer_scale_axis(
       raw_x, scale_percent, &data->pointer_x_acc);
   *out_y = iqs915x_apply_pointer_scale_axis(
@@ -791,7 +817,7 @@ static void iqs915x_reseed_runtime_reset(const struct device *dev,
   k_work_cancel_delayable(&data->reseed_work);
   atomic_clear(&data->reseed_due);
   data->reseed_state = RESEED_IDLE;
-  data->initialized = false;
+  iqs915x_mark_initialized(data, false);
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->init_data_offset = 0;
   data->wait_count = 0;
@@ -927,7 +953,7 @@ static void iqs915x_handle_lp2_reseed_step(const struct device *dev)
       data->reseed_retry_count++;
       if (data->reseed_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
       {
-        data->initialized = false;
+        iqs915x_mark_initialized(data, false);
         data->reseed_state = RESEED_IDLE;
         iqs915x_restart_initialization(dev,
                                       "LP2 Reseed scan could not be confirmed");
@@ -942,7 +968,7 @@ static void iqs915x_handle_lp2_reseed_step(const struct device *dev)
     if ((info_flags & IQS915X_CHARGING_MODE_MASK) != IQS915X_MODE_IDLE)
     {
       LOG_WRN("LP2 Reseed: Idle scan was not observed after request");
-      data->initialized = false;
+      iqs915x_mark_initialized(data, false);
       data->reseed_state = RESEED_IDLE;
       iqs915x_restart_initialization(dev,
                                     "LP2 Reseed scan could not be confirmed");
@@ -970,7 +996,7 @@ static void iqs915x_handle_lp2_reseed_step(const struct device *dev)
               ret);
       if (data->reseed_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
       {
-        data->initialized = false;
+        iqs915x_mark_initialized(data, false);
         data->reseed_state = RESEED_IDLE;
         iqs915x_restart_initialization(dev,
                                       "LP2 Reseed could not restore LP2 mode");
@@ -1012,7 +1038,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       {
         k_work_cancel_delayable(&data->reseed_work);
         data->reseed_state = RESEED_IDLE;
-        data->initialized = false;
+        iqs915x_mark_initialized(data, false);
         iqs915x_restart_initialization(dev, "Event Mode relatch disable failed");
         iqs915x_complete_transition(data, -EIO);
       }
@@ -1041,7 +1067,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
       {
         k_work_cancel_delayable(&data->reseed_work);
         data->reseed_state = RESEED_IDLE;
-        data->initialized = false;
+        iqs915x_mark_initialized(data, false);
         iqs915x_restart_initialization(dev, "Event Mode relatch enable failed");
         iqs915x_complete_transition(data, -EIO);
       }
@@ -1277,10 +1303,13 @@ static bool iqs915x_handle_two_finger_scroll(
     return false;
   }
 
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+
   if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
   {
     if (two_finger->max_centroid_movement < data->tap_distance)
     {
+      k_mutex_unlock(&data->settings_lock);
       return false;
     }
 
@@ -1297,15 +1326,16 @@ static bool iqs915x_handle_two_finger_scroll(
 
   if (gx == 0 && gy == 0)
   {
+    k_mutex_unlock(&data->settings_lock);
     return true;
   }
 
-  if (config->scroll_inertia.enabled)
+  if (data->runtime_settings.scroll_inertia.enabled)
   {
     if (data->scroll_inertia_state.active &&
         data->scroll_inertia_state.is_inertial)
     {
-      iqs915x_cancel_scroll_inertia(data);
+      iqs915x_stop_scroll_inertia_locked(data);
     }
 
     if (gx != 0)
@@ -1323,16 +1353,16 @@ static bool iqs915x_handle_two_finger_scroll(
     }
 
     if (abs(data->scroll_inertia_state.vx) >=
-            config->scroll_inertia.threshold_start ||
+            data->runtime_settings.scroll_inertia.threshold_start ||
         abs(data->scroll_inertia_state.vy) >=
-            config->scroll_inertia.threshold_start)
+            data->runtime_settings.scroll_inertia.threshold_start)
     {
       data->scroll_inertia_state.active = true;
       data->scroll_inertia_state.is_inertial = false;
       data->scroll_inertia_work_generation =
           iqs915x_request_generation(data);
       k_work_reschedule(&data->scroll_inertia_work,
-                        K_MSEC(config->scroll_inertia.trigger_ms));
+                        K_MSEC(data->runtime_settings.scroll_inertia.trigger_ms));
     }
   }
 
@@ -1357,6 +1387,7 @@ static bool iqs915x_handle_two_finger_scroll(
 
   LOG_DBG("scroll centroid: dx=%d dy=%d flags=0x%04x", gx, gy,
           stream->trackpad_flags);
+  k_mutex_unlock(&data->settings_lock);
   return true;
 }
 
@@ -1463,25 +1494,29 @@ static void iqs915x_calculate_decayed_movement_fixed(
     int16_t in_dx, int16_t in_dy, int16_t decay_factor_q8,
     int16_t *out_dx, int16_t *out_dy, int16_t *rem_x, int16_t *rem_y)
 {
-  int32_t ideal_dx_q8 = ((int32_t)in_dx << IQS915X_SCROLL_INERTIA_FP_BITS) + *rem_x;
-  int32_t ideal_dy_q8 = ((int32_t)in_dy << IQS915X_SCROLL_INERTIA_FP_BITS) + *rem_y;
+  int64_t ideal_dx_q8 =
+      (int64_t)in_dx * IQS915X_SCROLL_INERTIA_FP_SCALE + *rem_x;
+  int64_t ideal_dy_q8 =
+      (int64_t)in_dy * IQS915X_SCROLL_INERTIA_FP_SCALE + *rem_y;
 
-  int32_t decayed_dx_q8 = (ideal_dx_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
-  int32_t decayed_dy_q8 = (ideal_dy_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
+  int64_t decayed_dx_q8 = (ideal_dx_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
+  int64_t decayed_dy_q8 = (ideal_dy_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
 
   int16_t output_dx =
       (int16_t)((decayed_dx_q8 + IQS915X_SCROLL_INERTIA_Q8_HALF) >> IQS915X_SCROLL_INERTIA_FP_BITS);
   int16_t output_dy =
       (int16_t)((decayed_dy_q8 + IQS915X_SCROLL_INERTIA_Q8_HALF) >> IQS915X_SCROLL_INERTIA_FP_BITS);
 
-  *rem_x = (int16_t)(decayed_dx_q8 - ((int32_t)output_dx << IQS915X_SCROLL_INERTIA_FP_BITS));
-  *rem_y = (int16_t)(decayed_dy_q8 - ((int32_t)output_dy << IQS915X_SCROLL_INERTIA_FP_BITS));
+  *rem_x = (int16_t)(decayed_dx_q8 -
+                     ((int64_t)output_dx * IQS915X_SCROLL_INERTIA_FP_SCALE));
+  *rem_y = (int16_t)(decayed_dy_q8 -
+                     ((int64_t)output_dy * IQS915X_SCROLL_INERTIA_FP_SCALE));
 
   *out_dx = output_dx;
   *out_dy = output_dy;
 }
 
-static void iqs915x_stop_scroll_inertia(struct iqs915x_data *data)
+static void iqs915x_stop_scroll_inertia_locked(struct iqs915x_data *data)
 {
   k_work_cancel_delayable(&data->scroll_inertia_work);
   memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
@@ -1491,7 +1526,9 @@ static void iqs915x_stop_scroll_inertia(struct iqs915x_data *data)
 
 static void iqs915x_reset_scroll_inertia(struct iqs915x_data *data)
 {
-  iqs915x_stop_scroll_inertia(data);
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  iqs915x_stop_scroll_inertia_locked(data);
+  k_mutex_unlock(&data->settings_lock);
 }
 
 static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
@@ -1501,23 +1538,43 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
       CONTAINER_OF(dwork, struct iqs915x_data, scroll_inertia_work);
   const struct device *dev = data->dev;
   const struct iqs915x_config *config = dev->config;
-  const struct iqs915x_scroll_inertia_profile *profile = &config->scroll_inertia;
   struct iqs915x_scroll_inertia_state *state = &data->scroll_inertia_state;
   int16_t step_x;
   int16_t step_y;
   int16_t decay_factor_q8;
   bool emitted = false;
+  int64_t now_ms;
+  uint16_t next_delay_ms;
+  const struct iqs915x_scroll_inertia_settings *profile;
+
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  profile = &data->runtime_settings.scroll_inertia;
 
   if (!iqs915x_work_session_is_current(
           data, data->scroll_inertia_work_generation) ||
       !state->active || !profile->enabled)
   {
+    k_mutex_unlock(&data->settings_lock);
+    return;
+  }
+
+  now_ms = k_uptime_get();
+  if (!state->is_inertial)
+  {
+    state->started_ms = now_ms;
+  }
+  else if (profile->max_duration_ms > 0 &&
+           now_ms - state->started_ms >= profile->max_duration_ms)
+  {
+    iqs915x_stop_scroll_inertia_locked(data);
+    LOG_DBG("Scroll inertia stopped (maximum duration reached)");
+    k_mutex_unlock(&data->settings_lock);
     return;
   }
 
   step_x = state->ema_vx;
   step_y = state->ema_vy;
-  decay_factor_q8 = (int16_t)((profile->decay_factor_int * IQS915X_SCROLL_INERTIA_FP_SCALE) / 100);
+  decay_factor_q8 = (int16_t)((profile->decay_factor_percent * IQS915X_SCROLL_INERTIA_FP_SCALE) / 100);
 
   iqs915x_calculate_decayed_movement_fixed(
       state->ema_vx, state->ema_vy, decay_factor_q8, &step_x, &step_y,
@@ -1525,8 +1582,9 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
 
   if (abs(step_x) <= profile->threshold_stop && abs(step_y) <= profile->threshold_stop)
   {
-    iqs915x_stop_scroll_inertia(data);
+    iqs915x_stop_scroll_inertia_locked(data);
     LOG_DBG("Scroll inertia stopped (velocity below threshold)");
+    k_mutex_unlock(&data->settings_lock);
     return;
   }
 
@@ -1557,23 +1615,216 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   }
   else if (++state->zero_output_ticks >= IQS915X_SCROLL_INERTIA_ZERO_OUTPUT_LIMIT)
   {
-    iqs915x_stop_scroll_inertia(data);
+    iqs915x_stop_scroll_inertia_locked(data);
     LOG_DBG("Scroll inertia stopped (no HID output)");
+    k_mutex_unlock(&data->settings_lock);
     return;
   }
 
   // 次のティックをスケジュール
-  k_work_reschedule(&data->scroll_inertia_work, K_MSEC(profile->interval_ms));
+  next_delay_ms = profile->interval_ms;
+  if (profile->max_duration_ms > 0)
+  {
+    int64_t remaining = profile->max_duration_ms - (k_uptime_get() - state->started_ms);
+    if (remaining <= 0)
+    {
+      iqs915x_stop_scroll_inertia_locked(data);
+      k_mutex_unlock(&data->settings_lock);
+      return;
+    }
+    next_delay_ms = MIN(next_delay_ms, (uint16_t)remaining);
+  }
+  k_work_reschedule(&data->scroll_inertia_work, K_MSEC(next_delay_ms));
+  k_mutex_unlock(&data->settings_lock);
 }
 
 // スクロール慣性を打ち切る（新しい操作が入った場合に呼ばれる）
 void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
 {
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
   if (data->scroll_inertia_state.active)
   {
-    iqs915x_stop_scroll_inertia(data);
+    iqs915x_stop_scroll_inertia_locked(data);
     LOG_DBG("Scroll inertia cancelled by new input");
   }
+  k_mutex_unlock(&data->settings_lock);
+}
+
+static const struct iqs915x_settings_limits iqs915x_supported_settings_limits = {
+    .version = IQS915X_SETTINGS_VERSION_1,
+    .pointer_sensitivity_percent = {.min = 25, .max = 400},
+    .pointer_threshold = {.min = 0, .max = 1024},
+    .pointer_saturation = {.min = 1, .max = 2048},
+    .pointer_max_percent = {.min = 25, .max = 400},
+    .inertia_trigger_ms = {.min = 0, .max = 500},
+    .inertia_decay_factor_percent = {.min = 0, .max = 99},
+    .inertia_interval_ms = {.min = 5, .max = 100},
+    .inertia_threshold_start = {.min = 0, .max = 32767},
+    .inertia_threshold_stop = {.min = 0, .max = 32767},
+    .inertia_max_duration_ms = {.min = 50, .max = 5000},
+};
+
+int iqs915x_get_settings_limits(struct iqs915x_settings_limits *limits)
+{
+  if (limits == NULL)
+  {
+    return -EINVAL;
+  }
+
+  *limits = iqs915x_supported_settings_limits;
+  return 0;
+}
+
+static bool iqs915x_setting_is_in_range(struct iqs915x_setting_range range,
+                                       uint16_t value)
+{
+  return value >= range.min && value <= range.max;
+}
+
+int iqs915x_validate_settings(const struct iqs915x_settings *settings)
+{
+  if (settings == NULL || settings->version != IQS915X_SETTINGS_VERSION_1)
+  {
+    return -EINVAL;
+  }
+
+  const struct iqs915x_pointer_settings *pointer = &settings->pointer;
+  const struct iqs915x_scroll_inertia_settings *inertia =
+      &settings->scroll_inertia;
+
+  if (!iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.pointer_sensitivity_percent,
+          pointer->sensitivity_percent) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.pointer_threshold,
+          pointer->threshold) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.pointer_saturation,
+          pointer->saturation) ||
+      pointer->saturation <= pointer->threshold ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.pointer_max_percent,
+          pointer->max_percent) ||
+      pointer->max_percent < pointer->sensitivity_percent ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.inertia_trigger_ms,
+          inertia->trigger_ms) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.inertia_decay_factor_percent,
+          inertia->decay_factor_percent) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.inertia_interval_ms,
+          inertia->interval_ms) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.inertia_threshold_start,
+          inertia->threshold_start) ||
+      !iqs915x_setting_is_in_range(
+          iqs915x_supported_settings_limits.inertia_threshold_stop,
+          inertia->threshold_stop) ||
+      inertia->threshold_stop > inertia->threshold_start ||
+      (inertia->max_duration_ms != 0 &&
+       !iqs915x_setting_is_in_range(
+           iqs915x_supported_settings_limits.inertia_max_duration_ms,
+           inertia->max_duration_ms)))
+  {
+    return -EINVAL;
+  }
+
+  return 0;
+}
+
+static int iqs915x_settings_device_check(const struct device *dev,
+                                        struct iqs915x_data **data_out)
+{
+  if (dev == NULL || !device_is_ready(dev) || dev->data == NULL ||
+      dev->api != &iqs915x_device_api)
+  {
+    return -ENODEV;
+  }
+
+  *data_out = dev->data;
+  return 0;
+}
+
+int iqs915x_get_settings(const struct device *dev,
+                         struct iqs915x_settings *settings)
+{
+  struct iqs915x_data *data;
+  int ret;
+
+  if (settings == NULL)
+  {
+    return -EINVAL;
+  }
+
+  ret = iqs915x_settings_device_check(dev, &data);
+  if (ret < 0)
+  {
+    return ret;
+  }
+
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  if (atomic_get(&data->pm_suspended) != 0)
+  {
+    ret = -EBUSY;
+  }
+  else if (atomic_get(&data->settings_ready) == 0)
+  {
+    ret = -EAGAIN;
+  }
+  else
+  {
+    *settings = data->runtime_settings;
+    ret = 0;
+  }
+  k_mutex_unlock(&data->settings_lock);
+
+  return ret;
+}
+
+int iqs915x_apply_settings(const struct device *dev,
+                           const struct iqs915x_settings *settings)
+{
+  struct iqs915x_data *data;
+  int ret = iqs915x_validate_settings(settings);
+
+  if (ret < 0)
+  {
+    return ret;
+  }
+
+  ret = iqs915x_settings_device_check(dev, &data);
+  if (ret < 0)
+  {
+    return ret;
+  }
+
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  if (atomic_get(&data->pm_suspended) != 0)
+  {
+    ret = -EBUSY;
+  }
+  else if (atomic_get(&data->settings_ready) == 0)
+  {
+    ret = -EAGAIN;
+  }
+  else
+  {
+    /* The inertia worker takes this same lock, so a queued or running tick
+     * cannot observe a partially applied profile. */
+    k_work_cancel_delayable(&data->scroll_inertia_work);
+    memset(&data->scroll_inertia_state, 0,
+           sizeof(data->scroll_inertia_state));
+    data->pointer_x_acc = 0;
+    data->pointer_y_acc = 0;
+    data->scroll_x_acc = 0;
+    data->scroll_y_acc = 0;
+    data->runtime_settings = *settings;
+    ret = 0;
+  }
+  k_mutex_unlock(&data->settings_lock);
+
+  return ret;
 }
 
 static int iqs915x_prepare_init_chunk(const struct device *dev,
@@ -2059,7 +2310,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_INF("Init: Event Mode confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
       data->init_step = INIT_COMPLETE;
-      data->initialized = true;
+      iqs915x_mark_initialized(data, true);
       data->work_state = WORK_READ_DATA;
       data->last_info_flags = 0;
       data->init_restart_count = 0;
@@ -2215,8 +2466,6 @@ static void iqs915x_reset_input_session(struct iqs915x_data *data)
   iqs915x_reset_absolute_tracking(data);
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_reset_scroll_inertia(data);
-  data->scroll_x_acc = 0;
-  data->scroll_y_acc = 0;
 }
 
 static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
@@ -2462,7 +2711,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       LOG_WRN("IQS915x runtime reset detected (flags=0x%04x), "
               "re-initializing...",
               stream.info_flags);
-      data->initialized = false;
+      iqs915x_mark_initialized(data, false);
       data->init_step = INIT_CHECK_SHOW_RESET;
       data->init_data_offset = 0;
       data->wait_count = 0;
@@ -2597,11 +2846,13 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         // スクロール入力が停止しても慣性がアクティブなら継続させる。
         // 非アクティブ時のみアキュムレータをクリアする。
+        k_mutex_lock(&data->settings_lock, K_FOREVER);
         if (!data->scroll_inertia_state.active)
         {
           data->scroll_x_acc = 0;
           data->scroll_y_acc = 0;
         }
+        k_mutex_unlock(&data->settings_lock);
       }
 
       // タップジェスチャー判定
@@ -2839,7 +3090,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
               {
                 int32_t raw_rel_x = rel_x;
                 int32_t raw_rel_y = rel_y;
-                uint16_t pointer_scale = iqs915x_apply_pointer_scale(
+                uint16_t pointer_scale;
+
+                k_mutex_lock(&data->settings_lock, K_FOREVER);
+                pointer_scale = iqs915x_apply_pointer_scale(
                     config, data, raw_rel_x, raw_rel_y, &rel_x, &rel_y);
 
                 LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d scale=%u out_x=%d "
@@ -2851,6 +3105,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 {
                   iqs915x_report_pointer_pair(data, rel_x, rel_y);
                 }
+                k_mutex_unlock(&data->settings_lock);
               }
             }
           }
@@ -2888,10 +3143,31 @@ static int iqs915x_init(const struct device *dev)
     return -ENODEV;
   }
 
+  k_mutex_init(&data->settings_lock);
+  atomic_clear(&data->settings_ready);
+  data->runtime_settings = (struct iqs915x_settings){
+      .version = IQS915X_SETTINGS_VERSION_1,
+      .pointer = {
+          .enabled = config->pointer_accel,
+          .sensitivity_percent = config->pointer_sensitivity_percent,
+          .threshold = config->pointer_accel_threshold,
+          .saturation = config->pointer_accel_saturation,
+          .max_percent = config->pointer_accel_max_percent,
+      },
+      .scroll_inertia = {
+          .enabled = config->scroll_inertia.enabled,
+          .trigger_ms = config->scroll_inertia.trigger_ms,
+          .decay_factor_percent = config->scroll_inertia.decay_factor_int,
+          .interval_ms = config->scroll_inertia.interval_ms,
+          .threshold_start = config->scroll_inertia.threshold_start,
+          .threshold_stop = config->scroll_inertia.threshold_stop,
+          .max_duration_ms = 0,
+      },
+  };
   data->dev = dev;
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->work_state = WORK_READ_DATA;
-  data->initialized = false;
+  iqs915x_mark_initialized(data, false);
   data->init_data_offset = 0;
   data->wait_count = 0;
   data->init_chunk_retry_count = 0;
@@ -3078,6 +3354,6 @@ static int iqs915x_init(const struct device *dev)
   IQS915X_PM_DEVICE_DEFINE(n);                                                                                                                                                                    \
   DEVICE_DT_INST_DEFINE(n, iqs915x_init, IQS915X_PM_DEVICE_GET(n), &iqs915x_data_##n,                                                                                                             \
                         &iqs915x_config_##n, POST_KERNEL,                                                                                                                                          \
-                        CONFIG_INPUT_AZOTEQ_IQS915X_INIT_PRIORITY, NULL);
+                        CONFIG_INPUT_AZOTEQ_IQS915X_INIT_PRIORITY, &iqs915x_device_api);
 
 DT_INST_FOREACH_STATUS_OKAY(IQS915X_INIT)

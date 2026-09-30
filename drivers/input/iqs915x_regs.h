@@ -22,9 +22,12 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include <iqs915x.h>
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -368,6 +371,7 @@ struct iqs915x_scroll_inertia_state
     uint8_t zero_output_ticks;
     bool active;
     bool is_inertial;
+    int64_t started_ms;
 };
 
 struct iqs915x_finger_tracker
@@ -480,6 +484,11 @@ struct iqs915x_data
     struct k_work_delayable tap_and_hold_release_work;
     struct k_work_delayable single_tap_work;
     struct k_work_delayable tap_and_hold_start_work;
+
+    // Runtime pointer/inertia settings and state shared with system workqueue.
+    struct k_mutex settings_lock;
+    struct iqs915x_settings runtime_settings;
+    atomic_t settings_ready;
 
     // ステートマシン
     enum iqs915x_init_step init_step;   // 初期化進行状態
