@@ -1235,31 +1235,10 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
 
 #define IQS915X_SCROLL_UNITS_PER_AXIS 512
 #define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
-#define IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO 4
 
 static int32_t iqs915x_abs32(int32_t value)
 {
   return value < 0 ? -value : value;
-}
-
-static void iqs915x_filter_scroll_cross_axis(int16_t *x, int16_t *y)
-{
-  int32_t abs_x = iqs915x_abs32(*x);
-  int32_t abs_y = iqs915x_abs32(*y);
-
-  if (abs_x == 0 || abs_y == 0)
-  {
-    return;
-  }
-
-  if ((abs_x * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_y)
-  {
-    *x = 0;
-  }
-  else if ((abs_y * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_x)
-  {
-    *y = 0;
-  }
 }
 
 static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
@@ -1327,7 +1306,6 @@ static bool iqs915x_handle_two_finger_scroll(
 
   motion_x = iqs915x_clamp_i16(two_finger->centroid_dx);
   motion_y = iqs915x_clamp_i16(two_finger->centroid_dy);
-  iqs915x_filter_scroll_cross_axis(&motion_x, &motion_y);
 
   if (started_scroll)
   {
@@ -1341,7 +1319,6 @@ static bool iqs915x_handle_two_finger_scroll(
     gx = motion_x;
     gy = motion_y;
   }
-  iqs915x_filter_scroll_cross_axis(&gx, &gy);
 
   if (data->runtime_settings.scroll_inertia.enabled)
   {
@@ -1714,7 +1691,6 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   state->ema_vx = step_x;
   state->ema_vy = step_y;
   state->is_inertial = true;
-  iqs915x_filter_scroll_cross_axis(&step_x, &step_y);
 
   if (step_x != 0)
   {
