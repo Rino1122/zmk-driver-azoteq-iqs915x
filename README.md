@@ -175,8 +175,23 @@ are normalized by the init-data X/Y resolutions before being reported as wheel
 events. `scroll-divisor` is an extra coarse divisor applied after that
 normalization.
 
-When scroll inertia is enabled, the driver starts it only after `NUM_FINGERS`
-reaches zero. `trigger-ms` is the delay after release. A stationary pause does
+Finger-count changes during contact are debounced for 20 ms; initial contact
+is accepted immediately. Touch boundaries, tap/drag recognition and scroll
+release use the confirmed count. Transient count changes retain the scroll
+session and fractions, but movement reports pause while the raw count does not
+match the confirmed count. Two-finger coordinates are rebaselined after such a
+pause, so movement during missing-coordinate intervals is not reconstructed.
+A confirmed change from multiple fingers to one allows cursor movement without
+requiring a zero-finger interval. The transition position becomes the cursor
+baseline; an established scroll session retains its fractions if two fingers
+return before release. Event Mode count confirmation uses a timed thread wake
+and the latest snapshot, without an extra I2C read.
+
+When scroll inertia is enabled, the driver starts it only after a zero-finger
+count is confirmed. `trigger-ms` is measured from the first zero-finger report;
+inertia cannot start before the 20 ms confirmation completes. Raw contact
+cancels pending or running inertia immediately. Tap duration and motion freshness
+also use the first zero-finger report time, excluding the confirmation delay. A stationary pause does
 not trigger inertia: the last non-zero scroll movement must be recent at
 release. Motion and inertia use separate fractional accumulators so stopping or
 cancelling inertia does not discard manual-scroll remainders. Inertia follows a

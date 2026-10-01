@@ -15,6 +15,8 @@
 
 #include "iqs915x_regs.h"
 
+#define IQS915X_FINGER_COUNT_DEBOUNCE_MS 20
+
 struct iqs915x_stream_data {
   uint16_t gesture_x;
   uint16_t gesture_y;
@@ -38,9 +40,11 @@ bool iqs915x_report_event(struct iqs915x_data *data, uint16_t type,
 
 void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data);
 void iqs915x_update_sequence_gates(struct iqs915x_data *data);
+uint8_t iqs915x_filter_finger_count(struct iqs915x_data *data,
+                                    uint8_t raw_count, int64_t now_ms);
 void iqs915x_update_finger_state(struct iqs915x_data *data,
                                  const struct iqs915x_stream_data *stream,
-                                 bool is_touching_now, bool touch_down_event,
+                                 uint8_t stable_count, bool touch_down_event,
                                  bool touch_up_event);
 void iqs915x_update_single_tap_movement(
     struct iqs915x_data *data, const struct iqs915x_stream_data *stream,

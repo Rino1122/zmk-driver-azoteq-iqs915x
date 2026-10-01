@@ -380,8 +380,10 @@ struct iqs915x_finger_tracker
     uint8_t previous_count;
     uint8_t stable_count;
     uint8_t sequence_max_count;
-    bool tail_suppressed;
-    bool awaiting_zero_contact;
+    uint8_t candidate_count;
+    bool count_change_pending;
+    int64_t candidate_since_ms;
+    int64_t transition_ms;
     bool sequence_active;
     bool sequence_seen_one;
     bool sequence_seen_two;
@@ -519,7 +521,7 @@ struct iqs915x_data
     bool tap_and_hold_start_pending;
     int64_t pending_tap_up_time;
 
-    // 生のタッチ状態トラッキング（Rapid Tap-and-Drag判定用）
+    // 確定した接触状態トラッキング（Rapid Tap-and-Drag判定用）
     bool is_touching;
     int64_t last_touch_down_time;
     uint8_t tap_drag_raw_max_fingers;

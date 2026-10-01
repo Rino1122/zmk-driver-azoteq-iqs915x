@@ -1301,7 +1301,8 @@ static bool iqs915x_handle_two_finger_scroll(
   bool started_scroll = false;
 
   if (!config->scroll || data->finger_tracker.stable_count != 2 ||
-      !two_finger->active || data->scroll_blocked_until_low_contact)
+      !two_finger->active || data->scroll_blocked_until_low_contact ||
+      (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 2)
   {
     return false;
   }
@@ -1565,7 +1566,8 @@ static uint32_t iqs915x_scroll_motion_stale_ms(
 
 static void iqs915x_update_scroll_contact(
     const struct iqs915x_config *config, struct iqs915x_data *data,
-    uint8_t num_fingers, bool released_scroll_sequence)
+    uint8_t num_fingers, uint8_t raw_fingers, int64_t release_ms,
+    bool released_scroll_sequence)
 {
   struct iqs915x_scroll_inertia_state *state =
       &data->scroll_inertia_state;
@@ -1574,13 +1576,13 @@ static void iqs915x_update_scroll_contact(
   int64_t now_ms = k_uptime_get();
 
   k_mutex_lock(&data->settings_lock, K_FOREVER);
-  previous_fingers = data->scroll_contact_fingers;
+  previous_fingers = data->finger_tracker.previous_count;
+  /* Raw contact cancels inertia immediately, even before count confirmation. */
+  data->scroll_contact_fingers = raw_fingers;
   profile = &data->runtime_settings.scroll_inertia;
 
   if (num_fingers > 0)
   {
-    data->scroll_contact_fingers = num_fingers;
-
     if (state->active)
     {
       iqs915x_stop_scroll_inertia_locked(data);
@@ -1601,7 +1603,6 @@ static void iqs915x_update_scroll_contact(
     return;
   }
 
-  data->scroll_contact_fingers = 0;
   if (previous_fingers == 0)
   {
     k_mutex_unlock(&data->settings_lock);
@@ -1611,7 +1612,7 @@ static void iqs915x_update_scroll_contact(
   uint32_t stale_ms = iqs915x_scroll_motion_stale_ms(
       config, profile->trigger_ms);
   bool recent_motion = data->last_scroll_motion_ms > 0 &&
-                       now_ms - data->last_scroll_motion_ms <= stale_ms;
+                       release_ms - data->last_scroll_motion_ms <= stale_ms;
   bool fast_enough = data->last_scroll_motion_speed >=
                      profile->threshold_start;
 
@@ -1630,7 +1631,7 @@ static void iqs915x_update_scroll_contact(
     data->scroll_inertia_work_generation =
         iqs915x_request_generation(data);
     k_work_reschedule(&data->scroll_inertia_work,
-                      K_MSEC(profile->trigger_ms));
+                      K_MSEC(MAX(0LL, release_ms + profile->trigger_ms - now_ms)));
   }
   else
   {
@@ -2636,6 +2637,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
   const struct device *dev = data->dev;
   const struct iqs915x_config *config = dev->config;
   int ret;
+  struct iqs915x_stream_data last_stream = {0};
+  uint32_t last_stream_generation = 0;
 
   while (true)
   {
@@ -2780,8 +2783,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
-    // 初期化完了後の通常モードはポーリングなしでRDY割り込みを待機
-    k_sem_take(&data->rdy_sem, K_FOREVER);
+    // Event Mode may stop reporting after release. Confirm a pending count
+    // using the latest snapshot at its deadline without another I2C transaction.
+    k_timeout_t frame_wait = K_FOREVER;
+    if (data->finger_tracker.count_change_pending)
+    {
+      int64_t remaining_ms = data->finger_tracker.candidate_since_ms +
+                             IQS915X_FINGER_COUNT_DEBOUNCE_MS -
+                             k_uptime_get();
+      frame_wait = K_MSEC(MAX(0LL, remaining_ms));
+    }
+    bool debounce_timeout = k_sem_take(&data->rdy_sem, frame_wait) != 0;
 
     if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
         data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE)
@@ -2809,11 +2821,28 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     // ストリーミングデータをraw読み取り
     uint32_t frame_generation = iqs915x_request_generation(data);
     struct iqs915x_stream_data stream;
-    ret = iqs915x_read_stream(dev, &stream);
-    if (ret < 0)
+    if (debounce_timeout)
     {
-      LOG_ERR("Failed to read stream: %d", ret);
-      continue;
+      if (!data->finger_tracker.count_change_pending ||
+          last_stream_generation != frame_generation)
+      {
+        continue;
+      }
+      stream = last_stream;
+      stream.trackpad_flags &= ~IQS915X_TP_MOVEMENT;
+      stream.gesture_sf = 0;
+      stream.gesture_tf = 0;
+    }
+    else
+    {
+      ret = iqs915x_read_stream(dev, &stream);
+      if (ret < 0)
+      {
+        LOG_ERR("Failed to read stream: %d", ret);
+        continue;
+      }
+      last_stream = stream;
+      last_stream_generation = frame_generation;
     }
 
     if (!iqs915x_output_is_enabled(data) ||
@@ -2874,10 +2903,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     // =========================================================
     // ドラッグ解除チェック: has_tp_event に依存せず毎フレーム実行
-    // GLOBAL_TP_TOUCHは取りこぼしがあるため、接触境界には使わない。
+    // 接触境界はNUM_FINGERSを20 ms安定化して判定する。
     // =========================================================
     uint8_t reported_fingers = stream.trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-    uint8_t num_fingers = reported_fingers;
+    uint8_t num_fingers = iqs915x_filter_finger_count(
+        data, reported_fingers, k_uptime_get());
+    bool finger_count_changed = num_fingers != data->finger_tracker.stable_count;
     bool global_tp_touch =
         (stream.info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0;
     bool is_touching_now = num_fingers > 0;
@@ -2918,13 +2949,29 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
 
     data->is_touching = is_touching_now;
-    iqs915x_update_finger_state(data, &stream, is_touching_now,
+    iqs915x_update_finger_state(data, &stream, num_fingers,
                                 touch_down, touch_up);
-    iqs915x_update_scroll_contact(config, data, num_fingers,
+    iqs915x_update_scroll_contact(config, data, num_fingers, reported_fingers,
+                                  data->finger_tracker.transition_ms,
                                   data->scroll_sequence_active);
     iqs915x_update_sequence_gates(data);
 
-    iqs915x_update_single_tap_movement(data, &stream, num_fingers);
+    if (reported_fingers == num_fingers)
+    {
+      iqs915x_update_single_tap_movement(data, &stream, num_fingers);
+    }
+    if (finger_count_changed && num_fingers == 1)
+    {
+      data->gesture_pointer_suppress_ticks = 0;
+      iqs915x_reset_absolute_tracking(data);
+      if (reported_fingers == 1 &&
+          (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0)
+      {
+        data->last_abs_x = stream.abs_x;
+        data->last_abs_y = stream.abs_y;
+        data->last_abs_valid = true;
+      }
+    }
 
     bool has_tp_event = is_touching_now || touch_state_changed;
     if (tp_movement)
@@ -2935,14 +2982,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     if (has_tp_event)
     {
       bool scroll = iqs915x_handle_two_finger_scroll(config, data, &stream);
-      bool gesture_active = scroll || data->scroll_sequence_active ||
+      bool gesture_active = scroll ||
+                            (num_fingers >= 2 && data->scroll_sequence_active) ||
                             data->multifinger_swipe_latched;
       bool suppress_pointer_tail =
           !gesture_active && data->gesture_pointer_suppress_ticks > 0;
       bool suppress_pointer = gesture_active || suppress_pointer_tail;
       bool single_finger_pointer = data->finger_tracker.stable_count == 1;
       bool allow_pointer_report = !suppress_pointer && single_finger_pointer &&
-                                  !data->finger_tracker.awaiting_zero_contact;
+                                  reported_fingers == 1;
 
       if (gesture_active)
       {
@@ -2987,7 +3035,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           data->tap_max_movement < data->tap_distance;
       int64_t touch_duration_ms =
           touch_up && data->last_touch_down_time > 0
-              ? now_ms - data->last_touch_down_time
+              ? data->finger_tracker.transition_ms - data->last_touch_down_time
               : 0;
       bool tap_duration_ok =
           touch_up && touch_duration_ms <= data->tap_touch_time_ms;
@@ -3050,11 +3098,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         else
         {
           data->single_tap_pending = true;
-          data->pending_tap_up_time = now_ms;
+          data->pending_tap_up_time = data->finger_tracker.transition_ms;
           data->single_tap_work_generation =
               iqs915x_request_generation(data);
           k_work_schedule(&data->single_tap_work,
-                          K_MSEC(data->tap_air_time_ms));
+                          K_MSEC(MAX(0LL, data->pending_tap_up_time +
+                                         data->tap_air_time_ms - now_ms)));
           LOG_DBG("single tap pending: duration=%lld ms movement=%u "
                   "distance=%u air=%u ms stable_path=%u",
                   (long long)touch_duration_ms, data->tap_max_movement,
@@ -3133,7 +3182,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       else
       {
         bool abs_finger_valid =
-            is_touching_now && num_fingers == 1 &&
+            is_touching_now && num_fingers == 1 && reported_fingers == 1 &&
             (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0;
 
         if (touch_up)
@@ -3152,11 +3201,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           if (touch_down || tp_movement)
           {
             LOG_DBG(
-                "tp_absolute suppressed: fingers=%u stable=%u await0=%u "
+                "tp_absolute suppressed: fingers=%u stable=%u pending=%u "
                 "conf=%u scroll=%u gesture_seen=%u x=%u y=%u",
                 num_fingers,
                 data->finger_tracker.stable_count,
-                data->finger_tracker.awaiting_zero_contact,
+                data->finger_tracker.count_change_pending,
                 (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0,
                 data->scroll_sequence_active,
                 data->tap_drag_raw_gesture_seen,

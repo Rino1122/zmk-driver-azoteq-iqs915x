@@ -128,9 +128,40 @@ static void iqs915x_emit_gesture_tap(const struct device *dev, uint16_t gesture_
                        gesture_code, 0, true);
 }
 
+/* Delay changes within a contact sequence, but accept initial contact immediately.
+ * The core also wakes at the deadline when Event Mode supplies no further RDY. */
+uint8_t iqs915x_filter_finger_count(struct iqs915x_data *data,
+                                    uint8_t raw_count, int64_t now_ms)
+{
+  struct iqs915x_finger_tracker *tracker = &data->finger_tracker;
+
+  if (raw_count == tracker->stable_count || tracker->stable_count == 0)
+  {
+    tracker->count_change_pending = false;
+    tracker->transition_ms = now_ms;
+    return raw_count;
+  }
+
+  if (!tracker->count_change_pending || tracker->candidate_count != raw_count)
+  {
+    tracker->candidate_count = raw_count;
+    tracker->candidate_since_ms = now_ms;
+    tracker->count_change_pending = true;
+  }
+
+  if (now_ms - tracker->candidate_since_ms >= IQS915X_FINGER_COUNT_DEBOUNCE_MS)
+  {
+    tracker->count_change_pending = false;
+    tracker->transition_ms = tracker->candidate_since_ms;
+    return raw_count;
+  }
+
+  return tracker->stable_count;
+}
+
 void iqs915x_update_finger_state(struct iqs915x_data *data,
                                  const struct iqs915x_stream_data *stream,
-                                 bool is_touching_now,
+                                 uint8_t stable_count,
                                  bool touch_down_event,
                                  bool touch_up_event)
 {
@@ -155,7 +186,7 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     tracker->sequence_seen_two = false;
   }
 
-  tracker->stable_count = raw_count;
+  tracker->stable_count = stable_count;
 
   if (tracker->stable_count != stable_before)
   {
@@ -211,23 +242,7 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     tracker->sequence_seen_two = false;
   }
 
-  tracker->tail_suppressed =
-      stable_before == 2 && tracker->stable_count == 1;
-
-  if (stable_before >= 2 && tracker->stable_count == 1)
-  {
-    // 2本以上から1本へ遷移したら、0本接触を確認するまで
-    // 単指ポインタを再開しない。
-    tracker->awaiting_zero_contact = true;
-  }
-
-  if (!is_touching_now)
-  {
-    // 0本遷移はNUM_FINGERS==0だけで判定する。
-    tracker->awaiting_zero_contact = false;
-  }
-
-  if (tracker->stable_count != 2 || raw_count < 2)
+  if (tracker->stable_count != 2)
   {
     if (tracker->stable_count == 1 && data->scroll_sequence_active &&
         two_finger->active && two_finger->mode == IQS915X_2F_MODE_SCROLL)
@@ -240,6 +255,16 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     {
       iqs915x_reset_two_finger_session(data);
     }
+    return;
+  }
+
+  if (raw_count != 2)
+  {
+    /* Keep pending movement and fractions through a transient count change.
+     * Coordinates for missing fingers must never enter the centroid. */
+    two_finger->rebaseline_pending = true;
+    two_finger->centroid_dx = 0;
+    two_finger->centroid_dy = 0;
     return;
   }
 
@@ -311,6 +336,12 @@ bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config,
   uint16_t lock_den;
   uint16_t axis_threshold;
   uint16_t gesture_code;
+
+  if ((stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != stable_fingers)
+  {
+    iqs915x_reset_multifinger_swipe_state(data);
+    return false;
+  }
 
   if (!enabled)
   {
