@@ -395,6 +395,13 @@ struct iqs915x_two_finger_session
 {
     bool active;
     bool rebaseline_pending;
+    bool frame_valid;
+    bool reset_velocity;
+    bool gap_pending;
+    uint8_t finger_mask;
+    int64_t gap_since_ms;
+    uint16_t finger_last_x[2];
+    uint16_t finger_last_y[2];
     enum iqs915x_two_finger_mode mode;
     int32_t centroid_dx;
     int32_t centroid_dy;
@@ -529,6 +536,7 @@ struct iqs915x_data
     bool raw_single_tap_reported;
     bool raw_two_finger_tap_reported;
     bool tap_start_valid;
+    uint8_t tap_start_slot;
     int32_t tap_start_x;
     int32_t tap_start_y;
     uint32_t tap_max_movement;
@@ -539,6 +547,7 @@ struct iqs915x_data
     uint16_t last_abs_x; // 直前に報告したabsolute X座標
     uint16_t last_abs_y; // 直前に報告したabsolute Y座標
     bool last_abs_valid; // absolute座標の直前報告値が有効か
+    uint8_t pointer_slot; // 追跡中の指スロット、UINT8_MAX=無効
     int32_t pointer_x_acc; // ポインタ倍率適用時のX剰余（percent単位）
     int32_t pointer_y_acc; // ポインタ倍率適用時のY剰余（percent単位）
 
@@ -563,6 +572,7 @@ struct iqs915x_data
     int32_t swipe_last_centroid_y;
     bool swipe_centroid_valid;
     uint8_t swipe_active_fingers;
+    uint8_t swipe_finger_mask;
     uint16_t swipe_valid_frames;
     bool swipe_triggered;
     bool multifinger_swipe_latched;

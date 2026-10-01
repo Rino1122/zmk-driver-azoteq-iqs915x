@@ -343,6 +343,11 @@ static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolutio
   uint16_t distance;
   uint16_t corrected_distance;
 
+  if (raw == UINT16_MAX || (resolution > 0 && raw > resolution))
+  {
+    return UINT16_MAX;
+  }
+
   if (resolution == 0 || blocks == 0)
   {
     return raw;
@@ -419,6 +424,28 @@ static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *conf
       config->coord_lut_y_q15, config->coord_lut_y_len);
 }
 
+/* Validate before LUT correction so an unused 0xffff slot cannot become an
+ * apparently valid coordinate at the edge. Apply this even without correction. */
+static void iqs915x_validate_stream_coordinates(const struct iqs915x_data *data,
+                                                struct iqs915x_stream_data *stream)
+{
+  uint16_t *x[] = {&stream->abs_x, &stream->finger2_x,
+                   &stream->finger3_x, &stream->finger4_x};
+  uint16_t *y[] = {&stream->abs_y, &stream->finger2_y,
+                   &stream->finger3_y, &stream->finger4_y};
+
+  for (uint8_t slot = 0; slot < ARRAY_SIZE(x); slot++)
+  {
+    if (*x[slot] == UINT16_MAX || *y[slot] == UINT16_MAX ||
+        (data->swipe_resolution_x > 0 && *x[slot] > data->swipe_resolution_x) ||
+        (data->swipe_resolution_y > 0 && *y[slot] > data->swipe_resolution_y))
+    {
+      *x[slot] = UINT16_MAX;
+      *y[slot] = UINT16_MAX;
+    }
+  }
+}
+
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *data)
 {
   uint8_t fingers;
@@ -474,6 +501,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_x = (buf[41] << 8) | buf[40];
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
+  iqs915x_validate_stream_coordinates(dev->data, data);
   if (config->coordinate_correction)
   {
     iqs915x_correct_stream_coordinates(config, dev->data, data);
@@ -495,6 +523,7 @@ static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data)
   data->last_abs_x = 0;
   data->last_abs_y = 0;
   data->last_abs_valid = false;
+  data->pointer_slot = UINT8_MAX;
   iqs915x_reset_pointer_accumulators(data);
 }
 
@@ -525,7 +554,7 @@ static uint16_t iqs915x_absolute_discontinuity_threshold(const struct iqs915x_da
   return MAX((uint16_t)(min_res / 3U), (uint16_t)512U);
 }
 
-static bool iqs915x_absolute_delta_is_discontinuity(
+bool iqs915x_absolute_delta_is_discontinuity(
     const struct iqs915x_data *data, int32_t rel_x, int32_t rel_y)
 {
   uint16_t threshold = iqs915x_absolute_discontinuity_threshold(data);
@@ -1235,10 +1264,31 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
 
 #define IQS915X_SCROLL_UNITS_PER_AXIS 512
 #define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
+#define IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO 4
 
 static int32_t iqs915x_abs32(int32_t value)
 {
   return value < 0 ? -value : value;
+}
+
+static void iqs915x_filter_scroll_cross_axis(int16_t *x, int16_t *y)
+{
+  int32_t abs_x = iqs915x_abs32(*x);
+  int32_t abs_y = iqs915x_abs32(*y);
+
+  if (abs_x == 0 || abs_y == 0)
+  {
+    return;
+  }
+
+  if ((abs_x * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_y)
+  {
+    *x = 0;
+  }
+  else if ((abs_y * IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO) < abs_x)
+  {
+    *y = 0;
+  }
 }
 
 static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
@@ -1280,7 +1330,8 @@ static bool iqs915x_handle_two_finger_scroll(
   bool started_scroll = false;
 
   if (!config->scroll || data->finger_tracker.stable_count != 2 ||
-      !two_finger->active || data->scroll_blocked_until_low_contact ||
+      !two_finger->active || !two_finger->frame_valid ||
+      data->scroll_blocked_until_low_contact ||
       (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 2)
   {
     return false;
@@ -1306,6 +1357,7 @@ static bool iqs915x_handle_two_finger_scroll(
 
   motion_x = iqs915x_clamp_i16(two_finger->centroid_dx);
   motion_y = iqs915x_clamp_i16(two_finger->centroid_dy);
+  iqs915x_filter_scroll_cross_axis(&motion_x, &motion_y);
 
   if (started_scroll)
   {
@@ -1320,7 +1372,16 @@ static bool iqs915x_handle_two_finger_scroll(
     gy = motion_y;
   }
 
-  if (data->runtime_settings.scroll_inertia.enabled)
+  iqs915x_filter_scroll_cross_axis(&gx, &gy);
+
+  if (two_finger->reset_velocity)
+  {
+    /* Recovered movement spans multiple reports; never use it as a velocity. */
+    iqs915x_stop_scroll_inertia_locked(data);
+    data->last_scroll_motion_speed = 0;
+    data->last_scroll_motion_ms = 0;
+  }
+  if (data->runtime_settings.scroll_inertia.enabled && !two_finger->reset_velocity)
   {
     if (motion_x != 0)
     {
@@ -1691,6 +1752,7 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   state->ema_vx = step_x;
   state->ema_vy = step_y;
   state->is_inertial = true;
+  iqs915x_filter_scroll_cross_axis(&step_x, &step_y);
 
   if (step_x != 0)
   {
@@ -2936,15 +2998,19 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     {
       iqs915x_update_single_tap_movement(data, &stream, num_fingers);
     }
+    uint8_t pointer_slot = UINT8_MAX;
+    uint16_t pointer_x = 0, pointer_y = 0;
+    bool pointer_coordinates_valid =
+        iqs915x_select_single_finger(&stream, &pointer_slot, &pointer_x, &pointer_y);
     if (finger_count_changed && num_fingers == 1)
     {
       data->gesture_pointer_suppress_ticks = 0;
       iqs915x_reset_absolute_tracking(data);
-      if (reported_fingers == 1 &&
-          (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0)
+      if (pointer_coordinates_valid)
       {
-        data->last_abs_x = stream.abs_x;
-        data->last_abs_y = stream.abs_y;
+        data->pointer_slot = pointer_slot;
+        data->last_abs_x = pointer_x;
+        data->last_abs_y = pointer_y;
         data->last_abs_valid = true;
       }
     }
@@ -3158,8 +3224,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       else
       {
         bool abs_finger_valid =
-            is_touching_now && num_fingers == 1 && reported_fingers == 1 &&
-            (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0;
+            is_touching_now && num_fingers == 1 && pointer_coordinates_valid;
 
         if (touch_up)
         {
@@ -3178,14 +3243,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           {
             LOG_DBG(
                 "tp_absolute suppressed: fingers=%u stable=%u pending=%u "
-                "conf=%u scroll=%u gesture_seen=%u x=%u y=%u",
+                "mask=0x%x scroll=%u gesture_seen=%u x=%u y=%u",
                 num_fingers,
                 data->finger_tracker.stable_count,
                 data->finger_tracker.count_change_pending,
-                (stream.trackpad_flags & IQS915X_FINGER1_CONFIDENCE) != 0,
+                iqs915x_valid_finger_mask(&stream),
                 data->scroll_sequence_active,
                 data->tap_drag_raw_gesture_seen,
-                stream.abs_x, stream.abs_y);
+                pointer_x, pointer_y);
           }
         }
         else
@@ -3193,34 +3258,40 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           // 通常のポインタ操作が再開したら慣性スクロールを止める
           iqs915x_cancel_scroll_inertia(data);
 
-          if (touch_down || tp_movement)
+          if (data->pointer_slot != pointer_slot)
+          {
+            LOG_DBG("pointer slot changed: %u -> %u", data->pointer_slot, pointer_slot);
+            iqs915x_reset_absolute_tracking(data);
+          }
+          data->pointer_slot = pointer_slot;
+          if (touch_down || tp_movement || !data->last_abs_valid)
           {
             if (data->pointer_resume_guard_frames > 0)
             {
-              data->last_abs_x = stream.abs_x;
-              data->last_abs_y = stream.abs_y;
+              data->last_abs_x = pointer_x;
+              data->last_abs_y = pointer_y;
               data->last_abs_valid = true;
               iqs915x_reset_pointer_accumulators(data);
               data->pointer_resume_guard_frames--;
               LOG_DBG("tp_resume_baseline: generation=%u remaining=%u x=%u y=%u",
                       iqs915x_request_generation(data),
                       data->pointer_resume_guard_frames,
-                      stream.abs_x, stream.abs_y);
+                      pointer_x, pointer_y);
             }
             else if (!data->last_abs_valid)
             {
               // 初回は基準点のみ保存し、次フレーム以降をデルタ報告する
-              data->last_abs_x = stream.abs_x;
-              data->last_abs_y = stream.abs_y;
+              data->last_abs_x = pointer_x;
+              data->last_abs_y = pointer_y;
               data->last_abs_valid = true;
             }
             else
             {
-              int32_t rel_x = (int32_t)stream.abs_x - (int32_t)data->last_abs_x;
-              int32_t rel_y = (int32_t)stream.abs_y - (int32_t)data->last_abs_y;
+              int32_t rel_x = (int32_t)pointer_x - (int32_t)data->last_abs_x;
+              int32_t rel_y = (int32_t)pointer_y - (int32_t)data->last_abs_y;
 
-              data->last_abs_x = stream.abs_x;
-              data->last_abs_y = stream.abs_y;
+              data->last_abs_x = pointer_x;
+              data->last_abs_y = pointer_y;
 
               if (iqs915x_absolute_delta_is_discontinuity(data, rel_x, rel_y))
               {
@@ -3229,7 +3300,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                         "threshold=%u x=%u y=%u",
                         (int)rel_x, (int)rel_y,
                         iqs915x_absolute_discontinuity_threshold(data),
-                        stream.abs_x, stream.abs_y);
+                        pointer_x, pointer_y);
               }
               else if (rel_x != 0 || rel_y != 0)
               {
@@ -3244,7 +3315,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                 LOG_DBG("tp_absrel: rel_x=%d, rel_y=%d scale=%u out_x=%d "
                         "out_y=%d (x=%u y=%u)",
                         (int)raw_rel_x, (int)raw_rel_y, pointer_scale,
-                        (int)rel_x, (int)rel_y, stream.abs_x, stream.abs_y);
+                        (int)rel_x, (int)rel_y, pointer_x, pointer_y);
 
                 if (rel_x != 0 || rel_y != 0)
                 {

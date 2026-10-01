@@ -19,6 +19,57 @@
 
 LOG_MODULE_REGISTER(iqs915x_gestures, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
+bool iqs915x_get_finger_coordinates(const struct iqs915x_stream_data *stream,
+                                    uint8_t slot, uint16_t *x, uint16_t *y)
+{
+  switch (slot)
+  {
+  case 0: *x = stream->abs_x; *y = stream->abs_y; break;
+  case 1: *x = stream->finger2_x; *y = stream->finger2_y; break;
+  case 2: *x = stream->finger3_x; *y = stream->finger3_y; break;
+  case 3: *x = stream->finger4_x; *y = stream->finger4_y; break;
+  default: return false;
+  }
+  return *x != UINT16_MAX && *y != UINT16_MAX;
+}
+
+uint8_t iqs915x_valid_finger_mask(const struct iqs915x_stream_data *stream)
+{
+  uint8_t mask = 0;
+  uint16_t x, y;
+
+  for (uint8_t slot = 0; slot < 4; slot++)
+  {
+    if (iqs915x_get_finger_coordinates(stream, slot, &x, &y))
+    {
+      mask |= BIT(slot);
+    }
+  }
+  return mask;
+}
+
+bool iqs915x_select_single_finger(const struct iqs915x_stream_data *stream,
+                                  uint8_t *slot, uint16_t *x, uint16_t *y)
+{
+  uint8_t mask = iqs915x_valid_finger_mask(stream);
+
+  if ((stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK) != 1 ||
+      POPCOUNT(mask) != 1)
+  {
+    return false;
+  }
+  for (uint8_t index = 0; index < 4; index++)
+  {
+    if ((mask & BIT(index)) != 0)
+    {
+      *slot = index;
+      return (stream->trackpad_flags & BIT(8 + index)) != 0 &&
+             iqs915x_get_finger_coordinates(stream, index, x, y);
+    }
+  }
+  return false;
+}
+
 static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
 {
   memset(&data->two_finger, 0, sizeof(data->two_finger));
@@ -35,6 +86,7 @@ void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->swipe_last_centroid_y = 0;
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
+  data->swipe_finger_mask = 0;
   data->swipe_valid_frames = 0;
   data->swipe_triggered = false;
   data->multifinger_swipe_latched = false;
@@ -45,6 +97,7 @@ void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
   data->raw_single_tap_reported = false;
   data->raw_two_finger_tap_reported = false;
   data->tap_start_valid = false;
+  data->tap_start_slot = UINT8_MAX;
   data->tap_start_x = 0;
   data->tap_start_y = 0;
   data->tap_max_movement = 0;
@@ -62,6 +115,7 @@ static void iqs915x_reset_multifinger_swipe_state(struct iqs915x_data *data)
   data->swipe_last_centroid_y = 0;
   data->swipe_centroid_valid = false;
   data->swipe_active_fingers = 0;
+  data->swipe_finger_mask = 0;
   data->swipe_valid_frames = 0;
   data->swipe_triggered = false;
 }
@@ -242,14 +296,19 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     tracker->sequence_seen_two = false;
   }
 
+  two_finger->frame_valid = false;
+  two_finger->reset_velocity = false;
+  two_finger->centroid_dx = 0;
+  two_finger->centroid_dy = 0;
+
   if (tracker->stable_count != 2)
   {
     if (tracker->stable_count == 1 && data->scroll_sequence_active &&
         two_finger->active && two_finger->mode == IQS915X_2F_MODE_SCROLL)
     {
+      /* A confirmed pointer interval is never included in resumed scrolling. */
       two_finger->rebaseline_pending = true;
-      two_finger->centroid_dx = 0;
-      two_finger->centroid_dy = 0;
+      two_finger->gap_pending = false;
     }
     else
     {
@@ -258,61 +317,107 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     return;
   }
 
-  if (raw_count != 2)
+  uint8_t finger_mask = iqs915x_valid_finger_mask(stream);
+  int64_t now_ms = k_uptime_get();
+  if (raw_count != 2 || POPCOUNT(finger_mask) != 2)
   {
-    /* Keep pending movement and fractions through a transient count change.
-     * Coordinates for missing fingers must never enter the centroid. */
-    two_finger->rebaseline_pending = true;
-    two_finger->centroid_dx = 0;
-    two_finger->centroid_dy = 0;
+    if (two_finger->active && !two_finger->gap_pending)
+    {
+      two_finger->gap_pending = true;
+      two_finger->gap_since_ms = now_ms;
+    }
+    if (raw_count > 2)
+    {
+      two_finger->rebaseline_pending = true;
+    }
     return;
   }
 
-  int32_t centroid_x = ((int32_t)stream->abs_x + (int32_t)stream->finger2_x) / 2;
-  int32_t centroid_y = ((int32_t)stream->abs_y + (int32_t)stream->finger2_y) / 2;
-  int32_t finger_dx = (int32_t)stream->abs_x - (int32_t)stream->finger2_x;
-  int32_t finger_dy = (int32_t)stream->abs_y - (int32_t)stream->finger2_y;
-  int32_t distance = abs(finger_dx) + abs(finger_dy);
-
-  if (!two_finger->active)
+  uint16_t x[2], y[2];
+  uint8_t index = 0;
+  for (uint8_t slot = 0; slot < 4; slot++)
   {
-    two_finger->active = true;
-    two_finger->rebaseline_pending = false;
-    two_finger->mode = IQS915X_2F_MODE_NONE;
-    two_finger->centroid_last_x = centroid_x;
-    two_finger->centroid_last_y = centroid_y;
-    two_finger->centroid_start_x = centroid_x;
-    two_finger->centroid_start_y = centroid_y;
-    two_finger->max_centroid_movement = 0;
-    two_finger->distance_last = distance;
-    return;
+    if ((finger_mask & BIT(slot)) != 0)
+    {
+      iqs915x_get_finger_coordinates(stream, slot, &x[index], &y[index]);
+      index++;
+    }
+  }
+  int32_t centroid_x = ((int32_t)x[0] + x[1]) / 2;
+  int32_t centroid_y = ((int32_t)y[0] + y[1]) / 2;
+  int32_t distance = abs((int32_t)x[0] - x[1]) + abs((int32_t)y[0] - y[1]);
+  bool recovered = two_finger->gap_pending;
+  bool rebaseline = !two_finger->active || two_finger->rebaseline_pending ||
+                    two_finger->finger_mask != finger_mask;
+
+  if (recovered && now_ms - two_finger->gap_since_ms >=
+                       IQS915X_FINGER_COUNT_DEBOUNCE_MS)
+  {
+    rebaseline = true;
+  }
+  if (!rebaseline)
+  {
+    for (uint8_t finger = 0; finger < 2; finger++)
+    {
+      if (iqs915x_absolute_delta_is_discontinuity(
+              data, (int32_t)x[finger] - two_finger->finger_last_x[finger],
+              (int32_t)y[finger] - two_finger->finger_last_y[finger]))
+      {
+        rebaseline = true;
+      }
+    }
   }
 
-  if (two_finger->rebaseline_pending)
+  two_finger->frame_valid = true;
+  two_finger->reset_velocity = recovered || rebaseline;
+  two_finger->gap_pending = false;
+  two_finger->rebaseline_pending = false;
+
+  if (rebaseline)
   {
-    two_finger->rebaseline_pending = false;
-    two_finger->centroid_dx = 0;
-    two_finger->centroid_dy = 0;
-    two_finger->centroid_last_x = centroid_x;
-    two_finger->centroid_last_y = centroid_y;
-    two_finger->distance_last = distance;
-    return;
+    if (!two_finger->active)
+    {
+      two_finger->mode = IQS915X_2F_MODE_NONE;
+    }
+    if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
+    {
+      two_finger->pending_dx = 0;
+      two_finger->pending_dy = 0;
+      two_finger->centroid_start_x = centroid_x;
+      two_finger->centroid_start_y = centroid_y;
+      two_finger->max_centroid_movement = 0;
+    }
+    LOG_DBG("scroll baseline: mask=0x%x previous=0x%x gap=%u",
+            finger_mask, two_finger->finger_mask, recovered);
+  }
+  else
+  {
+    two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
+    two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
+    if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
+    {
+      two_finger->pending_dx += two_finger->centroid_dx;
+      two_finger->pending_dy += two_finger->centroid_dy;
+    }
+    two_finger->max_centroid_movement =
+        MAX(two_finger->max_centroid_movement,
+            iqs915x_axis_movement(centroid_x - two_finger->centroid_start_x,
+                                  centroid_y - two_finger->centroid_start_y));
+    if (recovered)
+    {
+      LOG_DBG("scroll gap recovered: mask=0x%x gap_ms=%lld dx=%d dy=%d",
+              finger_mask, (long long)(now_ms - two_finger->gap_since_ms),
+              (int)two_finger->centroid_dx, (int)two_finger->centroid_dy);
+    }
   }
 
-  two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
-  two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
-  if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
-  {
-    two_finger->pending_dx += two_finger->centroid_dx;
-    two_finger->pending_dy += two_finger->centroid_dy;
-  }
-  two_finger->max_centroid_movement =
-      MAX(two_finger->max_centroid_movement,
-          iqs915x_axis_movement(centroid_x - two_finger->centroid_start_x,
-                                centroid_y - two_finger->centroid_start_y));
+  two_finger->active = true;
+  two_finger->finger_mask = finger_mask;
   two_finger->centroid_last_x = centroid_x;
   two_finger->centroid_last_y = centroid_y;
   two_finger->distance_last = distance;
+  memcpy(two_finger->finger_last_x, x, sizeof(x));
+  memcpy(two_finger->finger_last_y, y, sizeof(y));
 }
 
 bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config,
@@ -356,24 +461,35 @@ bool iqs915x_handle_multifinger_swipe(const struct iqs915x_config *config,
     return true;
   }
 
-  centroid_x = (int32_t)stream->abs_x + (int32_t)stream->finger2_x +
-               (int32_t)stream->finger3_x;
-  centroid_y = (int32_t)stream->abs_y + (int32_t)stream->finger2_y +
-               (int32_t)stream->finger3_y;
-  if (stable_fingers == 4)
+  uint8_t finger_mask = iqs915x_valid_finger_mask(stream);
+  if (POPCOUNT(finger_mask) != stable_fingers)
   {
-    centroid_x += (int32_t)stream->finger4_x;
-    centroid_y += (int32_t)stream->finger4_y;
+    iqs915x_reset_multifinger_swipe_state(data);
+    return true;
+  }
+  centroid_x = 0;
+  centroid_y = 0;
+  for (uint8_t slot = 0; slot < 4; slot++)
+  {
+    uint16_t x, y;
+    if ((finger_mask & BIT(slot)) != 0 &&
+        iqs915x_get_finger_coordinates(stream, slot, &x, &y))
+    {
+      centroid_x += x;
+      centroid_y += y;
+    }
   }
   centroid_x /= stable_fingers;
   centroid_y /= stable_fingers;
 
-  if (!data->swipe_centroid_valid || data->swipe_active_fingers != stable_fingers)
+  if (!data->swipe_centroid_valid || data->swipe_active_fingers != stable_fingers ||
+      data->swipe_finger_mask != finger_mask)
   {
     data->swipe_last_centroid_x = centroid_x;
     data->swipe_last_centroid_y = centroid_y;
     data->swipe_centroid_valid = true;
     data->swipe_active_fingers = stable_fingers;
+    data->swipe_finger_mask = finger_mask;
     data->swipe_valid_frames = 0;
     data->swipe_triggered = false;
     return true;
@@ -468,16 +584,24 @@ void iqs915x_update_single_tap_movement(
     struct iqs915x_data *data, const struct iqs915x_stream_data *stream,
     uint8_t num_fingers)
 {
-  if (num_fingers != 1 ||
-      (stream->trackpad_flags & IQS915X_FINGER1_CONFIDENCE) == 0)
+  uint8_t slot;
+  uint16_t x, y;
+  if (num_fingers != 1 || !iqs915x_select_single_finger(stream, &slot, &x, &y))
   {
     return;
   }
 
+  if (data->tap_start_valid && data->tap_start_slot != slot)
+  {
+    /* A new tracking identity is not a tap movement or a second touch. */
+    data->tap_drag_raw_gesture_seen = true;
+    data->tap_start_valid = false;
+  }
   if (!data->tap_start_valid)
   {
-    data->tap_start_x = stream->abs_x;
-    data->tap_start_y = stream->abs_y;
+    data->tap_start_slot = slot;
+    data->tap_start_x = x;
+    data->tap_start_y = y;
     data->tap_start_valid = true;
     data->tap_max_movement = 0;
     return;
@@ -485,8 +609,8 @@ void iqs915x_update_single_tap_movement(
 
   data->tap_max_movement =
       MAX(data->tap_max_movement,
-          iqs915x_axis_movement((int32_t)stream->abs_x - data->tap_start_x,
-                                (int32_t)stream->abs_y - data->tap_start_y));
+          iqs915x_axis_movement((int32_t)x - data->tap_start_x,
+                                (int32_t)y - data->tap_start_y));
 
   if (data->tap_max_movement >= data->tap_distance)
   {

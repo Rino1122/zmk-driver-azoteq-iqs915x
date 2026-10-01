@@ -177,22 +177,39 @@ normalization.
 
 Finger-count changes during contact are debounced for 20 ms; initial contact
 is accepted immediately. Touch boundaries, tap/drag recognition and scroll
-release use the confirmed count. Transient count changes retain the scroll
-session and fractions, but movement reports pause while the raw count does not
-match the confirmed count. Two-finger coordinates are rebaselined after such a
-pause, so movement during missing-coordinate intervals is not reconstructed.
-A confirmed change from multiple fingers to one allows cursor movement without
-requiring a zero-finger interval. The transition position becomes the cursor
-baseline; an established scroll session retains its fractions if two fingers
-return before release. Event Mode count confirmation uses a timed thread wake
-and the latest snapshot, without an extra I2C read.
+release use the confirmed count. Unused (`0xffff`) and out-of-range XY pairs
+are rejected before coordinate correction. Valid coordinates identify occupied
+finger slots; confidence bits are checked separately for single-finger input
+and are not used as occupancy flags. The driver reads four coordinate slots;
+frames with more fingers or an ambiguous number of valid slots do not produce
+movement from an assumed slot assignment.
+
+Transient count changes retain the scroll session and fractions. During a
+missing-coordinate interval, movement reports pause and the last valid centroid
+is retained. If the same two slots return less than 20 ms after the first
+invalid report, and neither finger has a discontinuous coordinate change, the
+full centroid delta is accumulated once. Recovered movement is excluded from
+inertia velocity and clears the previous inertia candidate. Longer gaps, slot
+changes and discontinuities rebaseline instead. Slot reuse after a brief loss
+cannot be distinguished from continuous physical contact; the time and
+coordinate guards limit recovery to plausible continuity.
+
+A confirmed change from multiple fingers to one allows cursor movement using
+the remaining valid slot without requiring a zero-finger interval. A change of
+pointer slot establishes a new baseline instead of emitting the position jump.
+An established scroll session retains its fractions if two fingers return
+before release, but movement during the confirmed one-finger interval is not
+added to scrolling. Swipe centroids also use the valid slots and rebaseline on
+slot changes. Event Mode count confirmation uses a timed thread wake and the
+latest snapshot, without an extra I2C read. The original scroll cross-axis
+filter remains applied to manual and inertial deltas.
 
 When scroll inertia is enabled, the driver starts it only after a zero-finger
 count is confirmed. `trigger-ms` is measured from the first zero-finger report;
 inertia cannot start before the 20 ms confirmation completes. Raw contact
 cancels pending or running inertia immediately. Tap duration and motion freshness
-also use the first zero-finger report time, excluding the confirmation delay. A stationary pause does
-not trigger inertia: the last non-zero scroll movement must be recent at
+also use the first zero-finger report time, excluding the confirmation delay.
+A stationary pause does not trigger inertia: the last non-zero scroll movement must be recent at
 release. Motion and inertia use separate fractional accumulators so stopping or
 cancelling inertia does not discard manual-scroll remainders. Inertia follows a
 Q8 fixed-point decay flow with remainder preservation and stops when the

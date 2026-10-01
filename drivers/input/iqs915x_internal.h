@@ -34,6 +34,14 @@ struct iqs915x_stream_data {
   uint16_t finger4_y;
 };
 
+/* A confidence bit is not an occupancy flag. Select slots using valid XY pairs. */
+bool iqs915x_get_finger_coordinates(const struct iqs915x_stream_data *stream,
+                                    uint8_t slot, uint16_t *x, uint16_t *y);
+uint8_t iqs915x_valid_finger_mask(const struct iqs915x_stream_data *stream);
+bool iqs915x_select_single_finger(const struct iqs915x_stream_data *stream,
+                                  uint8_t *slot, uint16_t *x, uint16_t *y);
+bool iqs915x_absolute_delta_is_discontinuity(
+    const struct iqs915x_data *data, int32_t rel_x, int32_t rel_y);
 uint32_t iqs915x_axis_movement(int32_t dx, int32_t dy);
 bool iqs915x_report_event(struct iqs915x_data *data, uint16_t type,
                           uint16_t code, int32_t value, bool sync);
