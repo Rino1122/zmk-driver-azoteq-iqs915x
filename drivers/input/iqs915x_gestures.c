@@ -276,6 +276,11 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
 
   two_finger->centroid_dx = centroid_x - two_finger->centroid_last_x;
   two_finger->centroid_dy = centroid_y - two_finger->centroid_last_y;
+  if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
+  {
+    two_finger->pending_dx += two_finger->centroid_dx;
+    two_finger->pending_dy += two_finger->centroid_dy;
+  }
   two_finger->max_centroid_movement =
       MAX(two_finger->max_centroid_movement,
           iqs915x_axis_movement(centroid_x - two_finger->centroid_start_x,

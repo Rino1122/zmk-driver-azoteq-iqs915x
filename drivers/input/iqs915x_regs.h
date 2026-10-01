@@ -396,6 +396,8 @@ struct iqs915x_two_finger_session
     enum iqs915x_two_finger_mode mode;
     int32_t centroid_dx;
     int32_t centroid_dy;
+    int32_t pending_dx;
+    int32_t pending_dy;
     int32_t centroid_last_x;
     int32_t centroid_last_y;
     int32_t centroid_start_x;
@@ -538,9 +540,16 @@ struct iqs915x_data
     int32_t pointer_x_acc; // ポインタ倍率適用時のX剰余（percent単位）
     int32_t pointer_y_acc; // ポインタ倍率適用時のY剰余（percent単位）
 
-    // スクロールアキュムレータ
+    // 手動スクロールの正規化端数（settings_lockで保護）
     int32_t scroll_x_acc;
     int32_t scroll_y_acc;
+
+    // 慣性出力用の正規化端数。手動操作とは独立（settings_lockで保護）
+    int32_t inertia_scroll_x_acc;
+    int32_t inertia_scroll_y_acc;
+    uint8_t scroll_contact_fingers; // 最新NUM_FINGERS（settings_lockで保護）
+    uint16_t last_scroll_motion_speed;
+    int64_t last_scroll_motion_ms;
 
     struct iqs915x_finger_tracker finger_tracker;
     struct iqs915x_two_finger_session two_finger;

@@ -1295,7 +1295,10 @@ static bool iqs915x_handle_two_finger_scroll(
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
   int16_t gx;
   int16_t gy;
+  int16_t motion_x;
+  int16_t motion_y;
   bool emitted = false;
+  bool started_scroll = false;
 
   if (!config->scroll || data->finger_tracker.stable_count != 2 ||
       !two_finger->active || data->scroll_blocked_until_low_contact)
@@ -1316,54 +1319,57 @@ static bool iqs915x_handle_two_finger_scroll(
     two_finger->mode = IQS915X_2F_MODE_SCROLL;
     data->scroll_sequence_active = true;
     data->tap_drag_raw_gesture_seen = true;
+    started_scroll = true;
     LOG_DBG("scroll started from centroid movement: max=%u threshold=%u",
             two_finger->max_centroid_movement, data->tap_distance);
   }
 
-  gx = iqs915x_clamp_i16(two_finger->centroid_dx);
-  gy = iqs915x_clamp_i16(two_finger->centroid_dy);
+  motion_x = iqs915x_clamp_i16(two_finger->centroid_dx);
+  motion_y = iqs915x_clamp_i16(two_finger->centroid_dy);
+  iqs915x_filter_scroll_cross_axis(&motion_x, &motion_y);
+
+  if (started_scroll)
+  {
+    gx = iqs915x_clamp_i16(two_finger->pending_dx);
+    gy = iqs915x_clamp_i16(two_finger->pending_dy);
+    two_finger->pending_dx = 0;
+    two_finger->pending_dy = 0;
+  }
+  else
+  {
+    gx = motion_x;
+    gy = motion_y;
+  }
   iqs915x_filter_scroll_cross_axis(&gx, &gy);
+
+  if (data->runtime_settings.scroll_inertia.enabled)
+  {
+    if (motion_x != 0)
+    {
+      data->scroll_inertia_state.vx = motion_x;
+      data->scroll_inertia_state.ema_vx =
+          (int16_t)((motion_x + data->scroll_inertia_state.ema_vx) >> 1);
+    }
+
+    if (motion_y != 0)
+    {
+      data->scroll_inertia_state.vy = motion_y;
+      data->scroll_inertia_state.ema_vy =
+          (int16_t)((motion_y + data->scroll_inertia_state.ema_vy) >> 1);
+    }
+
+    if (motion_x != 0 || motion_y != 0)
+    {
+      data->last_scroll_motion_speed =
+          (uint16_t)MAX(abs(motion_x), abs(motion_y));
+      data->last_scroll_motion_ms = k_uptime_get();
+    }
+  }
 
   if (gx == 0 && gy == 0)
   {
     k_mutex_unlock(&data->settings_lock);
     return true;
-  }
-
-  if (data->runtime_settings.scroll_inertia.enabled)
-  {
-    if (data->scroll_inertia_state.active &&
-        data->scroll_inertia_state.is_inertial)
-    {
-      iqs915x_stop_scroll_inertia_locked(data);
-    }
-
-    if (gx != 0)
-    {
-      data->scroll_inertia_state.vx = gx;
-      data->scroll_inertia_state.ema_vx =
-          (int16_t)((gx + data->scroll_inertia_state.ema_vx) >> 1);
-    }
-
-    if (gy != 0)
-    {
-      data->scroll_inertia_state.vy = gy;
-      data->scroll_inertia_state.ema_vy =
-          (int16_t)((gy + data->scroll_inertia_state.ema_vy) >> 1);
-    }
-
-    if (abs(data->scroll_inertia_state.vx) >=
-            data->runtime_settings.scroll_inertia.threshold_start ||
-        abs(data->scroll_inertia_state.vy) >=
-            data->runtime_settings.scroll_inertia.threshold_start)
-    {
-      data->scroll_inertia_state.active = true;
-      data->scroll_inertia_state.is_inertial = false;
-      data->scroll_inertia_work_generation =
-          iqs915x_request_generation(data);
-      k_work_reschedule(&data->scroll_inertia_work,
-                        K_MSEC(data->runtime_settings.scroll_inertia.trigger_ms));
-    }
   }
 
   if (gx != 0)
@@ -1520,14 +1526,121 @@ static void iqs915x_stop_scroll_inertia_locked(struct iqs915x_data *data)
 {
   k_work_cancel_delayable(&data->scroll_inertia_work);
   memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
-  data->scroll_x_acc = 0;
-  data->scroll_y_acc = 0;
+  data->inertia_scroll_x_acc = 0;
+  data->inertia_scroll_y_acc = 0;
 }
 
 static void iqs915x_reset_scroll_inertia(struct iqs915x_data *data)
 {
   k_mutex_lock(&data->settings_lock, K_FOREVER);
   iqs915x_stop_scroll_inertia_locked(data);
+  data->scroll_x_acc = 0;
+  data->scroll_y_acc = 0;
+  data->scroll_contact_fingers = 0;
+  data->last_scroll_motion_speed = 0;
+  data->last_scroll_motion_ms = 0;
+  k_mutex_unlock(&data->settings_lock);
+}
+
+static uint32_t iqs915x_scroll_motion_stale_ms(
+    const struct iqs915x_config *config, uint16_t trigger_ms)
+{
+  uint16_t report_rate_ms = config->report_rate_ms;
+
+  if (report_rate_ms == 0 &&
+      !iqs915x_get_init_data_reg16(config,
+                                   IQS915X_ACTIVE_MODE_REPORT_RATE,
+                                   &report_rate_ms))
+  {
+    report_rate_ms = 10;
+  }
+  if (report_rate_ms == 0)
+  {
+    report_rate_ms = 10;
+  }
+
+  return MAX((uint32_t)trigger_ms,
+             (uint32_t)report_rate_ms * 2U);
+}
+
+static void iqs915x_update_scroll_contact(
+    const struct iqs915x_config *config, struct iqs915x_data *data,
+    uint8_t num_fingers, bool released_scroll_sequence)
+{
+  struct iqs915x_scroll_inertia_state *state =
+      &data->scroll_inertia_state;
+  const struct iqs915x_scroll_inertia_settings *profile;
+  uint8_t previous_fingers;
+  int64_t now_ms = k_uptime_get();
+
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  previous_fingers = data->scroll_contact_fingers;
+  profile = &data->runtime_settings.scroll_inertia;
+
+  if (num_fingers > 0)
+  {
+    data->scroll_contact_fingers = num_fingers;
+
+    if (state->active)
+    {
+      iqs915x_stop_scroll_inertia_locked(data);
+      data->last_scroll_motion_speed = 0;
+      data->last_scroll_motion_ms = 0;
+    }
+
+    if (num_fingers >= 3)
+    {
+      iqs915x_stop_scroll_inertia_locked(data);
+      data->scroll_x_acc = 0;
+      data->scroll_y_acc = 0;
+      data->last_scroll_motion_speed = 0;
+      data->last_scroll_motion_ms = 0;
+    }
+
+    k_mutex_unlock(&data->settings_lock);
+    return;
+  }
+
+  data->scroll_contact_fingers = 0;
+  if (previous_fingers == 0)
+  {
+    k_mutex_unlock(&data->settings_lock);
+    return;
+  }
+
+  uint32_t stale_ms = iqs915x_scroll_motion_stale_ms(
+      config, profile->trigger_ms);
+  bool recent_motion = data->last_scroll_motion_ms > 0 &&
+                       now_ms - data->last_scroll_motion_ms <= stale_ms;
+  bool fast_enough = data->last_scroll_motion_speed >=
+                     profile->threshold_start;
+
+  if (released_scroll_sequence && profile->enabled && recent_motion &&
+      fast_enough)
+  {
+    state->active = true;
+    state->is_inertial = false;
+    state->zero_output_ticks = 0;
+    state->remainder_x_q8 = 0;
+    state->remainder_y_q8 = 0;
+    data->inertia_scroll_x_acc = data->scroll_x_acc;
+    data->inertia_scroll_y_acc = data->scroll_y_acc;
+    data->scroll_x_acc = 0;
+    data->scroll_y_acc = 0;
+    data->scroll_inertia_work_generation =
+        iqs915x_request_generation(data);
+    k_work_reschedule(&data->scroll_inertia_work,
+                      K_MSEC(profile->trigger_ms));
+  }
+  else
+  {
+    iqs915x_stop_scroll_inertia_locked(data);
+    data->scroll_x_acc = 0;
+    data->scroll_y_acc = 0;
+  }
+
+  data->last_scroll_motion_speed = 0;
+  data->last_scroll_motion_ms = 0;
   k_mutex_unlock(&data->settings_lock);
 }
 
@@ -1554,6 +1667,13 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
           data, data->scroll_inertia_work_generation) ||
       !state->active || !profile->enabled)
   {
+    k_mutex_unlock(&data->settings_lock);
+    return;
+  }
+
+  if (data->scroll_contact_fingers != 0)
+  {
+    iqs915x_stop_scroll_inertia_locked(data);
     k_mutex_unlock(&data->settings_lock);
     return;
   }
@@ -1598,14 +1718,14 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   if (step_x != 0)
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
-        data, &data->scroll_x_acc, INPUT_REL_HWHEEL, step_x,
+        data, &data->inertia_scroll_x_acc, INPUT_REL_HWHEEL, step_x,
         data->swipe_resolution_x, config->scroll_divisor);
   }
 
   if (step_y != 0)
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
-        data, &data->scroll_y_acc, INPUT_REL_WHEEL, step_y,
+        data, &data->inertia_scroll_y_acc, INPUT_REL_WHEEL, step_y,
         data->swipe_resolution_y, config->scroll_divisor);
   }
 
@@ -1815,10 +1935,12 @@ int iqs915x_apply_settings(const struct device *dev,
     k_work_cancel_delayable(&data->scroll_inertia_work);
     memset(&data->scroll_inertia_state, 0,
            sizeof(data->scroll_inertia_state));
+    data->inertia_scroll_x_acc = 0;
+    data->inertia_scroll_y_acc = 0;
+    data->last_scroll_motion_speed = 0;
+    data->last_scroll_motion_ms = 0;
     data->pointer_x_acc = 0;
     data->pointer_y_acc = 0;
-    data->scroll_x_acc = 0;
-    data->scroll_y_acc = 0;
     data->runtime_settings = *settings;
     ret = 0;
   }
@@ -2798,6 +2920,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     data->is_touching = is_touching_now;
     iqs915x_update_finger_state(data, &stream, is_touching_now,
                                 touch_down, touch_up);
+    iqs915x_update_scroll_contact(config, data, num_fingers,
+                                  data->scroll_sequence_active);
     iqs915x_update_sequence_gates(data);
 
     iqs915x_update_single_tap_movement(data, &stream, num_fingers);
@@ -2842,16 +2966,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         data->last_touch_down_time = now_ms;
       }
 
-      if (!scroll)
+      if (!scroll && !data->scroll_sequence_active)
       {
-        // スクロール入力が停止しても慣性がアクティブなら継続させる。
-        // 非アクティブ時のみアキュムレータをクリアする。
+        // スクロールセッション外では、慣性とは独立した手動端数を破棄する。
         k_mutex_lock(&data->settings_lock, K_FOREVER);
-        if (!data->scroll_inertia_state.active)
-        {
-          data->scroll_x_acc = 0;
-          data->scroll_y_acc = 0;
-        }
+        data->scroll_x_acc = 0;
+        data->scroll_y_acc = 0;
         k_mutex_unlock(&data->settings_lock);
       }
 

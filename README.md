@@ -168,16 +168,20 @@ events. To expose gesture controls in Studio, add 8 gesture slots on the
 firmware side and map the gesture events to those keymap positions with an input
 processor.
 
-The current scroll inertia model uses two-finger centroid deltas from absolute
-coordinates. Raw deltas are normalized by the init-data X/Y resolutions before
-being reported as wheel events, so firmware-side input scaling can stay in a
-coarse preference range such as 1/2 to 1/5 instead of compensating for raw
-sensor units. `scroll-divisor` is an extra coarse divisor applied after that
-normalization; the default of 2 is tuned to keep low-speed output granular
-enough for smooth motion while leaving room for a small firmware-side
-preference scaler. Inertia follows a Q8 fixed-point decay flow with remainder
-preservation and stops when the decayed motion no longer reaches HID output for
-several ticks.
+Two-finger scrolling uses centroid deltas from absolute coordinates. Movement
+before the tap-distance threshold is retained and emitted once scrolling is
+recognized, so the output reflects the full gesture displacement. Raw deltas
+are normalized by the init-data X/Y resolutions before being reported as wheel
+events. `scroll-divisor` is an extra coarse divisor applied after that
+normalization.
+
+When scroll inertia is enabled, the driver starts it only after `NUM_FINGERS`
+reaches zero. `trigger-ms` is the delay after release. A stationary pause does
+not trigger inertia: the last non-zero scroll movement must be recent at
+release. Motion and inertia use separate fractional accumulators so stopping or
+cancelling inertia does not discard manual-scroll remainders. Inertia follows a
+Q8 fixed-point decay flow with remainder preservation and stops when the
+decayed motion no longer reaches HID output for several ticks.
 
 See [docs/scroll_parameters_ja.md](docs/scroll_parameters_ja.md) for a
 practical Japanese guide to each scroll parameter and tuning workflow.

@@ -97,8 +97,9 @@ properties:
     type: int
     default: 35
     description: |
-      Delay in ms between the last manual scroll input and inertia start.
-      Recommended: at least 2x your sensor polling interval.
+      Delay in ms from confirmed finger release (NUM_FINGERS == 0) to inertia
+      start. Inertia starts only if a sufficiently fast scroll movement occurred
+      within the larger of this delay and two sensor report intervals.
 
   scroll-decay-factor-int:
     type: int
