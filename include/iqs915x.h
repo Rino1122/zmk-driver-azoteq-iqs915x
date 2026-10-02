@@ -68,6 +68,7 @@ struct iqs915x_settings_limits {
  *                再ラッチ完了後に新しい入力セッションを開始する
  *
  * Manual Controlは初期化時に有効化される。有効化時はActiveへ遷移する。
+ * LP2のサンプリング周期はドライバで150 msに固定する。
  * 無効化後はLP2で10秒ごとに接触状態を確認し、無接触を確認できた場合だけ
  * 一時的にIdleへ移ってTP Reseedを行い、LP2へ戻る。Reseed中は入力出力を
  * 閉じたままにする。接触中は周期を越えて延期する。Device PM suspend中は

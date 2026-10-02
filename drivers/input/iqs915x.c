@@ -50,6 +50,7 @@ static const uint8_t iqs915x_device_api = 0;
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
 #define IQS915X_POWER_TRANSITION_WAIT_MS 250
 #define IQS915X_LP2_RESEED_INTERVAL_MS 10000
+#define IQS915X_LP2_SAMPLING_PERIOD_MS 150U
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
@@ -2033,7 +2034,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       uint8_t original = buffer[i];
       bool dts_patch = false;
 
-      // === 強制パッチ: ドライバ正常動作に必須のビット修正 ===
+      // === 強制パッチ: ドライバの固定設定と必須ビット修正 ===
       if (current_addr == IQS915X_SYSTEM_CONTROL)
       {
         // ACK_RESET(bit7), REATI_ALP(bit6), REATI_TP(bit5) は
@@ -2060,6 +2061,15 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         // GESTURE_EVENT/TP_TOUCH_EVENTは無効、TP_EVENTのみ有効にする。
         cfg = iqs915x_config_settings_without_event_mode(cfg);
         buffer[i] = (cfg >> 8) & 0xFF;
+      }
+      else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE)
+      {
+        // LP2からの復帰待ちを短縮するため、profileの周期を150 msで上書きする。
+        buffer[i] = IQS915X_LP2_SAMPLING_PERIOD_MS & 0xFF;
+      }
+      else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE + 1)
+      {
+        buffer[i] = (IQS915X_LP2_SAMPLING_PERIOD_MS >> 8) & 0xFF;
       }
       // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
       else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&

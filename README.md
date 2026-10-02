@@ -275,6 +275,10 @@ compiled into the driver.
 The driver writes the profile-provided init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides. The conversion script emits the profile DTS array by default; use `--c-header` only for legacy tooling.
 This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
 
+The driver overrides the profile's LP2 sampling period (`0x11AA`) to 150 ms
+during initialization to shorten the wait when returning from LP2. This is a
+fixed driver setting and has no DTS override.
+
 ## Key differences from IQS5xx driver
 
 This driver is forked from the [zmk-driver-azoteq-iqs5xx](https://github.com/user/zmk-driver-azoteq-iqs5xx) driver with the following major changes:
