@@ -905,6 +905,14 @@ static void iqs915x_handle_lp2_reseed_step(const struct device *dev)
     }
     if (info_flags & (IQS915X_ALP_PROX_STATUS | IQS915X_GLOBAL_TP_TOUCH))
     {
+      LOG_WRN("LP2 Reseed contact status: info=0x%04x alp_prox=%u "
+              "tp_touch=%u alp_toggled=%u tp_toggled=%u cached_cfg=0x%04x",
+              info_flags,
+              (unsigned int)((info_flags & IQS915X_ALP_PROX_STATUS) != 0),
+              (unsigned int)((info_flags & IQS915X_GLOBAL_TP_TOUCH) != 0),
+              (unsigned int)((info_flags & IQS915X_ALP_PROX_TOGGLED) != 0),
+              (unsigned int)((info_flags & IQS915X_TP_TOUCH_TOGGLED) != 0),
+              data->confirmed_config_settings);
       iqs915x_reseed_retry_after_lp2(dev, "touch/proximity is active");
       return;
     }
