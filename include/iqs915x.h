@@ -71,6 +71,7 @@ struct iqs915x_settings_limits {
  * モード変更とEvent Mode再ラッチはForce Commsで行い、指イベントのRDYを
  * 待たない。ICの通信可能な時点まではクロックストレッチによる待ちが発生する。
  * LP2のサンプリング周期はドライバで150 msに固定する。
+ * LP2中はTP_EVENTを無効化し、Active復帰時に再度有効化する。
  * 無効化後はLP2で10秒ごとに接触状態を確認し、無接触を確認できた場合だけ
  * 一時的にIdleへ移ってTP Reseedを行い、LP2へ戻る。Reseed中は入力出力を
  * 閉じたままにする。接触中は周期を越えて延期する。Device PM suspend中は

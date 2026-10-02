@@ -149,7 +149,7 @@ over the split transport or to the host. Pair these logs with raw coordinate
 logs when needed. DEBUG logging adds traffic and can affect report timing;
 return to the normal log level after collecting diagnostics.
 
-In Event Mode, the driver enables `TP_EVENT` as the only event source and
+In Active Event Mode, the driver enables `TP_EVENT` as the only event source and
 disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
 `TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level
 finger up/down transitions. Because `GLOBAL_TP_TOUCH` can miss transitions on
@@ -284,6 +284,9 @@ Force Comms without waiting for a finger-triggered RDY. Each state-machine step
 performs one I2C transaction, ending its communication window with STOP. The IC
 can still stretch the clock until communication is available, so transition
 latency depends on its sampling period. Normal input reads remain RDY-driven.
+LP2 relatching disables `TP_EVENT` so retained trackpad touch state does not
+request repeated communication windows. Active relatching enables it again;
+temporary Idle scans for periodic reseeding also retain `TP_EVENT`.
 
 ## Key differences from IQS5xx driver
 

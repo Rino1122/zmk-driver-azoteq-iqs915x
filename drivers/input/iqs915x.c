@@ -175,6 +175,21 @@ static uint16_t iqs915x_config_settings_without_event_mode(uint16_t cfg)
   return cfg & ~IQS915X_EVENT_MODE;
 }
 
+static uint16_t iqs915x_relatch_config_settings(const struct iqs915x_data *data)
+{
+  uint16_t cfg = iqs915x_apply_config_settings_policy(
+      data->confirmed_config_settings);
+
+  // Active復帰とReseed用IdleではTP_EVENTを有効にし、LP2では無効にする。
+  if (!data->relatch_target_enabled &&
+      data->reseed_state != RESEED_WAIT_IDLE_RELATCH)
+  {
+    cfg &= ~IQS915X_TP_EVENT;
+  }
+
+  return cfg;
+}
+
 static void iqs915x_schedule_event_mode_relatch(struct iqs915x_data *data,
                                                 const char *reason)
 {
@@ -1064,7 +1079,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
   case WORK_RELATCH_EVENT_MODE_DISABLE:
   {
     uint16_t cfg =
-        iqs915x_config_settings_without_event_mode(data->confirmed_config_settings);
+        iqs915x_relatch_config_settings(data) & ~IQS915X_EVENT_MODE;
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
@@ -1093,7 +1108,7 @@ static void iqs915x_handle_event_mode_relatch_step(const struct device *dev)
   case WORK_RELATCH_EVENT_MODE_ENABLE:
   {
     uint16_t cfg =
-        iqs915x_apply_config_settings_policy(data->confirmed_config_settings);
+        iqs915x_relatch_config_settings(data);
 
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (ret < 0)
