@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #define IQS915X_SETTINGS_VERSION_1 1U
+#define IQS915X_SETTINGS_VERSION_2 2U
 
 /** Runtime pointer acceleration controls. */
 struct iqs915x_pointer_settings {
@@ -23,7 +24,8 @@ struct iqs915x_pointer_settings {
 
 /** Runtime scroll inertia controls. Times are in milliseconds.
  * threshold_start is the release-time 100 ms average motion in coordinate
- * units per 10 ms; threshold_stop applies to decayed motion per inertia tick.
+ * units per 10 ms; threshold_stop applies to decayed velocity in the same units.
+ * initial_velocity_percent (v2) multiplies average release velocity: 100–1000.
  */
 struct iqs915x_scroll_inertia_settings {
   bool enabled;
@@ -33,6 +35,7 @@ struct iqs915x_scroll_inertia_settings {
   uint16_t threshold_start;
   uint16_t threshold_stop;
   uint16_t max_duration_ms; /* 0 preserves the legacy unlimited duration. */
+  uint16_t initial_velocity_percent;
 };
 
 /** Versioned settings controlled by the Harbour trackpad settings UI. */
@@ -47,7 +50,7 @@ struct iqs915x_setting_range {
   uint16_t max;
 };
 
-/** Supported numeric ranges for version 1 settings. */
+/** Supported numeric ranges for version 2 settings. */
 struct iqs915x_settings_limits {
   uint16_t version;
   struct iqs915x_setting_range pointer_sensitivity_percent;
@@ -60,6 +63,7 @@ struct iqs915x_settings_limits {
   struct iqs915x_setting_range inertia_threshold_start;
   struct iqs915x_setting_range inertia_threshold_stop;
   struct iqs915x_setting_range inertia_max_duration_ms;
+  struct iqs915x_setting_range inertia_initial_velocity_percent;
 };
 
 /**
@@ -109,13 +113,15 @@ int iqs915x_get_settings(const struct device *dev,
                          struct iqs915x_settings *settings);
 
 /**
- * Get supported version 1 setting ranges. For max_duration_ms, zero is also a
+ * Get supported version 2 setting ranges. For max_duration_ms, zero is also a
  * special accepted value meaning no duration limit; otherwise the range is
  * 50–5000 ms.
  */
 int iqs915x_get_settings_limits(struct iqs915x_settings_limits *limits);
 
-/** Validate a versioned settings object without changing device state. */
+/** Validate settings without changing device state. Version 1 is accepted and
+ * ignores initial_velocity_percent, using 100%. Reads always return version 2.
+ */
 int iqs915x_validate_settings(const struct iqs915x_settings *settings);
 
 /**

@@ -1290,15 +1290,10 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
 #define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
 #define IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO 4
 
-static int32_t iqs915x_abs32(int32_t value)
+static void iqs915x_filter_scroll_cross_axis(int32_t *x, int32_t *y)
 {
-  return value < 0 ? -value : value;
-}
-
-static void iqs915x_filter_scroll_cross_axis(int16_t *x, int16_t *y)
-{
-  int32_t abs_x = iqs915x_abs32(*x);
-  int32_t abs_y = iqs915x_abs32(*y);
+  int64_t abs_x = llabs(*x);
+  int64_t abs_y = llabs(*y);
 
   if (abs_x == 0 || abs_y == 0)
   {
@@ -1316,8 +1311,8 @@ static void iqs915x_filter_scroll_cross_axis(int16_t *x, int16_t *y)
 }
 
 static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
-                                                int32_t *accumulator,
-                                                uint16_t code, int16_t delta,
+                                                int64_t *accumulator,
+                                                uint16_t code, int32_t delta,
                                                 uint16_t resolution,
                                                 uint16_t divisor,
                                                 const char *source)
@@ -1325,16 +1320,16 @@ static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
   int32_t output = 0;
   int result = 0;
   const char *status = "buffered";
-  int32_t acc_before = *accumulator;
-  int32_t denom =
-      (int32_t)(resolution > 0 ? resolution : IQS915X_SCROLL_FALLBACK_RESOLUTION) *
-      (int32_t)(divisor > 0 ? divisor : 1);
+  int64_t acc_before = *accumulator;
+  int64_t denom =
+      (int64_t)(resolution > 0 ? resolution : IQS915X_SCROLL_FALLBACK_RESOLUTION) *
+      (int64_t)(divisor > 0 ? divisor : 1);
 
-  *accumulator += (int32_t)delta * IQS915X_SCROLL_UNITS_PER_AXIS;
-  int32_t acc_added = *accumulator;
-  if (iqs915x_abs32(*accumulator) >= denom)
+  *accumulator += (int64_t)delta * IQS915X_SCROLL_UNITS_PER_AXIS;
+  int64_t acc_added = *accumulator;
+  if (*accumulator >= denom || *accumulator <= -denom)
   {
-    output = *accumulator / denom;
+    output = (int32_t)CLAMP(*accumulator / denom, INT32_MIN, INT32_MAX);
     if (!iqs915x_output_is_enabled(data))
     {
       status = "disabled";
@@ -1346,17 +1341,18 @@ static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
       status = result == 0 ? "sent" : "failed";
       if (result == 0)
       {
-        *accumulator %= denom;
+        *accumulator -= (int64_t)output * denom;
       }
     }
   }
 
   /* This records driver submission, not delivery to the central or host. */
   LOG_DBG("scroll_output,t=%lld,source=%s,axis=%s,delta=%d,wheel=%d,"
-          "status=%s,rc=%d,acc_before=%d,acc_added=%d,acc_after=%d,denom=%d",
+          "status=%s,rc=%d,acc_before=%lld,acc_added=%lld,acc_after=%lld,denom=%lld",
           (long long)k_uptime_get(), source,
           code == INPUT_REL_WHEEL ? "wheel" : "hwheel", delta, output,
-          status, result, acc_before, acc_added, *accumulator, denom);
+          status, result, (long long)acc_before, (long long)acc_added,
+          (long long)*accumulator, (long long)denom);
   return output != 0 && result == 0;
 }
 
@@ -1365,10 +1361,10 @@ static bool iqs915x_handle_two_finger_scroll(
     const struct iqs915x_stream_data *stream)
 {
   struct iqs915x_two_finger_session *two_finger = &data->two_finger;
-  int16_t gx;
-  int16_t gy;
-  int16_t motion_x;
-  int16_t motion_y;
+  int32_t gx;
+  int32_t gy;
+  int32_t motion_x;
+  int32_t motion_y;
   bool emitted = false;
   bool started_scroll = false;
 
@@ -1453,7 +1449,7 @@ static bool iqs915x_handle_two_finger_scroll(
 
   if (emitted)
   {
-    data->scroll_inertia_state.zero_output_ticks = 0;
+    data->scroll_inertia_state.last_output_ms = k_uptime_get();
   }
 
   LOG_DBG("scroll centroid: dx=%d dy=%d flags=0x%04x", gx, gy,
@@ -1556,37 +1552,6 @@ static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
  * 減衰率（friction）を掛けて減速し、閾値未満になったら停止する。
  * ============================================================ */
 
-#define IQS915X_SCROLL_INERTIA_FP_BITS 8
-#define IQS915X_SCROLL_INERTIA_FP_SCALE BIT(IQS915X_SCROLL_INERTIA_FP_BITS)
-#define IQS915X_SCROLL_INERTIA_Q8_HALF (BIT(IQS915X_SCROLL_INERTIA_FP_BITS - 1))
-#define IQS915X_SCROLL_INERTIA_ZERO_OUTPUT_LIMIT 3
-
-static void iqs915x_calculate_decayed_movement_fixed(
-    int16_t in_dx, int16_t in_dy, int16_t decay_factor_q8,
-    int16_t *out_dx, int16_t *out_dy, int16_t *rem_x, int16_t *rem_y)
-{
-  int64_t ideal_dx_q8 =
-      (int64_t)in_dx * IQS915X_SCROLL_INERTIA_FP_SCALE + *rem_x;
-  int64_t ideal_dy_q8 =
-      (int64_t)in_dy * IQS915X_SCROLL_INERTIA_FP_SCALE + *rem_y;
-
-  int64_t decayed_dx_q8 = (ideal_dx_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
-  int64_t decayed_dy_q8 = (ideal_dy_q8 * decay_factor_q8) >> IQS915X_SCROLL_INERTIA_FP_BITS;
-
-  int16_t output_dx =
-      (int16_t)((decayed_dx_q8 + IQS915X_SCROLL_INERTIA_Q8_HALF) >> IQS915X_SCROLL_INERTIA_FP_BITS);
-  int16_t output_dy =
-      (int16_t)((decayed_dy_q8 + IQS915X_SCROLL_INERTIA_Q8_HALF) >> IQS915X_SCROLL_INERTIA_FP_BITS);
-
-  *rem_x = (int16_t)(decayed_dx_q8 -
-                     ((int64_t)output_dx * IQS915X_SCROLL_INERTIA_FP_SCALE));
-  *rem_y = (int16_t)(decayed_dy_q8 -
-                     ((int64_t)output_dy * IQS915X_SCROLL_INERTIA_FP_SCALE));
-
-  *out_dx = output_dx;
-  *out_dy = output_dy;
-}
-
 static void iqs915x_stop_scroll_inertia_locked(struct iqs915x_data *data)
 {
   k_work_cancel_delayable(&data->scroll_inertia_work);
@@ -1658,19 +1623,21 @@ static void iqs915x_update_scroll_contact(
   bool start = released_scroll_sequence && profile->enabled && moving && fast_enough;
 
   LOG_DBG("scroll_inertia_release,t=%lld,window_ms=%u,vx=%d,vy=%d,"
-          "threshold=%u,start=%u",
+          "threshold=%u,initial_velocity_percent=%u,start=%u",
           (long long)release_ms, elapsed_ms, velocity_x, velocity_y,
-          profile->threshold_start, start);
+          profile->threshold_start, profile->initial_velocity_percent, start);
 
   if (start)
   {
-    state->vx = velocity_x;
-    state->vy = velocity_y;
+    const struct iqs915x_config *config = data->dev->config;
+    iqs915x_inertia_motion_init(&state->motion, velocity_x, velocity_y,
+                                profile->initial_velocity_percent,
+                                profile->decay_factor_percent,
+                                MAX(1, config->scroll_inertia.interval_ms));
     state->active = true;
     state->is_inertial = false;
-    state->zero_output_ticks = 0;
-    state->remainder_x_q8 = 0;
-    state->remainder_y_q8 = 0;
+    state->last_ms = 0;
+    state->last_output_ms = 0;
     data->inertia_scroll_x_acc = data->scroll_x_acc;
     data->inertia_scroll_y_acc = data->scroll_y_acc;
     data->scroll_x_acc = 0;
@@ -1699,9 +1666,8 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   const struct device *dev = data->dev;
   const struct iqs915x_config *config = dev->config;
   struct iqs915x_scroll_inertia_state *state = &data->scroll_inertia_state;
-  int16_t step_x;
-  int16_t step_y;
-  int16_t decay_factor_q8;
+  int32_t step_x;
+  int32_t step_y;
   bool emitted = false;
   int64_t now_ms;
   uint16_t next_delay_ms;
@@ -1729,9 +1695,16 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   if (!state->is_inertial)
   {
     state->started_ms = now_ms;
+    state->last_ms = now_ms;
+    state->last_output_ms = now_ms;
+    state->is_inertial = true;
+    /* Start the time integrator; a 1 ms wake avoids a full report-period pause. */
+    k_work_reschedule(&data->scroll_inertia_work, K_MSEC(1));
+    k_mutex_unlock(&data->settings_lock);
+    return;
   }
   else if (profile->max_duration_ms > 0 &&
-           now_ms - state->started_ms >= profile->max_duration_ms)
+           state->last_ms - state->started_ms >= profile->max_duration_ms)
   {
     iqs915x_stop_scroll_inertia_locked(data);
     LOG_DBG("Scroll inertia stopped (maximum duration reached)");
@@ -1739,25 +1712,21 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
     return;
   }
 
-  step_x = state->vx;
-  step_y = state->vy;
-  decay_factor_q8 = (int16_t)((profile->decay_factor_percent * IQS915X_SCROLL_INERTIA_FP_SCALE) / 100);
-
-  iqs915x_calculate_decayed_movement_fixed(
-      state->vx, state->vy, decay_factor_q8, &step_x, &step_y,
-      &state->remainder_x_q8, &state->remainder_y_q8);
-
-  if (abs(step_x) <= profile->threshold_stop && abs(step_y) <= profile->threshold_stop)
+  int64_t elapsed_ms = now_ms - state->last_ms;
+  if (elapsed_ms <= 0)
   {
-    iqs915x_stop_scroll_inertia_locked(data);
-    LOG_DBG("Scroll inertia stopped (velocity below threshold)");
+    k_work_reschedule(&data->scroll_inertia_work, K_MSEC(1));
     k_mutex_unlock(&data->settings_lock);
     return;
   }
-
-  state->vx = step_x;
-  state->vy = step_y;
-  state->is_inertial = true;
+  /* A delayed worker must not integrate past an explicit duration limit. */
+  if (profile->max_duration_ms > 0)
+  {
+    elapsed_ms = MIN(elapsed_ms, state->started_ms + profile->max_duration_ms - state->last_ms);
+  }
+  iqs915x_inertia_motion_step(&state->motion, (uint32_t)MIN(elapsed_ms, UINT32_MAX),
+                              &step_x, &step_y);
+  state->last_ms = now_ms;
   iqs915x_filter_scroll_cross_axis(&step_x, &step_y);
 
   if (step_x != 0)
@@ -1776,12 +1745,23 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
 
   if (emitted)
   {
-    state->zero_output_ticks = 0;
+    state->last_output_ms = now_ms;
   }
-  else if (++state->zero_output_ticks >= IQS915X_SCROLL_INERTIA_ZERO_OUTPUT_LIMIT)
+  else if (now_ms - state->last_output_ms >=
+           (int64_t)MAX(1, config->scroll_inertia.interval_ms) * 3)
   {
     iqs915x_stop_scroll_inertia_locked(data);
     LOG_DBG("Scroll inertia stopped (no HID output)");
+    k_mutex_unlock(&data->settings_lock);
+    return;
+  }
+
+  if (llabs(state->motion.vx_q16) * 10 <=
+          (int64_t)profile->threshold_stop * IQS915X_INERTIA_POSITION_SCALE &&
+      llabs(state->motion.vy_q16) * 10 <=
+          (int64_t)profile->threshold_stop * IQS915X_INERTIA_POSITION_SCALE)
+  {
+    iqs915x_stop_scroll_inertia_locked(data);
     k_mutex_unlock(&data->settings_lock);
     return;
   }
@@ -1816,7 +1796,7 @@ void iqs915x_cancel_scroll_inertia(struct iqs915x_data *data)
 }
 
 static const struct iqs915x_settings_limits iqs915x_supported_settings_limits = {
-    .version = IQS915X_SETTINGS_VERSION_1,
+    .version = IQS915X_SETTINGS_VERSION_2,
     .pointer_sensitivity_percent = {.min = 25, .max = 400},
     .pointer_threshold = {.min = 0, .max = 1024},
     .pointer_saturation = {.min = 1, .max = 2048},
@@ -1827,6 +1807,7 @@ static const struct iqs915x_settings_limits iqs915x_supported_settings_limits = 
     .inertia_threshold_start = {.min = 0, .max = 32767},
     .inertia_threshold_stop = {.min = 0, .max = 32767},
     .inertia_max_duration_ms = {.min = 50, .max = 5000},
+    .inertia_initial_velocity_percent = {.min = 100, .max = 1000},
 };
 
 int iqs915x_get_settings_limits(struct iqs915x_settings_limits *limits)
@@ -1848,7 +1829,8 @@ static bool iqs915x_setting_is_in_range(struct iqs915x_setting_range range,
 
 int iqs915x_validate_settings(const struct iqs915x_settings *settings)
 {
-  if (settings == NULL || settings->version != IQS915X_SETTINGS_VERSION_1)
+  if (settings == NULL || (settings->version != IQS915X_SETTINGS_VERSION_1 &&
+                           settings->version != IQS915X_SETTINGS_VERSION_2))
   {
     return -EINVAL;
   }
@@ -1887,6 +1869,10 @@ int iqs915x_validate_settings(const struct iqs915x_settings *settings)
           iqs915x_supported_settings_limits.inertia_threshold_stop,
           inertia->threshold_stop) ||
       inertia->threshold_stop > inertia->threshold_start ||
+      (settings->version == IQS915X_SETTINGS_VERSION_2 &&
+       !iqs915x_setting_is_in_range(
+           iqs915x_supported_settings_limits.inertia_initial_velocity_percent,
+           inertia->initial_velocity_percent)) ||
       (inertia->max_duration_ms != 0 &&
        !iqs915x_setting_is_in_range(
            iqs915x_supported_settings_limits.inertia_max_duration_ms,
@@ -1981,6 +1967,11 @@ int iqs915x_apply_settings(const struct device *dev,
     data->pointer_x_acc = 0;
     data->pointer_y_acc = 0;
     data->runtime_settings = *settings;
+    data->runtime_settings.version = IQS915X_SETTINGS_VERSION_2;
+    if (settings->version == IQS915X_SETTINGS_VERSION_1)
+    {
+      data->runtime_settings.scroll_inertia.initial_velocity_percent = 100;
+    }
     ret = 0;
   }
   k_mutex_unlock(&data->settings_lock);
@@ -3371,7 +3362,7 @@ static int iqs915x_init(const struct device *dev)
   k_mutex_init(&data->settings_lock);
   atomic_clear(&data->settings_ready);
   data->runtime_settings = (struct iqs915x_settings){
-      .version = IQS915X_SETTINGS_VERSION_1,
+      .version = IQS915X_SETTINGS_VERSION_2,
       .pointer = {
           .enabled = config->pointer_accel,
           .sensitivity_percent = config->pointer_sensitivity_percent,
@@ -3386,6 +3377,7 @@ static int iqs915x_init(const struct device *dev)
           .interval_ms = config->scroll_inertia.interval_ms,
           .threshold_start = config->scroll_inertia.threshold_start,
           .threshold_stop = config->scroll_inertia.threshold_stop,
+          .initial_velocity_percent = config->scroll_inertia.initial_velocity_percent,
           .max_duration_ms = 0,
       },
   };
@@ -3516,6 +3508,7 @@ static int iqs915x_init(const struct device *dev)
  * デバイスインスタンスマクロ
  * ============================================================ */
 #define IQS915X_INIT(n)                                                                                                                                                                            \
+  BUILD_ASSERT(DT_INST_PROP(n, scroll_inertia_initial_velocity_percent) >= 100 && DT_INST_PROP(n, scroll_inertia_initial_velocity_percent) <= 1000, "IQS915x inertia initial velocity must be 100-1000 percent"); \
   static struct iqs915x_data iqs915x_data_##n;                                                                                                                                                     \
   static const uint8_t iqs915x_init_data_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), init_data);                                                                                                \
   static const uint16_t iqs915x_coord_lut_x_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_lut_q15);                                                                                \
@@ -3553,12 +3546,14 @@ static int iqs915x_init(const struct device *dev)
                      DT_INST_NODE_HAS_PROP(n, scroll_decay_factor_int) ||                                                                                                                          \
                      DT_INST_NODE_HAS_PROP(n, scroll_report_interval_ms) ||                                                                                                                        \
                      DT_INST_NODE_HAS_PROP(n, scroll_threshold_start) ||                                                                                                                           \
-                     DT_INST_NODE_HAS_PROP(n, scroll_threshold_stop),                                                                                                                              \
+                     DT_INST_NODE_HAS_PROP(n, scroll_threshold_stop) ||                                                                                                                              \
+                     DT_INST_NODE_HAS_PROP(n, scroll_inertia_initial_velocity_percent), \
           .trigger_ms = DT_INST_PROP(n, trigger_ms),                                                                                                                                              \
           .decay_factor_int = DT_INST_PROP(n, scroll_decay_factor_int),                                                                                                                           \
           .interval_ms = DT_INST_PROP(n, scroll_report_interval_ms),                                                                                                                              \
           .threshold_start = DT_INST_PROP(n, scroll_threshold_start),                                                                                                                             \
           .threshold_stop = DT_INST_PROP(n, scroll_threshold_stop),                                                                                                                              \
+          .initial_velocity_percent = DT_INST_PROP(n, scroll_inertia_initial_velocity_percent), \
       },                                                                                                                                                                                           \
       .three_finger_swipe = DT_INST_PROP(n, three_finger_swipe),                                                                                                                                   \
       .four_finger_swipe = DT_INST_PROP(n, four_finger_swipe),                                                                                                                                     \

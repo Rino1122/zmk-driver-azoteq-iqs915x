@@ -29,6 +29,7 @@
 
 #include <iqs915x.h>
 #include "iqs915x_scroll_motion.h"
+#include "iqs915x_scroll_inertia.h"
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -343,18 +344,17 @@ struct iqs915x_scroll_inertia_profile
     uint16_t interval_ms;
     uint16_t threshold_start;
     uint16_t threshold_stop;
+    uint16_t initial_velocity_percent;
 };
 
 struct iqs915x_scroll_inertia_state
 {
-    int16_t vx;
-    int16_t vy;
-    int16_t remainder_x_q8;
-    int16_t remainder_y_q8;
-    uint8_t zero_output_ticks;
+    struct iqs915x_inertia_motion motion;
     bool active;
     bool is_inertial;
     int64_t started_ms;
+    int64_t last_ms;
+    int64_t last_output_ms;
 };
 
 struct iqs915x_finger_tracker
@@ -535,12 +535,12 @@ struct iqs915x_data
     int32_t pointer_y_acc; // ポインタ倍率適用時のY剰余（percent単位）
 
     // 手動スクロールの正規化端数（settings_lockで保護）
-    int32_t scroll_x_acc;
-    int32_t scroll_y_acc;
+    int64_t scroll_x_acc;
+    int64_t scroll_y_acc;
 
     // 慣性出力用の正規化端数。手動操作とは独立（settings_lockで保護）
-    int32_t inertia_scroll_x_acc;
-    int32_t inertia_scroll_y_acc;
+    int64_t inertia_scroll_x_acc;
+    int64_t inertia_scroll_y_acc;
     uint8_t scroll_contact_fingers; // 最新NUM_FINGERS（settings_lockで保護）
 
     struct iqs915x_finger_tracker finger_tracker;

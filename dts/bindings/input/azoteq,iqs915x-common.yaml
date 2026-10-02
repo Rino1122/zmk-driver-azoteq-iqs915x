@@ -106,14 +106,25 @@ properties:
     type: int
     default: 85
     description: |
-      Scroll inertia retention percentage (0-100) applied at each inertia tick.
+      Scroll inertia retention percentage (0-100) over the boot-time
+      scroll-report-interval-ms. Runtime output cadence changes do not change
+      this reference period. Decay uses actual elapsed time.
       Higher values produce longer inertia.
 
   scroll-report-interval-ms:
     type: int
     default: 65
     description: |
-      Interval in ms between inertia decay ticks.
+      Interval in ms between inertia reports. Displacement is integrated over
+      actual elapsed time. This boot-time value also sets the decay reference.
+
+  scroll-inertia-initial-velocity-percent:
+    type: int
+    default: 100
+    description: |
+      Initial inertia velocity as a percentage of the 100 ms average release
+      velocity. Range 100-1000: 100 uses the measured velocity directly;
+      200 doubles it. This does not change manual scrolling or start detection.
 
   scroll-threshold-start:
     type: int
@@ -128,7 +139,8 @@ properties:
     type: int
     default: 0
     description: |
-      Minimum decayed scroll velocity required to continue inertia.
+      Minimum decayed scroll velocity required to continue inertia,
+      in coordinate units per 10 ms after applying the initial velocity multiplier.
       Inertia stops when both axes are below or equal to this value.
 
   three-finger-swipe:

@@ -54,6 +54,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
         /* Scroll inertia settings */
         scroll-inertia;
+        scroll-inertia-initial-velocity-percent = <100>; /* 100 = measured speed, 200 = 2x */
         trigger-ms = <35>;                    /* Wait before inertia starts */
         scroll-decay-factor-int = <85>;       /* Retention percent per tick (0-100) */
         scroll-report-interval-ms = <65>;     /* Time between inertia updates */
@@ -143,7 +144,7 @@ scroll_output,t=50000,source=manual,axis=wheel,delta=-20,wheel=-1,status=sent,rc
 - `denom`: resolution times scroll divisor. Accumulator values use coordinate
   units multiplied by 512; a successful output consumes `wheel * denom`.
 
-At release, `scroll_inertia_release,t=...,window_ms=...,vx=...,vy=...,threshold=...,start=...`
+At release, `scroll_inertia_release,t=...,window_ms=...,vx=...,vy=...,threshold=...,initial_velocity_percent=...,start=...`
 reports the estimated velocity in coordinate units per 10 ms, the elapsed
 estimation window (at most 100 ms), and whether inertia was armed. `t` is the
 first zero-finger report time, excluding the 20 ms confirmation delay.
@@ -257,14 +258,36 @@ recovery, slot changes and rebaselining clear the history and establish a new
 baseline, excluding recovered displacement from velocity.
 
 The average is converted to coordinate units per 10 ms. Its larger absolute
-axis is compared with `scroll-threshold-start`, and the same signed velocity
-seeds the existing inertia decay flow. This normalization is independent of
+axis is compared with `scroll-threshold-start` before amplification. The signed
+velocity is multiplied by `scroll-inertia-initial-velocity-percent` (100–1000,
+default 100) and converted to coordinate units per millisecond. At 100%, inertia
+starts at the measured average speed; at 200%, it starts at twice that speed.
+Manual scroll displacement and inertia start detection are unaffected by this
+multiplier. This normalization is independent of
 sensor report rate; settings previously tuned at rates other than 10 ms may
 need adjustment. `trigger-ms` controls start delay only, not motion freshness.
 Motion and inertia use separate fractional accumulators so stopping or
-cancelling inertia does not discard manual-scroll remainders. Inertia follows a
-Q8 fixed-point decay flow with remainder preservation and stops when the
-decayed motion no longer reaches HID output for several ticks.
+cancelling inertia does not discard manual-scroll remainders.
+
+Inertia integrates the decaying velocity over the actual time since the last
+output. The decay percentage specifies retention over the boot-time DTS
+`scroll-report-interval-ms`, which remains the reference even if the runtime
+report interval changes. Reporting more often therefore produces smaller
+increments with the same trajectory, subject to integer rounding and stop
+conditions. Fixed-point velocity and displacement remainders preserve fractions.
+No-output stopping uses elapsed time (three reference periods), and
+`scroll-threshold-stop` is measured in coordinate units per 10 ms. The duration
+limit clips integrated motion when a worker runs late.
+
+This fixes the former mismatch between 10 ms velocity units and displacement
+per inertia tick. Consequently 100% can produce more inertia travel than the
+old implementation when its tick interval was longer than 10 ms.
+
+Harbour integration uses runtime settings API v2:
+`scroll_inertia.initial_velocity_percent`, with limits exposed as
+`inertia_initial_velocity_percent` (100–1000). Reads return version 2; source
+callers using version 1 are accepted with a 100% multiplier. The firmware RPC
+must relay and persist this value and use a driver that supports API v2.
 
 The velocity estimator has host-side regression tests that do not require a
 Zephyr workspace:
@@ -272,6 +295,8 @@ Zephyr workspace:
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -Idrivers/input tests/scroll_motion.c -o /tmp/iqs915x-scroll-motion-test
 /tmp/iqs915x-scroll-motion-test
+cc -std=c11 -Wall -Wextra -Werror -Idrivers/input tests/scroll_inertia.c -o /tmp/iqs915x-scroll-inertia-test
+/tmp/iqs915x-scroll-inertia-test
 ```
 
 See [docs/scroll_parameters_ja.md](docs/scroll_parameters_ja.md) for a
