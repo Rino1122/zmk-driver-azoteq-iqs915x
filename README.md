@@ -119,6 +119,36 @@ The driver emits raw touched stream samples before calibration as INFO logs in
 the form `coord,t=...,f=...,x1=...,y1=...`. Keep this disabled for normal use
 because it logs every touched sample.
 
+For scroll diagnostics, enable `CONFIG_LOG=y` and
+`CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL=4` on the trackpad peripheral. Each
+nonzero axis delta passed to scroll normalization produces a DEBUG line:
+
+```text
+scroll_output,t=50000,source=manual,axis=wheel,delta=-20,wheel=-1,status=sent,rc=0,acc_before=0,acc_added=-10240,acc_after=-2240,denom=8000
+```
+
+- `t`: uptime in milliseconds at logging time, after the submission attempt.
+- `source`: `manual` or `inertia`.
+- `axis`: vertical `wheel` or horizontal `hwheel`.
+- `delta`: calibrated coordinate delta after the cross-axis filter.
+- `wheel`: integer value submitted or attempted; zero when still accumulating.
+- `status`: `buffered` (below the output threshold), `sent` (input API accepted
+  the event), `failed` (input API returned an error), or `disabled` (output gate
+  prevented submission).
+- `rc`: input API return code for `sent`/`failed`; zero for `buffered`, and
+  synthetic `-EACCES` for `disabled`, where the API was not called.
+- `acc_before`, `acc_added`, `acc_after`: signed accumulator before adding the
+  delta, after adding it, and after submission. Successful submission retains
+  only the remainder; failed or disabled submission keeps the accumulated value.
+- `denom`: resolution times scroll divisor. Accumulator values use coordinate
+  units multiplied by 512; a successful output consumes `wheel * denom`.
+
+Sum `wheel` only for `status=sent`, separately for each source and axis, to
+compare driver output. Acceptance by the input API does not confirm delivery
+over the split transport or to the host. Pair these logs with raw coordinate
+logs when needed. DEBUG logging adds traffic and can affect report timing;
+return to the normal log level after collecting diagnostics.
+
 In Event Mode, the driver enables `TP_EVENT` as the only event source and
 disables both IQS915x hardware gesture events and `TP_TOUCH_EVENT`.
 `TP_TOUCH_EVENT` reports diamond-pattern channel state changes, not high-level

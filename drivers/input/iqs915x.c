@@ -1295,26 +1295,45 @@ static bool iqs915x_emit_normalized_scroll_axis(struct iqs915x_data *data,
                                                 int32_t *accumulator,
                                                 uint16_t code, int16_t delta,
                                                 uint16_t resolution,
-                                                uint16_t divisor)
+                                                uint16_t divisor,
+                                                const char *source)
 {
-  int32_t output;
+  int32_t output = 0;
+  int result = 0;
+  const char *status = "buffered";
+  int32_t acc_before = *accumulator;
   int32_t denom =
       (int32_t)(resolution > 0 ? resolution : IQS915X_SCROLL_FALLBACK_RESOLUTION) *
       (int32_t)(divisor > 0 ? divisor : 1);
 
   *accumulator += (int32_t)delta * IQS915X_SCROLL_UNITS_PER_AXIS;
-  if (iqs915x_abs32(*accumulator) < denom)
+  int32_t acc_added = *accumulator;
+  if (iqs915x_abs32(*accumulator) >= denom)
   {
-    return false;
+    output = *accumulator / denom;
+    if (!iqs915x_output_is_enabled(data))
+    {
+      status = "disabled";
+      result = -EACCES;
+    }
+    else
+    {
+      result = input_report_rel(data->dev, code, output, true, K_FOREVER);
+      status = result == 0 ? "sent" : "failed";
+      if (result == 0)
+      {
+        *accumulator %= denom;
+      }
+    }
   }
 
-  output = *accumulator / denom;
-  if (!iqs915x_report_rel(data, code, output, true))
-  {
-    return false;
-  }
-  *accumulator %= denom;
-  return output != 0;
+  /* This records driver submission, not delivery to the central or host. */
+  LOG_DBG("scroll_output,t=%lld,source=%s,axis=%s,delta=%d,wheel=%d,"
+          "status=%s,rc=%d,acc_before=%d,acc_added=%d,acc_after=%d,denom=%d",
+          (long long)k_uptime_get(), source,
+          code == INPUT_REL_WHEEL ? "wheel" : "hwheel", delta, output,
+          status, result, acc_before, acc_added, *accumulator, denom);
+  return output != 0 && result == 0;
 }
 
 static bool iqs915x_handle_two_finger_scroll(
@@ -1415,14 +1434,14 @@ static bool iqs915x_handle_two_finger_scroll(
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
         data, &data->scroll_x_acc, INPUT_REL_HWHEEL, gx,
-        data->swipe_resolution_x, config->scroll_divisor);
+        data->swipe_resolution_x, config->scroll_divisor, "manual");
   }
 
   if (gy != 0)
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
         data, &data->scroll_y_acc, INPUT_REL_WHEEL, gy,
-        data->swipe_resolution_y, config->scroll_divisor);
+        data->swipe_resolution_y, config->scroll_divisor, "manual");
   }
 
   if (emitted)
@@ -1758,14 +1777,14 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
         data, &data->inertia_scroll_x_acc, INPUT_REL_HWHEEL, step_x,
-        data->swipe_resolution_x, config->scroll_divisor);
+        data->swipe_resolution_x, config->scroll_divisor, "inertia");
   }
 
   if (step_y != 0)
   {
     emitted |= iqs915x_emit_normalized_scroll_axis(
         data, &data->inertia_scroll_y_acc, INPUT_REL_WHEEL, step_y,
-        data->swipe_resolution_y, config->scroll_divisor);
+        data->swipe_resolution_y, config->scroll_divisor, "inertia");
   }
 
   if (emitted)
