@@ -306,7 +306,7 @@ void iqs915x_update_finger_state(struct iqs915x_data *data,
     if (tracker->stable_count == 1 && data->scroll_sequence_active &&
         two_finger->active && two_finger->mode == IQS915X_2F_MODE_SCROLL)
     {
-      /* A confirmed pointer interval is never included in resumed scrolling. */
+      /* Movement with one remaining finger is excluded from resumed scrolling. */
       two_finger->rebaseline_pending = true;
       two_finger->gap_pending = false;
     }

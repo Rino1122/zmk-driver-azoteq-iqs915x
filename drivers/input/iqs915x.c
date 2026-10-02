@@ -1261,7 +1261,8 @@ static void iqs915x_report_button_double_tap(struct iqs915x_data *data,
 static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
                                             const char *reason)
 {
-  if (data->active_tap_hold)
+  if (data->active_tap_hold || data->tap_drag_raw_max_fingers != 1 ||
+      data->finger_tracker.stable_count != 1)
   {
     return;
   }
@@ -2994,6 +2995,36 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                                   data->scroll_sequence_active);
     iqs915x_update_sequence_gates(data);
 
+    /* Once multiple fingers are confirmed, single-finger input stays blocked
+     * for this contact sequence. Only a confirmed zero count ends it. */
+    bool single_finger_blocked = data->finger_tracker.sequence_max_count >= 2;
+    if (single_finger_blocked)
+    {
+      k_work_cancel_delayable(&data->single_tap_work);
+      k_work_cancel_delayable(&data->tap_and_hold_start_work);
+      data->single_tap_pending = false;
+      data->tap_sequence_second_touch = false;
+      data->tap_and_hold_start_pending = false;
+
+      if (data->active_tap_hold)
+      {
+        k_work_cancel_delayable(&data->tap_and_hold_release_work);
+        data->tap_and_hold_release_pending = false;
+        data->active_tap_hold = false;
+        if (iqs915x_report_key(data, LEFT_BUTTON_CODE, 0, true))
+        {
+          data->buttons_pressed &= ~BIT(LEFT_BUTTON_CODE - INPUT_BTN_0);
+        }
+        else
+        {
+          data->button_work_generation = iqs915x_request_generation(data);
+          k_work_reschedule(&data->button_release_work,
+                            K_MSEC(IQS915X_BUTTON_TAP_RELEASE_MS));
+        }
+        LOG_DBG("tap-and-drag canceled by multiple fingers");
+      }
+    }
+
     if (reported_fingers == num_fingers)
     {
       iqs915x_update_single_tap_movement(data, &stream, num_fingers);
@@ -3002,7 +3033,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     uint16_t pointer_x = 0, pointer_y = 0;
     bool pointer_coordinates_valid =
         iqs915x_select_single_finger(&stream, &pointer_slot, &pointer_x, &pointer_y);
-    if (finger_count_changed && num_fingers == 1)
+    if (finger_count_changed && num_fingers == 1 && !single_finger_blocked)
     {
       data->gesture_pointer_suppress_ticks = 0;
       iqs915x_reset_absolute_tracking(data);
@@ -3029,7 +3060,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
                             data->multifinger_swipe_latched;
       bool suppress_pointer_tail =
           !gesture_active && data->gesture_pointer_suppress_ticks > 0;
-      bool suppress_pointer = gesture_active || suppress_pointer_tail;
+      bool suppress_pointer = gesture_active || suppress_pointer_tail ||
+                              single_finger_blocked;
       bool single_finger_pointer = data->finger_tracker.stable_count == 1;
       bool allow_pointer_report = !suppress_pointer && single_finger_pointer &&
                                   reported_fingers == 1;

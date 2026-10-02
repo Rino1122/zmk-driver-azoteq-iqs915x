@@ -230,11 +230,13 @@ changes and discontinuities rebaseline instead. Slot reuse after a brief loss
 cannot be distinguished from continuous physical contact; the time and
 coordinate guards limit recovery to plausible continuity.
 
-A confirmed change from multiple fingers to one allows cursor movement using
-the remaining valid slot without requiring a zero-finger interval. A change of
-pointer slot establishes a new baseline instead of emitting the position jump.
-An established scroll session retains its fractions if two fingers return
-before release, but movement during the confirmed one-finger interval is not
+Once two or more fingers are confirmed during a contact sequence, cursor
+movement and single-finger tap/hold/drag remain disabled until a zero-finger
+count is confirmed. Pending single-finger gestures are canceled, and an active
+tap-and-drag releases its left button when multiple fingers are confirmed.
+Single-finger input resumes on the next contact after release, with a fresh
+pointer baseline. An established scroll session retains its fractions if two
+fingers return before release, but movement with one remaining finger is not
 added to scrolling. Swipe centroids also use the valid slots and rebaseline on
 slot changes. Event Mode count confirmation uses a timed thread wake and the
 latest snapshot, without an extra I2C read. The original scroll cross-axis
