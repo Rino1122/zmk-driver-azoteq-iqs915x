@@ -1382,6 +1382,24 @@ static bool iqs915x_handle_two_finger_scroll(
 
   k_mutex_lock(&data->settings_lock, K_FOREVER);
 
+  motion_x = iqs915x_clamp_i16(two_finger->centroid_dx);
+  motion_y = iqs915x_clamp_i16(two_finger->centroid_dy);
+  iqs915x_filter_scroll_cross_axis(&motion_x, &motion_y);
+
+  if (two_finger->reset_velocity)
+  {
+    /* Recovered movement spans multiple reports; never use it as a velocity. */
+    iqs915x_stop_scroll_inertia_locked(data);
+  }
+  if (data->runtime_settings.scroll_inertia.enabled)
+  {
+    /* Track the valid baseline and motion before scroll recognition too.
+     * Recovered/rebaselined coordinates establish a new zero-motion baseline. */
+    iqs915x_motion_history_add(&data->scroll_motion_history, k_uptime_get(),
+                              two_finger->reset_velocity ? 0 : motion_x,
+                              two_finger->reset_velocity ? 0 : motion_y);
+  }
+
   if (two_finger->mode != IQS915X_2F_MODE_SCROLL)
   {
     if (two_finger->max_centroid_movement < data->tap_distance)
@@ -1398,10 +1416,6 @@ static bool iqs915x_handle_two_finger_scroll(
             two_finger->max_centroid_movement, data->tap_distance);
   }
 
-  motion_x = iqs915x_clamp_i16(two_finger->centroid_dx);
-  motion_y = iqs915x_clamp_i16(two_finger->centroid_dy);
-  iqs915x_filter_scroll_cross_axis(&motion_x, &motion_y);
-
   if (started_scroll)
   {
     gx = iqs915x_clamp_i16(two_finger->pending_dx);
@@ -1416,37 +1430,6 @@ static bool iqs915x_handle_two_finger_scroll(
   }
 
   iqs915x_filter_scroll_cross_axis(&gx, &gy);
-
-  if (two_finger->reset_velocity)
-  {
-    /* Recovered movement spans multiple reports; never use it as a velocity. */
-    iqs915x_stop_scroll_inertia_locked(data);
-    data->last_scroll_motion_speed = 0;
-    data->last_scroll_motion_ms = 0;
-  }
-  if (data->runtime_settings.scroll_inertia.enabled && !two_finger->reset_velocity)
-  {
-    if (motion_x != 0)
-    {
-      data->scroll_inertia_state.vx = motion_x;
-      data->scroll_inertia_state.ema_vx =
-          (int16_t)((motion_x + data->scroll_inertia_state.ema_vx) >> 1);
-    }
-
-    if (motion_y != 0)
-    {
-      data->scroll_inertia_state.vy = motion_y;
-      data->scroll_inertia_state.ema_vy =
-          (int16_t)((motion_y + data->scroll_inertia_state.ema_vy) >> 1);
-    }
-
-    if (motion_x != 0 || motion_y != 0)
-    {
-      data->last_scroll_motion_speed =
-          (uint16_t)MAX(abs(motion_x), abs(motion_y));
-      data->last_scroll_motion_ms = k_uptime_get();
-    }
-  }
 
   if (gx == 0 && gy == 0)
   {
@@ -1568,7 +1551,7 @@ static void iqs915x_tap_and_hold_release_work_handler(struct k_work *work)
 /* ============================================================
  * スクロール慣性処理
  *
- * 指が離れた後、最後のスクロール速度に基づいて減衰しながら
+ * 指が離れた後、直近100 msの平均スクロール速度に基づいて減衰しながら
  * スクロール信号を送り続ける。タイマーの各ティックで速度に
  * 減衰率（friction）を掛けて減速し、閾値未満になったら停止する。
  * ============================================================ */
@@ -1608,6 +1591,7 @@ static void iqs915x_stop_scroll_inertia_locked(struct iqs915x_data *data)
 {
   k_work_cancel_delayable(&data->scroll_inertia_work);
   memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
+  iqs915x_motion_history_reset(&data->scroll_motion_history);
   data->inertia_scroll_x_acc = 0;
   data->inertia_scroll_y_acc = 0;
 }
@@ -1619,34 +1603,11 @@ static void iqs915x_reset_scroll_inertia(struct iqs915x_data *data)
   data->scroll_x_acc = 0;
   data->scroll_y_acc = 0;
   data->scroll_contact_fingers = 0;
-  data->last_scroll_motion_speed = 0;
-  data->last_scroll_motion_ms = 0;
   k_mutex_unlock(&data->settings_lock);
 }
 
-static uint32_t iqs915x_scroll_motion_stale_ms(
-    const struct iqs915x_config *config, uint16_t trigger_ms)
-{
-  uint16_t report_rate_ms = config->report_rate_ms;
-
-  if (report_rate_ms == 0 &&
-      !iqs915x_get_init_data_reg16(config,
-                                   IQS915X_ACTIVE_MODE_REPORT_RATE,
-                                   &report_rate_ms))
-  {
-    report_rate_ms = 10;
-  }
-  if (report_rate_ms == 0)
-  {
-    report_rate_ms = 10;
-  }
-
-  return MAX((uint32_t)trigger_ms,
-             (uint32_t)report_rate_ms * 2U);
-}
-
 static void iqs915x_update_scroll_contact(
-    const struct iqs915x_config *config, struct iqs915x_data *data,
+    struct iqs915x_data *data,
     uint8_t num_fingers, uint8_t raw_fingers, int64_t release_ms,
     bool released_scroll_sequence)
 {
@@ -1667,8 +1628,6 @@ static void iqs915x_update_scroll_contact(
     if (state->active)
     {
       iqs915x_stop_scroll_inertia_locked(data);
-      data->last_scroll_motion_speed = 0;
-      data->last_scroll_motion_ms = 0;
     }
 
     if (num_fingers >= 3)
@@ -1676,8 +1635,6 @@ static void iqs915x_update_scroll_contact(
       iqs915x_stop_scroll_inertia_locked(data);
       data->scroll_x_acc = 0;
       data->scroll_y_acc = 0;
-      data->last_scroll_motion_speed = 0;
-      data->last_scroll_motion_ms = 0;
     }
 
     k_mutex_unlock(&data->settings_lock);
@@ -1690,16 +1647,25 @@ static void iqs915x_update_scroll_contact(
     return;
   }
 
-  uint32_t stale_ms = iqs915x_scroll_motion_stale_ms(
-      config, profile->trigger_ms);
-  bool recent_motion = data->last_scroll_motion_ms > 0 &&
-                       release_ms - data->last_scroll_motion_ms <= stale_ms;
-  bool fast_enough = data->last_scroll_motion_speed >=
+  int16_t velocity_x;
+  int16_t velocity_y;
+  uint16_t elapsed_ms;
+  bool moving = iqs915x_motion_history_velocity(
+      &data->scroll_motion_history, release_ms,
+      &velocity_x, &velocity_y, &elapsed_ms);
+  bool fast_enough = MAX(abs(velocity_x), abs(velocity_y)) >=
                      profile->threshold_start;
+  bool start = released_scroll_sequence && profile->enabled && moving && fast_enough;
 
-  if (released_scroll_sequence && profile->enabled && recent_motion &&
-      fast_enough)
+  LOG_DBG("scroll_inertia_release,t=%lld,window_ms=%u,vx=%d,vy=%d,"
+          "threshold=%u,start=%u",
+          (long long)release_ms, elapsed_ms, velocity_x, velocity_y,
+          profile->threshold_start, start);
+
+  if (start)
   {
+    state->vx = velocity_x;
+    state->vy = velocity_y;
     state->active = true;
     state->is_inertial = false;
     state->zero_output_ticks = 0;
@@ -1721,8 +1687,7 @@ static void iqs915x_update_scroll_contact(
     data->scroll_y_acc = 0;
   }
 
-  data->last_scroll_motion_speed = 0;
-  data->last_scroll_motion_ms = 0;
+  iqs915x_motion_history_reset(&data->scroll_motion_history);
   k_mutex_unlock(&data->settings_lock);
 }
 
@@ -1774,12 +1739,12 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
     return;
   }
 
-  step_x = state->ema_vx;
-  step_y = state->ema_vy;
+  step_x = state->vx;
+  step_y = state->vy;
   decay_factor_q8 = (int16_t)((profile->decay_factor_percent * IQS915X_SCROLL_INERTIA_FP_SCALE) / 100);
 
   iqs915x_calculate_decayed_movement_fixed(
-      state->ema_vx, state->ema_vy, decay_factor_q8, &step_x, &step_y,
+      state->vx, state->vy, decay_factor_q8, &step_x, &step_y,
       &state->remainder_x_q8, &state->remainder_y_q8);
 
   if (abs(step_x) <= profile->threshold_stop && abs(step_y) <= profile->threshold_stop)
@@ -1792,8 +1757,6 @@ static void iqs915x_scroll_inertia_work_handler(struct k_work *work)
 
   state->vx = step_x;
   state->vy = step_y;
-  state->ema_vx = step_x;
-  state->ema_vy = step_y;
   state->is_inertial = true;
   iqs915x_filter_scroll_cross_axis(&step_x, &step_y);
 
@@ -2014,13 +1977,7 @@ int iqs915x_apply_settings(const struct device *dev,
   {
     /* The inertia worker takes this same lock, so a queued or running tick
      * cannot observe a partially applied profile. */
-    k_work_cancel_delayable(&data->scroll_inertia_work);
-    memset(&data->scroll_inertia_state, 0,
-           sizeof(data->scroll_inertia_state));
-    data->inertia_scroll_x_acc = 0;
-    data->inertia_scroll_y_acc = 0;
-    data->last_scroll_motion_speed = 0;
-    data->last_scroll_motion_ms = 0;
+    iqs915x_stop_scroll_inertia_locked(data);
     data->pointer_x_acc = 0;
     data->pointer_y_acc = 0;
     data->runtime_settings = *settings;
@@ -3041,7 +2998,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     data->is_touching = is_touching_now;
     iqs915x_update_finger_state(data, &stream, num_fingers,
                                 touch_down, touch_up);
-    iqs915x_update_scroll_contact(config, data, num_fingers, reported_fingers,
+    iqs915x_update_scroll_contact(data, num_fingers, reported_fingers,
                                   data->finger_tracker.transition_ms,
                                   data->scroll_sequence_active);
     iqs915x_update_sequence_gates(data);

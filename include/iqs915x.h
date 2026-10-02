@@ -21,7 +21,10 @@ struct iqs915x_pointer_settings {
   uint16_t max_percent;
 };
 
-/** Runtime scroll inertia controls. Times are in milliseconds. */
+/** Runtime scroll inertia controls. Times are in milliseconds.
+ * threshold_start is the release-time 100 ms average motion in coordinate
+ * units per 10 ms; threshold_stop applies to decayed motion per inertia tick.
+ */
 struct iqs915x_scroll_inertia_settings {
   bool enabled;
   uint16_t trigger_ms;

@@ -28,6 +28,7 @@
 #include <stdint.h>
 
 #include <iqs915x.h>
+#include "iqs915x_scroll_motion.h"
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -328,8 +329,6 @@ enum iqs915x_reseed_state
     RESEED_WAIT_LP2_RELATCH,
 };
 
-#define IQS915X_INERTIA_MOTION_HISTORY_SIZE 12
-
 enum iqs915x_two_finger_mode
 {
     IQS915X_2F_MODE_NONE = 0,
@@ -346,26 +345,10 @@ struct iqs915x_scroll_inertia_profile
     uint16_t threshold_stop;
 };
 
-struct iqs915x_motion_sample
-{
-    int64_t ms;
-    int16_t x;
-    int16_t y;
-};
-
-struct iqs915x_motion_history
-{
-    struct iqs915x_motion_sample samples[IQS915X_INERTIA_MOTION_HISTORY_SIZE];
-    uint8_t head;
-    uint8_t count;
-};
-
 struct iqs915x_scroll_inertia_state
 {
     int16_t vx;
     int16_t vy;
-    int16_t ema_vx;
-    int16_t ema_vy;
     int16_t remainder_x_q8;
     int16_t remainder_y_q8;
     uint8_t zero_output_ticks;
@@ -559,8 +542,6 @@ struct iqs915x_data
     int32_t inertia_scroll_x_acc;
     int32_t inertia_scroll_y_acc;
     uint8_t scroll_contact_fingers; // 最新NUM_FINGERS（settings_lockで保護）
-    uint16_t last_scroll_motion_speed;
-    int64_t last_scroll_motion_ms;
 
     struct iqs915x_finger_tracker finger_tracker;
     struct iqs915x_two_finger_session two_finger;

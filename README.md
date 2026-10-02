@@ -143,6 +143,11 @@ scroll_output,t=50000,source=manual,axis=wheel,delta=-20,wheel=-1,status=sent,rc
 - `denom`: resolution times scroll divisor. Accumulator values use coordinate
   units multiplied by 512; a successful output consumes `wheel * denom`.
 
+At release, `scroll_inertia_release,t=...,window_ms=...,vx=...,vy=...,threshold=...,start=...`
+reports the estimated velocity in coordinate units per 10 ms, the elapsed
+estimation window (at most 100 ms), and whether inertia was armed. `t` is the
+first zero-finger report time, excluding the 20 ms confirmation delay.
+
 Sum `wheel` only for `status=sent`, separately for each source and axis, to
 compare driver output. Acceptance by the input API does not confirm delivery
 over the split transport or to the host. Pair these logs with raw coordinate
@@ -239,11 +244,35 @@ count is confirmed. `trigger-ms` is measured from the first zero-finger report;
 inertia cannot start before the 20 ms confirmation completes. Raw contact
 cancels pending or running inertia immediately. Tap duration and motion freshness
 also use the first zero-finger report time, excluding the confirmation delay.
-A stationary pause does not trigger inertia: the last non-zero scroll movement must be recent at
-release. Motion and inertia use separate fractional accumulators so stopping or
+A release-time velocity estimate replaces the last-frame start check and EMA.
+It uses signed centroid displacement divided by actual elapsed time over the
+latest 100 ms, ending at the first zero-finger report. For shorter gestures,
+the available interval since the valid two-finger baseline is used. Motion
+before scroll recognition is included, but a tap still cannot start inertia.
+Zero-motion reports and the stationary time between the last report and release
+are included in the elapsed time; a pause of 100 ms removes all prior motion.
+An interval crossing the window boundary contributes only its overlapping
+fraction, assuming uniform movement within that sensor interval. Coordinate
+recovery, slot changes and rebaselining clear the history and establish a new
+baseline, excluding recovered displacement from velocity.
+
+The average is converted to coordinate units per 10 ms. Its larger absolute
+axis is compared with `scroll-threshold-start`, and the same signed velocity
+seeds the existing inertia decay flow. This normalization is independent of
+sensor report rate; settings previously tuned at rates other than 10 ms may
+need adjustment. `trigger-ms` controls start delay only, not motion freshness.
+Motion and inertia use separate fractional accumulators so stopping or
 cancelling inertia does not discard manual-scroll remainders. Inertia follows a
 Q8 fixed-point decay flow with remainder preservation and stops when the
 decayed motion no longer reaches HID output for several ticks.
+
+The velocity estimator has host-side regression tests that do not require a
+Zephyr workspace:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Idrivers/input tests/scroll_motion.c -o /tmp/iqs915x-scroll-motion-test
+/tmp/iqs915x-scroll-motion-test
+```
 
 See [docs/scroll_parameters_ja.md](docs/scroll_parameters_ja.md) for a
 practical Japanese guide to each scroll parameter and tuning workflow.

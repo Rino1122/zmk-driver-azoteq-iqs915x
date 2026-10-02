@@ -78,8 +78,8 @@ static void iqs915x_reset_two_finger_session(struct iqs915x_data *data)
 void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data)
 {
   memset(&data->finger_tracker, 0, sizeof(data->finger_tracker));
-  memset(&data->scroll_motion_history, 0, sizeof(data->scroll_motion_history));
   k_mutex_lock(&data->settings_lock, K_FOREVER);
+  iqs915x_motion_history_reset(&data->scroll_motion_history);
   memset(&data->scroll_inertia_state, 0, sizeof(data->scroll_inertia_state));
   k_mutex_unlock(&data->settings_lock);
   data->swipe_last_centroid_x = 0;

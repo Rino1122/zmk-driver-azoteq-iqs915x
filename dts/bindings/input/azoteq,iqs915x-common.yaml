@@ -99,9 +99,8 @@ properties:
     description: |
       Delay in ms from the first zero-finger report to inertia start. Release
       must first pass the fixed 20 ms finger-count debounce, so inertia starts
-      no earlier than that confirmation. Motion freshness is evaluated at the
-      first zero-finger report: a sufficiently fast scroll movement must have
-      occurred within the larger of this delay and two sensor report intervals.
+      no earlier than that confirmation. This delay does not change the fixed
+      100 ms velocity estimation window ending at the first zero-finger report.
 
   scroll-decay-factor-int:
     type: int
@@ -120,7 +119,10 @@ properties:
     type: int
     default: 2
     description: |
-      Minimum manual scroll velocity required to arm inertia start.
+      Minimum release-time average scroll velocity required to start inertia,
+      in coordinate units per 10 ms. Velocity is signed displacement divided
+      by elapsed time over the latest 100 ms (or the available shorter history).
+      The larger absolute axis velocity is compared with this threshold.
 
   scroll-threshold-stop:
     type: int
