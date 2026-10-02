@@ -279,6 +279,12 @@ The driver overrides the profile's LP2 sampling period (`0x11AA`) to 150 ms
 during initialization to shorten the wait when returning from LP2. This is a
 fixed driver setting and has no DTS override.
 
+Runtime enable/disable mode writes and Event Mode relatching use clock-stretch
+Force Comms without waiting for a finger-triggered RDY. Each state-machine step
+performs one I2C transaction, ending its communication window with STOP. The IC
+can still stretch the clock until communication is available, so transition
+latency depends on its sampling period. Normal input reads remain RDY-driven.
+
 ## Key differences from IQS5xx driver
 
 This driver is forked from the [zmk-driver-azoteq-iqs5xx](https://github.com/user/zmk-driver-azoteq-iqs5xx) driver with the following major changes:

@@ -2756,11 +2756,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (data->active_pending)
     {
-      if (gpio_pin_get_dt(&config->rdy_gpio) <= 0) {
-        (void)k_sem_take(&data->rdy_sem, K_MSEC(250));
-        continue;
-      }
-
+      // Force Comms: 指イベントのRDYを待たずに制御通信を開始する。
       ret = iqs915x_write_power_mode(dev, IQS915X_MODE_ACTIVE);
       if (ret == 0)
       {
@@ -2804,11 +2800,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     if (data->lp2_pending)
     {
-      if (gpio_pin_get_dt(&config->rdy_gpio) <= 0) {
-        (void)k_sem_take(&data->rdy_sem, K_MSEC(250));
-        continue;
-      }
-
+      // 無接触のEvent ModeでもLP2への移行を保留しない。
       ret = iqs915x_write_power_mode(dev, IQS915X_MODE_LP2);
       if (ret == 0)
       {
@@ -2850,6 +2842,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
+    // API由来の再ラッチもForce Commsで進める。各ステップは1 transactionで
+    // STOPにより終了し、次のループで最新要求を確認してから次の通信を開始する。
+    if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
+        data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE)
+    {
+      iqs915x_handle_event_mode_relatch_step(dev);
+      continue;
+    }
+
     // Event Mode may stop reporting after release. Confirm a pending count
     // using the latest snapshot at its deadline without another I2C transaction.
     k_timeout_t frame_wait = K_FOREVER;
@@ -2862,10 +2863,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
     bool debounce_timeout = k_sem_take(&data->rdy_sem, frame_wait) != 0;
 
-    if (data->work_state == WORK_RELATCH_EVENT_MODE_DISABLE ||
-        data->work_state == WORK_RELATCH_EVENT_MODE_ENABLE)
+    // API要求によるwakeは入力フレームではない。ループ先頭で最新要求を適用する。
+    if (data->applied_generation != iqs915x_request_generation(data))
     {
-      iqs915x_handle_event_mode_relatch_step(dev);
       continue;
     }
 
