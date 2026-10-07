@@ -335,6 +335,19 @@ The driver overrides the profile's LP2 sampling period (`0x11AA`) to 150 ms
 during initialization to shorten the wait when returning from LP2. This is a
 fixed driver setting and has no DTS override.
 
+Run the host regression test with `python3 tests/init_event_mode.py`. It checks
+startup without RDY, enabled/disabled defaults, policy retries, I2C backoff, and
+the RDY-driven Re-ATI path using the actual driver control flow.
+
+The final initialization Event Mode write and register read-back use
+clock-stretch Force Comms as well. Enabling Event Mode can immediately stop RDY
+when no finger event is present, so waiting for another RDY would leave startup
+unfinished. Both steps, including policy retries, run without waiting for RDY;
+each performs one transaction ending with STOP. I2C errors retain a two-second
+retry delay. Earlier initialization steps, including Re-ATI, remain RDY-driven.
+With `disabled-by-default`, successful verification is followed by the normal
+LP2 transition. Initialization requires neither touch nor a split central.
+
 Runtime enable/disable mode writes and Event Mode relatching use clock-stretch
 Force Comms without waiting for a finger-triggered RDY. Each state-machine step
 performs one I2C transaction, ending its communication window with STOP. The IC

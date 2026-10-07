@@ -2683,10 +2683,25 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
   {
     if (!data->initialized)
     {
-      // SHOW_RESETフラグが立っている期間、IQSは自律的にRDYをトグルし続ける仕様のため
-      // マスター側からForce Comms（RDY High時にI2C
-      // STARTを発行）を行う必要はない。
-      // RDY割り込みをひたすら待ち、割り込み駆動で初期化ステップを進める。
+      // Event Mode can stop RDY immediately when no finger event is present.
+      // Force both the write and read-back so verification and policy retries
+      // do not depend on touch or a split central. Each step ends with STOP.
+      if (data->init_step == INIT_SET_EVENT_MODE ||
+          data->init_step == INIT_CONFIRM_EVENT_MODE)
+      {
+        enum iqs915x_init_step previous_step = data->init_step;
+
+        iqs915x_init_step_handler(dev);
+        if (data->init_step == previous_step)
+        {
+          // An I2C error leaves the step unchanged. Keep the original two-second
+          // retry interval instead of spinning on a non-responsive device.
+          k_sleep(K_MSEC(2000));
+        }
+        continue;
+      }
+
+      // Earlier initialization steps remain RDY-driven, including Re-ATI.
       //
       // ただし割り込みのエッジ取りこぼし対策として：
       // - すでにRDYがLowになっている場合はセマフォをgiveしてすぐ進む
