@@ -65,9 +65,10 @@ HARNESS = r'''
 DEFINITIONS
 static int64_t now, next_rdy;
 static uint16_t ic_mode, ic_cfg, info_extra, fingers;
-static bool no_rdy, touch;
+static bool no_rdy, touch, event_rdy;
 static int input_resets, input_frames, reseeds, reads, writes, schedules;
 static int reject_cfg, io_errors;
+static int sem_waits, force_stretch_ms, forced_transactions;
 static uint16_t txn_reg[1024];
 static bool txn_write[1024];
 static int64_t txn_time[1024];
@@ -76,9 +77,11 @@ static uint16_t coords[8];
 static uint16_t period(void) { return ic_mode==IQS915X_MODE_LP2 ? 500 : 10; }
 static int64_t k_uptime_get(void) { return now; }
 static int gpio_pin_get_dt(const struct gpio_dt_spec *g) {
-  (void)g; return !no_rdy && !(ic_cfg & IQS915X_EVENT_MODE) && now >= next_rdy;
+  (void)g; return !no_rdy && (event_rdy ||
+      (!(ic_cfg & IQS915X_EVENT_MODE) && now >= next_rdy));
 }
 static int k_sem_take(struct k_sem *s,k_timeout_t timeout) {
+  sem_waits++;
   if (s->count) { s->count=0; return 0; }
   int64_t end=timeout==K_FOREVER ? INT64_MAX : now+timeout;
   if (!no_rdy && !(ic_cfg & IQS915X_EVENT_MODE) && next_rdy <= end) {
@@ -92,6 +95,11 @@ static void k_work_reschedule(struct k_work_delayable *w,int64_t delay) {
   assert(delay==60000); w->scheduled=1; schedules++;
 }
 static void record(uint16_t reg,bool write) {
+  if (no_rdy || (!event_rdy && ((ic_cfg & IQS915X_EVENT_MODE) || now < next_rdy))) {
+    forced_transactions++;
+    now+=force_stretch_ms; /* IC-imposed latency; no driver RDY timeout. */
+  }
+  event_rdy=false;
   assert(txns<1024); txn_reg[txns]=reg; txn_write[txns]=write; txn_time[txns++]=now;
   next_rdy=now+period();
 }
@@ -153,7 +161,8 @@ static struct device dev;
 static struct iqs915x_data d;
 static void setup(bool output) {
   now=0; next_rdy=output?INT64_MAX:500; txns=0;
-  no_rdy=touch=false; input_resets=input_frames=reseeds=reads=writes=schedules=0;
+  no_rdy=touch=event_rdy=false; input_resets=input_frames=reseeds=reads=writes=schedules=0;
+  sem_waits=force_stretch_ms=forced_transactions=0;
   reject_cfg=io_errors=info_extra=fingers=0;
   for (int j=0;j<8;j++) coords[j]=UINT16_MAX;
   memset(&d,0,sizeof(d)); memset(&config,0,sizeof(config));
@@ -195,6 +204,62 @@ int main(void) {
   iqs915x_reseed_work_handler(&d.reseed_work.work);
   assert(d.reseed_due && !d.reseed_timer_armed);
   iqs915x_schedule_lp2_reseed(&d); assert(schedules==1);
+  /* Enable with no RDY at all, both untouched and already touched. The first
+   * transaction switches to Active; the only delay is mocked clock stretching.
+   * No output is permitted before the final Event Mode read-back. */
+  for (int contact=0; contact<2; contact++) {
+    setup(false); no_rdy=true; force_stretch_ms=7;
+    touch=contact; fingers=contact; coords[0]=coords[1]=100;
+    d.requested_enabled=1; d.request_generation++;
+    k_sem_give(&d.rdy_sem);
+    for (int step=0; step<4; step++) {
+      run(&d,1);
+      assert(!input_frames && d.output_enabled==(step==3));
+    }
+    assert(d.enabled && ic_mode==IQS915X_MODE_ACTIVE);
+    assert(d.work_state==WORK_READ_DATA && (ic_cfg & IQS915X_EVENT_MODE));
+    assert(sem_waits==0 && forced_transactions==4 && now==28);
+    assert(txns==4 && txn_reg[0]==IQS915X_SYSTEM_CONTROL && txn_write[0]);
+    assert(txn_reg[1]==IQS915X_INFO_FLAGS && !txn_write[1]);
+    assert(txn_reg[2]==IQS915X_CONFIG_SETTINGS && txn_write[2]);
+    assert(txn_reg[3]==IQS915X_CONFIG_SETTINGS && !txn_write[3]);
+    assert(d.pointer_resume_guard_frames==IQS915X_POINTER_RESUME_GUARD_FRAMES);
+    /* Steady-state input returns to event RDY, rather than forced polling. */
+    no_rdy=false; event_rdy=true; now+=10; run(&d,1);
+    assert(input_frames==1 && forced_transactions==4 && sem_waits==0);
+  }
+  /* An unconfirmed configuration is repaired and verified, still without RDY. */
+  setup(false); no_rdy=true; force_stretch_ms=7;
+  d.confirmed_config_settings=0;
+  d.requested_enabled=1; d.request_generation++;
+  run(&d,6);
+  assert(d.output_enabled && forced_transactions==6 && sem_waits==0 && now==42);
+  assert(txn_reg[0]==IQS915X_CONFIG_SETTINGS && txn_write[0]);
+  assert(txn_reg[1]==IQS915X_CONFIG_SETTINGS && !txn_write[1]);
+  assert(txn_reg[2]==IQS915X_SYSTEM_CONTROL && txn_write[2]);
+  /* Failed/mismatched Event Mode confirmation never opens the output gate. */
+  setup(false); no_rdy=true; d.requested_enabled=1; d.request_generation++;
+  run(&d,2); reject_cfg=10;
+  run(&d,6); assert(!d.initialized && !d.output_enabled && !input_frames && sem_waits==0);
+  /* An I2C error on an urgent control step keeps the normal bounded backoff. */
+  setup(false); no_rdy=true; d.requested_enabled=1; d.request_generation++;
+  io_errors=1; run(&d,1); assert(!d.output_enabled && now==20 && d.power_retry_count==1);
+  until_idle(); assert(d.output_enabled && sem_waits==0);
+  /* A newer request must stop even forced control before another transaction. */
+  setup(false); d.requested_enabled=1; d.request_generation++;
+  run(&d,1); assert(txns==1 && d.power_force_comms && !d.output_enabled);
+  d.requested_enabled=0; d.request_generation++;
+  int txns_before=txns;
+  assert(!iqs915x_wait_window(&d,true,INT64_MAX) && txns==txns_before);
+  until_idle(); assert(!d.output_enabled && !d.power_force_comms && ic_mode==IQS915X_MODE_LP2);
+  /* An enable during an issued reseed first drains the next fresh TP scan.
+   * Force controls must not consume its indication or duplicate the request. */
+  setup(false); ic_mode=d.confirmed_mode=IQS915X_MODE_ACTIVE; next_rdy=10;
+  iqs915x_begin_reseed(&d,true); run(&d,1);
+  d.requested_enabled=1; d.request_generation++;
+  run(&d,1); assert(txn_reg[1]==IQS915X_REL_X && !txn_write[1] && !d.output_enabled);
+  assert(d.power_force_comms);
+  no_rdy=true; until_idle(); assert(d.output_enabled && reseeds==1);
   /* Runtime no-touch path: four fresh Active scans, then reseed, then a read.
    * No configuration or power write can consume the post-reseed indication. */
   setup(false); d.reseed_due=1; run(&d,1); assert(d.reseed_state==RESEED_OBSERVE_ACTIVE);
@@ -302,7 +367,7 @@ int main(void) {
   assert(patched_cfg & IQS915X_TP_REATI_ENABLE);
   assert(!(patched_cfg & (IQS915X_EVENT_MODE|IQS915X_ALP_REATI_ENABLE|
                          IQS915X_TP_TOUCH_EVENT|IQS915X_FORCE_COMMS_METHOD)));
-  puts("IQS915x maintenance: streaming, watchdog, probes, reseed, requests, ATI and PM passed");
+  puts("IQS915x maintenance: streaming, watchdog, forced enable, probes, reseed, requests, ATI and PM passed");
 }
 '''
 

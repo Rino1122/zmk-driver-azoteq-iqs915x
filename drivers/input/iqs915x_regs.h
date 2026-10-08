@@ -602,6 +602,7 @@ struct iqs915x_data
     bool reseed_forced;
     uint32_t reseed_id;
     uint16_t power_target_mode;
+    bool power_force_comms; // 出力有効化の制御通信はRDYを待たずに進める
     uint16_t confirmed_mode;
     uint32_t active_sampling_period_ms;
     int64_t comm_completed_ms;

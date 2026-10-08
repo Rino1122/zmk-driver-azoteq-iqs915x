@@ -844,6 +844,7 @@ static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
   data->reseed_state = RESEED_IDLE;
   data->no_touch_scans = 0;
   data->power_retry_count = 0;
+  data->power_force_comms = false;
   data->work_state = WORK_READ_DATA;
   data->active_pending = false;
   data->lp2_pending = false;
@@ -941,7 +942,14 @@ static void iqs915x_begin_mode(struct iqs915x_data *data, uint16_t mode, bool ou
   data->relatch_target_enabled = output;
   data->transition_generation = iqs915x_request_generation(data);
   data->power_retry_count = 0;
-  data->work_state = WORK_SET_STREAMING;
+  data->power_force_comms = output;
+  /* LP2 already has a verified Streaming configuration. Enabling output must
+   * not spend two additional LP2 periods rewriting and checking that value.
+   * Maintenance transitions retain their RDY-driven verification sequence. */
+  bool streaming_confirmed = data->streaming_expected &&
+      data->confirmed_config_settings == iqs915x_config_settings_without_event_mode(
+          data->confirmed_config_settings);
+  data->work_state = output && streaming_confirmed ? WORK_SET_POWER : WORK_SET_STREAMING;
 }
 
 static void iqs915x_restore_mode(struct iqs915x_data *data)
@@ -967,6 +975,7 @@ static bool iqs915x_wait_window(struct iqs915x_data *data, bool force, int64_t t
 {
   const struct iqs915x_config *config = data->dev->config;
   int64_t watchdog = data->comm_completed_ms + 3LL * iqs915x_sampling_period(data);
+  if (data->applied_generation != iqs915x_request_generation(data)) { return false; }
   if (force) { return true; }
   for (;;)
   {
@@ -2717,6 +2726,7 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   if (suspended) { iqs915x_clear_stuck(data, "pm-suspend"); }
   if (!output && stable_lp2)
   {
+    data->power_force_comms = false;
     iqs915x_schedule_lp2_reseed(data);
     iqs915x_complete_transition(data, 0);
     return;
@@ -2727,11 +2737,14 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   if (data->reseed_state == RESEED_ISSUE_TP_RESEED && !suspended)
   {
     iqs915x_begin_mode(data, IQS915X_MODE_ACTIVE, false);
+    data->power_force_comms = output;
     return;
   }
   data->reseed_state = RESEED_IDLE;
   iqs915x_restore_mode(data);
-  LOG_INF("communication request generation=%u enabled=%u suspended=%u", generation, output, suspended);
+  LOG_INF("communication request generation=%u enabled=%u suspended=%u force=%u skip_streaming=%u",
+          generation, output, suspended, data->power_force_comms,
+          data->work_state == WORK_SET_POWER);
 }
 
 /* ============================================================
@@ -2804,7 +2817,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
     if (data->work_state != WORK_READ_DATA)
     {
-      bool force = !data->streaming_expected || data->work_state == WORK_CONFIRM_EVENT_MODE;
+      /* Output enable (including PM resume) is latency-sensitive. Initiate
+       * each transaction immediately; the IC clock-stretches to its next safe
+       * communication window. Each STOP still ends one separate window. */
+      bool force = data->power_force_comms || !data->streaming_expected ||
+                   data->work_state == WORK_CONFIRM_EVENT_MODE;
       if (iqs915x_wait_window(data, force, INT64_MAX)) { iqs915x_mode_step(data); }
       continue;
     }

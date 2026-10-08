@@ -345,8 +345,17 @@ output disabled use Streaming Mode. Each control step performs one I2C
 transaction and ends its communication window with STOP. Configuration and
 charging mode are verified before output resumes. Leaving Event Mode and
 verifying its re-enable use clock-stretch Force Comms because there may be no
-finger event. Streaming operations wait for RDY. If RDY does not arrive within
-three sampling periods since the last transaction, the driver falls back to
+finger event. Output enable, including PM resume to enabled Active, uses Force
+Comms for every control step without waiting for RDY. When Streaming settings
+are already confirmed, it goes directly to the Active mode write instead of
+rewriting and rechecking the same settings in LP2. The output gate remains
+closed until both Active and Event Mode are confirmed, with the existing
+two-frame pointer baseline guard afterward. The driver initiates control I2C
+immediately; clock stretching can still delay each transaction until the IC is
+ready. Actual enable latency needs hardware validation.
+
+Normal Streaming reads and maintenance transitions wait for RDY. If RDY does
+not arrive within three sampling periods since the last transaction, the driver falls back to
 Force Comms: 1500 ms in LP2, or three times the actual Active period from
 `report-rate-ms` / the profile. During mode changes the longer period applies.
 API and timer wakes do not count as RDY samples or restart that deadline.
@@ -402,7 +411,8 @@ cc -std=c11 -Wall -Wextra -Werror tests/stuck.c -o /tmp/iqs915x-stuck
 
 The tests compile actual initialization/runtime control flow with mocked Zephyr
 and IC services, and check streaming timing, Force Comms fallback, four-sample
-confirmation, post-reseed read order, candidate matching, request reversals,
+confirmation, post-reseed read order, candidate matching, output enable without
+RDY (with and without touch), request reversals,
 Re-ATI/ATI Error and PM handling. Hardware validation should include startup,
 tap/drag, scroll/inertia, 3/4-finger swipe, runtime enable/disable, stationary
 single/multiple fingers, release recovery, communication fallback and reset.

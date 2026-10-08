@@ -71,9 +71,15 @@ struct iqs915x_settings_limits {
  *
  * enabled=false: 出力ゲートを即座に閉じ、専用スレッドで操作状態を解除して
  *                TP channelを500 ms周期でセンシングするLP2 Streamingへ移行する
- * enabled=true:  ActiveとEvent Modeを確認後、新しい入力セッションを開始する
+ * enabled=true:  RDYを待たずForce CommsでActive／Event Modeを設定・確認し、
+ *                新しい入力セッションを開始する
  *
- * LP2／非出力ActiveはStreaming。RDYがsampling periodの3倍の間来なければ
+ * 有効化時は、確認済みのStreaming設定を再設定せず直接Active切り替えへ進む。
+ * ICが通信可能になるまでのクロックストレッチは発生し得る。
+ * Active／Event Mode確認後も、座標の基準取得に2フレームを使う。
+ *
+ * 通常のLP2／非出力Active監視とmaintenance遷移はRDYを待つ。
+ * RDYがsampling periodの3倍の間来なければ
  * Force Commsへフォールバックする。Event Modeを離れる操作と再有効化確認も
  * Force Commsを使う。各段階は1 transactionでSTOPにより通信窓を閉じる。
  *
