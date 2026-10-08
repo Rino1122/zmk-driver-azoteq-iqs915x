@@ -32,6 +32,7 @@ struct iqs915x_stream_data {
   uint16_t finger3_y;
   uint16_t finger4_x;
   uint16_t finger4_y;
+  struct iqs915x_stuck_point raw_point[IQS915X_OBSERVED_FINGERS];
 };
 
 /* A confidence bit is not an occupancy flag. Select slots using valid XY pairs. */

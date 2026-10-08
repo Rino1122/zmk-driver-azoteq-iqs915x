@@ -30,6 +30,7 @@
 #include <iqs915x.h>
 #include "iqs915x_scroll_motion.h"
 #include "iqs915x_scroll_inertia.h"
+#include "iqs915x_stuck.h"
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -206,6 +207,13 @@
 #define IQS915X_GESTURE_EVENT BIT(9)   // ジェスチャーイベント有効化
 #define IQS915X_TP_EVENT BIT(10)       // 指移動および指up/downイベント有効化
 #define IQS915X_TP_TOUCH_EVENT BIT(13) // diamond pattern各チャネル状態変化イベント
+#define IQS915X_TP_REATI_ENABLE BIT(2)
+#define IQS915X_ALP_REATI_ENABLE BIT(3)
+#define IQS915X_REATI_EVENT BIT(11)
+#define IQS915X_ALP_EVENT BIT(12)
+#define IQS915X_OTHER_SETTINGS 0x11C0
+#define IQS915X_ALP_SETUP 0x11C2
+#define IQS915X_REATI_RETRY_TIME 0x11B6
 
 // Trackpad Settings (1 byte)
 // XYのフリップ・スワップ設定
@@ -298,7 +306,7 @@ enum iqs915x_init_step
     INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_ACK_RESET,           // リセットACK
     INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
-    INIT_REQUEST_REATI,       // TP/ALP Re-ATIリクエスト
+    INIT_REQUEST_REATI,       // TP Re-ATIリクエスト
     INIT_WAIT_REATI,          // TP Re-ATI完了待機
     INIT_PREPARE_EVENT_MODE,  // CONFIG_SETTINGS読み取りとEvent Mode書き込み値準備
     INIT_SET_EVENT_MODE,      // Event Mode + Manual Control明示設定
@@ -310,24 +318,22 @@ enum iqs915x_init_step
 // 通常動作時のワークハンドラステート
 enum iqs915x_work_state
 {
-    WORK_READ_DATA,       // トラックパッドデータ一括読み取り
-    WORK_RELATCH_EVENT_MODE_DISABLE, // Event Mode再ラッチ: EVENT_MODE clear
-    WORK_RELATCH_EVENT_MODE_ENABLE,  // Event Mode再ラッチ: EVENT_MODE set
+    WORK_READ_DATA,
+    WORK_SET_STREAMING,
+    WORK_CONFIRM_STREAMING,
+    WORK_SET_POWER,
+    WORK_CONFIRM_POWER,
+    WORK_SET_EVENT_MODE,
+    WORK_CONFIRM_EVENT_MODE,
 };
 
-// LP2中の定期Reseed用ステート
+// 無接触確認／指スタックからのTP Reseed用ステート
 enum iqs915x_reseed_state
 {
     RESEED_IDLE,
-    RESEED_CHECK_LP2_TOUCH,
-    RESEED_ENTER_IDLE,
-    RESEED_WAIT_IDLE_RELATCH,
-    RESEED_CHECK_IDLE_TOUCH_1,
-    RESEED_CHECK_IDLE_TOUCH_2,
+    RESEED_OBSERVE_ACTIVE,
     RESEED_ISSUE_TP_RESEED,
     RESEED_WAIT_TP_SCAN,
-    RESEED_RETURN_LP2,
-    RESEED_WAIT_LP2_RELATCH,
 };
 
 enum iqs915x_two_finger_mode
@@ -494,7 +500,6 @@ struct iqs915x_data
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
     uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
     uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
-    uint8_t event_mode_relatch_retry_count; // EVENT_MODE再有効化確認リトライ回数
     uint8_t power_retry_count;
     atomic_t transition_result;
 
@@ -575,7 +580,7 @@ struct iqs915x_data
     atomic_t request_generation; // enable/disable要求の世代番号
     uint32_t applied_generation; // 専用スレッドが取り込んだ要求世代
     uint32_t transition_generation; // 実行中のpower遷移が属する世代
-    bool relatch_target_enabled; // Event Mode再ラッチ完了後に出力を開くか
+    bool relatch_target_enabled; // モード／Event Mode確認後に出力を開くか
     uint8_t pointer_resume_guard_frames; // Active復帰後に基準取得へ使うフレーム数
     uint32_t button_work_generation;
     uint32_t tap_and_hold_release_work_generation;
@@ -588,8 +593,22 @@ struct iqs915x_data
     bool pm_saved_enabled;
     atomic_t pm_suspended; // Device PM suspend中は定期Reseedを停止
     atomic_t reseed_due; // 周期workから専用スレッドへ渡す要求
+    atomic_t reseed_timer_armed;
     enum iqs915x_reseed_state reseed_state;
-    uint8_t reseed_retry_count; // Reseed後の走査確認／LP2復帰リトライ
+    struct iqs915x_stuck_tracker stuck;
+    bool stuck_remap;
+    int64_t stuck_probe_after_ms;
+    uint8_t no_touch_scans;
+    bool reseed_forced;
+    uint32_t reseed_id;
+    uint16_t power_target_mode;
+    uint16_t confirmed_mode;
+    uint32_t active_sampling_period_ms;
+    int64_t comm_completed_ms;
+    bool comm_fallback_active;
+    bool streaming_expected;
+    bool ati_error_seen;
+    uint8_t runtime_busy_count;
 };
 
 #endif /* IQS915X_REGS_H_ */

@@ -331,31 +331,81 @@ compiled into the driver.
 The driver writes the profile-provided init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides. The conversion script emits the profile DTS array by default; use `--c-header` only for legacy tooling.
 This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
 
-The driver overrides the profile's LP2 sampling period (`0x11AA`) to 150 ms
-during initialization to shorten the wait when returning from LP2. This is a
-fixed driver setting and has no DTS override.
+The driver applies these maintenance settings while pre-patching init-data:
 
-Run the host regression test with `python3 tests/init_event_mode.py`. It checks
-startup without RDY, enabled/disabled defaults, policy retries, I2C backoff, and
-the RDY-driven Re-ATI path using the actual driver control flow.
+- ALP is disabled (`ALP Setup`, bit 31), so TP channels are sensed in LP2.
+- LP2 sampling period is fixed at 500 ms; LP1/LP2 Auto-Prox is disabled.
+- Automatic TP Re-ATI and its event are enabled. ALP Re-ATI/events and
+  `TP_TOUCH_EVENT` are disabled. Re-ATI retry time is fixed at 1 second.
+- ATI target, reference drift limit and negative delta Re-ATI threshold retain
+  the profile values. Tune these values in the supplied init-data.
 
-The final initialization Event Mode write and register read-back use
-clock-stretch Force Comms as well. Enabling Event Mode can immediately stop RDY
-when no finger event is present, so waiting for another RDY would leave startup
-unfinished. Both steps, including policy retries, run without waiting for RDY;
-each performs one transaction ending with STOP. I2C errors retain a two-second
-retry delay. Earlier initialization steps, including Re-ATI, remain RDY-driven.
-With `disabled-by-default`, successful verification is followed by the normal
-LP2 transition. Initialization requires neither touch nor a split central.
+Output-enabled Active uses Event Mode. LP2 and temporary Active with input
+output disabled use Streaming Mode. Each control step performs one I2C
+transaction and ends its communication window with STOP. Configuration and
+charging mode are verified before output resumes. Leaving Event Mode and
+verifying its re-enable use clock-stretch Force Comms because there may be no
+finger event. Streaming operations wait for RDY. If RDY does not arrive within
+three sampling periods since the last transaction, the driver falls back to
+Force Comms: 1500 ms in LP2, or three times the actual Active period from
+`report-rate-ms` / the profile. During mode changes the longer period applies.
+API and timer wakes do not count as RDY samples or restart that deadline.
 
-Runtime enable/disable mode writes and Event Mode relatching use clock-stretch
-Force Comms without waiting for a finger-triggered RDY. Each state-machine step
-performs one I2C transaction, ending its communication window with STOP. The IC
-can still stretch the clock until communication is available, so transition
-latency depends on its sampling period. Normal input reads remain RDY-driven.
-LP2 relatching disables `TP_EVENT` so retained trackpad touch state does not
-request repeated communication windows. Active relatching enables it again;
-temporary Idle scans for periodic reseeding also retain `TP_EVENT`.
+In LP2, the driver reads only fresh `INFO_FLAGS`; coordinates and `NUM_FINGERS`
+are not assumed to update. Every 60 seconds it attempts a reseed. With no Global
+TP Touch, it enters Active with input output disabled and requires four fresh,
+consecutive samples with both Global TP Touch and `NUM_FINGERS` clear. Contact
+postpones the request; the next LP2 no-touch sample retries without waiting
+another minute. A reseed is queued in Active, and the very next transaction
+reads an Active TP scan before changing mode or configuration. The log records
+Re-ATI Occurred and ATI Error, then the latest enable/disable request is restored.
+The driver does not infer a reference drift result from an absent Re-ATI flag.
+ATI Error retries are handled by the IC with the configured one-second interval.
+
+Every valid coordinate pair in the four read finger slots is independently
+monitored, including when `NUM_FINGERS` reports more than four. A candidate
+matures after 10 seconds when its observed X and Y ranges are each no greater
+than `floor(min(X resolution, Y resolution) / 10)`. The monitor uses raw
+coordinates before LUT correction, and keeps the full observed range rather
+than adjacent-sample differences. Movement or disappearance restarts or cancels
+only that finger's candidate. Any mature candidate forces a whole-trackpad
+reseed, including during normal output-enabled Active operation.
+
+If Global TP Touch is present at an LP2 reseed attempt, temporary Active captures
+coordinates and returns to LP2. At the candidate deadline another temporary
+Active scan rechecks them. Candidates are matched one-to-one across LP2 by
+compatible ranges, maximizing matched candidates and then minimizing squared
+position distance. Ties prefer ascending candidate ID and slot. An intervening
+LP2 no-touch sample cancels all candidates. Movement during the unobserved LP2
+interval, or a different finger returning to the same position, can be judged
+stationary. This is the accepted recovery policy. A real stationary finger may
+therefore trigger reseed; recovery after release relies on profile-tuned
+reference drift and negative delta Re-ATI. The latter requires 15 consecutive
+cycles and its counter may restart on a power-mode change.
+
+Enabling/disabling preserves candidate ages. PM suspend stops maintenance,
+clears candidates and resets input state; resume restarts the periodic timer
+when disabled. Reseed and runtime Re-ATI also release held buttons and cancel
+pending tap/drag/inertia work. Input resumes with the existing two-frame pointer
+baseline guard. INFO logs cover `reseed`, `stuck`, `reati`, and `communication`
+state changes; DEBUG adds per-sample candidate ranges and no-touch counts.
+WARN logs identify communication fallback, failed verification and ATI errors.
+
+Host checks (no local west build is required):
+
+```sh
+python3 tests/init_event_mode.py
+python3 tests/maintenance.py
+cc -std=c11 -Wall -Wextra -Werror tests/stuck.c -o /tmp/iqs915x-stuck
+/tmp/iqs915x-stuck
+```
+
+The tests compile actual initialization/runtime control flow with mocked Zephyr
+and IC services, and check streaming timing, Force Comms fallback, four-sample
+confirmation, post-reseed read order, candidate matching, request reversals,
+Re-ATI/ATI Error and PM handling. Hardware validation should include startup,
+tap/drag, scroll/inertia, 3/4-finger swipe, runtime enable/disable, stationary
+single/multiple fingers, release recovery, communication fallback and reset.
 
 ## Key differences from IQS5xx driver
 

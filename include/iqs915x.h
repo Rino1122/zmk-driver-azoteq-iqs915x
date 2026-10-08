@@ -70,19 +70,24 @@ struct iqs915x_settings_limits {
  * @brief トラックパッドの有効/無効を設定する
  *
  * enabled=false: 出力ゲートを即座に閉じ、専用スレッドで操作状態を解除して
- *                IQS915xをLP2へ遷移させる
- * enabled=true:  専用スレッドでIQS915xをActive modeへ戻し、Event Modeの
- *                再ラッチ完了後に新しい入力セッションを開始する
+ *                TP channelを500 ms周期でセンシングするLP2 Streamingへ移行する
+ * enabled=true:  ActiveとEvent Modeを確認後、新しい入力セッションを開始する
  *
- * Manual Controlは初期化時に有効化される。有効化時はActiveへ遷移する。
- * モード変更とEvent Mode再ラッチはForce Commsで行い、指イベントのRDYを
- * 待たない。ICの通信可能な時点まではクロックストレッチによる待ちが発生する。
- * LP2のサンプリング周期はドライバで150 msに固定する。
- * LP2中はTP_EVENTを無効化し、Active復帰時に再度有効化する。
- * 無効化後はLP2で10秒ごとに接触状態を確認し、無接触を確認できた場合だけ
- * 一時的にIdleへ移ってTP Reseedを行い、LP2へ戻る。Reseed中は入力出力を
- * 閉じたままにする。接触中は周期を越えて延期する。Device PM suspend中は
- * 定期Reseedを停止する。
+ * LP2／非出力ActiveはStreaming。RDYがsampling periodの3倍の間来なければ
+ * Force Commsへフォールバックする。Event Modeを離れる操作と再有効化確認も
+ * Force Commsを使う。各段階は1 transactionでSTOPにより通信窓を閉じる。
+ *
+ * LP2では1分ごとにreseedを試みる。Global TP Touchなしで非出力Activeへ移り、
+ * 4回連続の無接触サンプルでTP Reseedを要求する。接触中は延期し、次のLP2
+ * 無接触サンプルで再試行する。接触時は一時Activeで全取得finger座標を記録し、
+ * 10秒後に再取得する。観測範囲がX/Yともmin(XY解像度)/10以内の指があれば
+ * 強制reseedする。通常Activeでも同条件を監視し、実際の静止指も対象となる。
+ * 候補の監視はenable/disableをまたいで継続する。reseed後は最新の要求状態へ
+ * 戻し、ATI Errorの再試行はICに任せる（retry timeは1秒）。自動Re-ATIは有効。
+ * reference drift／negative deltaの閾値はprofile側で適切に設定する。
+ *
+ * reseed／Re-ATIは入力状態も解除する。Device PM suspend中は監視を停止し、
+ * 候補を破棄する。復帰時に無効なら1分タイマーを開始する。
  *
  * @param dev  IQS915xデバイスインスタンス
  * @param enabled  true=有効(Active), false=無効(LP2)

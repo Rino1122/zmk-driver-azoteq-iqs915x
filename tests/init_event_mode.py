@@ -34,13 +34,15 @@ def main():
     names = (
         "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
         "IQS915X_TP_EVENT", "IQS915X_GESTURE_EVENT", "IQS915X_TP_TOUCH_EVENT",
+        "IQS915X_TP_REATI_ENABLE", "IQS915X_REATI_EVENT",
+        "IQS915X_ALP_REATI_ENABLE", "IQS915X_ALP_EVENT", "IQS915X_MODE_ACTIVE",
         "IQS915X_INIT_EVENT_MODE_MAX_RETRIES", "IQS915X_POINTER_RESUME_GUARD_FRAMES",
     )
     definitions = "\n".join(
         re.search(r"^#define " + name + r"\b.*$", source + registers, re.M)[0]
         for name in names
     )
-    policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy")
+    policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy") + "\n" + block(source, "static uint16_t iqs915x_config_settings_without_event_mode")
     cases = source[source.index("  case INIT_PREPARE_EVENT_MODE:"):
                    source.index("  case INIT_WAIT_REATI:", source.index("  case INIT_PREPARE_EVENT_MODE:"))]
     thread = source[source.index("static void iqs915x_thread_main("):]
@@ -67,7 +69,8 @@ struct iqs915x_data {
   uint16_t init_pending_cfg, confirmed_config_settings;
   uint32_t applied_generation, transition_generation;
   int requested_enabled, output_enabled, rdy_sem;
-  bool is_touching;
+  bool is_touching, streaming_expected, ati_error_seen, comm_fallback_active;
+  uint16_t confirmed_mode;
 };
 struct iqs915x_config { int rdy_gpio; };
 struct device { struct iqs915x_data *data; const struct iqs915x_config *config; };
@@ -82,7 +85,7 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
-static void iqs915x_reset_event_mode_relatch_state(struct iqs915x_data *data) { (void)data; }
+static void iqs915x_clear_stuck(struct iqs915x_data *data, const char *reason) { (void)data; (void)reason; }
 static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data) { (void)data; }
 static void iqs915x_restart_initialization(const struct device *dev, const char *reason) {
   (void)reason; dev->data->init_step = INIT_FAILED;
@@ -128,7 +131,7 @@ static struct iqs915x_data setup(bool enabled) {
   ic_cfg = 0;
   return (struct iqs915x_data){
     .init_step = INIT_SET_EVENT_MODE,
-    .init_pending_cfg = iqs915x_apply_config_settings_policy(0),
+    .init_pending_cfg = enabled ? iqs915x_apply_config_settings_policy(0) : iqs915x_config_settings_without_event_mode(0),
     .requested_enabled = enabled,
   };
 }

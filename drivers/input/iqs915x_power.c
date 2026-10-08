@@ -15,7 +15,7 @@
 #include "iqs915x_power.h"
 #include "iqs915x_regs.h"
 
-#define IQS915X_POWER_TRANSITION_WAIT_MS 250
+#define IQS915X_POWER_TRANSITION_WAIT_MS 2000
 
 static void iqs915x_set_pm_suspended(struct iqs915x_data *data, bool suspended)
 {
@@ -41,7 +41,7 @@ static int iqs915x_request_enabled(const struct device *dev, bool enabled,
                    data->reseed_state == RESEED_IDLE &&
                    (data->enabled == enabled);
 
-  if (already_stable) {
+  if (already_stable && !wait_for_completion) {
     return 0;
   }
 
@@ -91,6 +91,7 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
     data->pm_saved_enabled = atomic_get(&data->requested_enabled) != 0;
     iqs915x_set_pm_suspended(data, true);
     k_work_cancel_delayable(&data->reseed_work);
+    atomic_clear(&data->reseed_timer_armed);
     atomic_clear(&data->reseed_due);
     {
       int ret = iqs915x_request_enabled(dev, false, true);
@@ -102,8 +103,8 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
     }
   case PM_DEVICE_ACTION_RESUME:
     {
-      int ret = iqs915x_request_enabled(dev, data->pm_saved_enabled, true);
       iqs915x_set_pm_suspended(data, false);
+      int ret = iqs915x_request_enabled(dev, data->pm_saved_enabled, true);
       if (ret == 0 && !data->pm_saved_enabled) {
         iqs915x_schedule_lp2_reseed(data);
       }
