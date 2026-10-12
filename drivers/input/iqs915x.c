@@ -47,7 +47,6 @@ static const uint8_t iqs915x_device_api = 0;
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
-#define IQS915X_LP2_RESEED_INTERVAL_MS 60000
 #define IQS915X_LP2_SAMPLING_PERIOD_MS 500U
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
@@ -498,15 +497,6 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
   iqs915x_validate_stream_coordinates(dev->data, data);
-  for (uint8_t slot = 0; slot < IQS915X_OBSERVED_FINGERS; slot++) {
-    uint16_t x = UINT16_MAX, y = UINT16_MAX;
-    bool valid = iqs915x_get_finger_coordinates(data, slot, &x, &y);
-    uint8_t count = data->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-    data->raw_point[slot] = (struct iqs915x_stuck_point){
-        .valid = valid && count > 0 && count <= IQS915X_MAX_FINGERS,
-        .x = x, .y = y,
-    };
-  }
   if (config->coordinate_correction)
   {
     iqs915x_correct_stream_coordinates(config, dev->data, data);
@@ -791,58 +781,11 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * Streaming中の操作はRDYを待ち、3 sampling periodsでフォールバックする。
  * ============================================================ */
 
-/* All runtime control steps consume one communication window. Streaming reads
- * are RDY driven; Force Comms is only used after 3T, or to leave Event Mode. */
-static void iqs915x_clear_stuck(struct iqs915x_data *data, const char *reason)
-{
-  for (unsigned int i = 0; i < IQS915X_OBSERVED_FINGERS; i++)
-  {
-    const struct iqs915x_stuck_candidate *c = &data->stuck.candidate[i];
-    if (c->active)
-    {
-      LOG_INF("stuck end id=%u slot=%u reason=%s", c->id, c->slot, reason);
-    }
-  }
-  iqs915x_stuck_clear(&data->stuck);
-  data->stuck_remap = false;
-  data->stuck_probe_after_ms = 0;
-}
-
-static void iqs915x_reseed_work_handler(struct k_work *work)
-{
-  struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-  struct iqs915x_data *data = CONTAINER_OF(dwork, struct iqs915x_data, reseed_work);
-  atomic_clear(&data->reseed_timer_armed);
-  if (!atomic_get(&data->pm_suspended) && !atomic_get(&data->requested_enabled))
-  {
-    atomic_set(&data->reseed_due, 1);
-    k_sem_give(&data->rdy_sem);
-  }
-}
-
-void iqs915x_schedule_lp2_reseed(struct iqs915x_data *data)
-{
-  /* Returning from a coordinate probe must preserve both a due request and
-   * the original timer. Contact postponement is retried on the next sample. */
-  if (data->initialized && !atomic_get(&data->requested_enabled) &&
-      !atomic_get(&data->pm_suspended) && !atomic_get(&data->reseed_due) &&
-      atomic_cas(&data->reseed_timer_armed, 0, 1))
-  {
-    k_work_reschedule(&data->reseed_work, K_MSEC(IQS915X_LP2_RESEED_INTERVAL_MS));
-  }
-}
-
 static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
 {
   atomic_clear(&data->output_enabled);
   data->enabled = false;
   iqs915x_reset_input_session(data);
-  iqs915x_clear_stuck(data, reason);
-  k_work_cancel_delayable(&data->reseed_work);
-  atomic_clear(&data->reseed_timer_armed);
-  atomic_clear(&data->reseed_due);
-  data->reseed_state = RESEED_IDLE;
-  data->no_touch_scans = 0;
   data->power_retry_count = 0;
   data->power_force_comms = false;
   data->work_state = WORK_READ_DATA;
@@ -867,7 +810,6 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
 {
   if (info == 0xEEEE)
   {
-    data->no_touch_scans = 0;
     if (++data->runtime_busy_count >= IQS915X_INIT_REATI_MAX_WAIT)
     {
       iqs915x_runtime_reset(data, "busy-timeout");
@@ -901,8 +843,6 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
     uint32_t generation = iqs915x_request_generation(data);
     atomic_clear(&data->output_enabled);
     iqs915x_reset_input_session(data);
-    iqs915x_clear_stuck(data, "reati");
-    data->no_touch_scans = 0;
     data->pointer_resume_guard_frames = IQS915X_POINTER_RESUME_GUARD_FRAMES;
     if (reopen && generation == iqs915x_request_generation(data) &&
         atomic_get(&data->requested_enabled) && !atomic_get(&data->pm_suspended))
@@ -921,9 +861,8 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
 static void iqs915x_comm_failure(struct iqs915x_data *data, int ret)
 {
   data->power_retry_count++;
-  data->no_touch_scans = 0;
-  LOG_WRN("communication failure state=%u reseed=%u retry=%u rc=%d",
-          data->work_state, data->reseed_state, data->power_retry_count, ret);
+  LOG_WRN("communication failure state=%u retry=%u rc=%d",
+          data->work_state, data->power_retry_count, ret);
   if (data->power_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
   {
     iqs915x_runtime_reset(data, "communication-retries-exhausted");
@@ -945,7 +884,7 @@ static void iqs915x_begin_mode(struct iqs915x_data *data, uint16_t mode, bool ou
   data->power_force_comms = output;
   /* LP2 already has a verified Streaming configuration. Enabling output must
    * not spend two additional LP2 periods rewriting and checking that value.
-   * Maintenance transitions retain their RDY-driven verification sequence. */
+   * Disable transitions retain their RDY-driven verification sequence. */
   bool streaming_confirmed = data->streaming_expected &&
       data->confirmed_config_settings == iqs915x_config_settings_without_event_mode(
           data->confirmed_config_settings);
@@ -1074,17 +1013,12 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
     }
     else if (!ret)
     {
-      if (data->confirmed_mode == IQS915X_MODE_LP2 && data->power_target_mode == IQS915X_MODE_ACTIVE)
-      {
-        data->stuck_remap = true;
-      }
       data->confirmed_mode = data->power_target_mode;
       data->active_pending = false;
       data->lp2_pending = false;
       data->work_state = data->relatch_target_enabled ? WORK_SET_EVENT_MODE : WORK_READ_DATA;
       if (data->confirmed_mode == IQS915X_MODE_LP2)
       {
-        iqs915x_schedule_lp2_reseed(data);
         iqs915x_complete_transition(data, 0);
       }
       LOG_INF("communication mode confirmed mode=%u output=%u t=%lld",
@@ -1101,132 +1035,21 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
   }
 }
 
-static uint8_t iqs915x_observe_stuck(struct iqs915x_data *data,
-                                    const struct iqs915x_stream_data *stream)
-{
-  struct iqs915x_stuck_candidate before[IQS915X_OBSERVED_FINGERS];
-  memcpy(before, data->stuck.candidate, sizeof(before));
-  int64_t now = k_uptime_get();
-  uint8_t mature = iqs915x_stuck_observe(&data->stuck, stream->raw_point, now, data->stuck_remap);
-  data->stuck_remap = false;
-  for (unsigned int i = 0; i < IQS915X_OBSERVED_FINGERS; i++)
-  {
-    const struct iqs915x_stuck_candidate *c = &data->stuck.candidate[i];
-    if (before[i].active && (!c->active || c->id != before[i].id))
-    {
-      LOG_DBG("stuck end id=%u reason=movement-or-missing", before[i].id);
-    }
-    if (c->active && !before[i].active)
-    {
-      LOG_INF("stuck start id=%u slot=%u x=%u y=%u threshold=%u t=%lld",
-              c->id, c->slot, c->last_x, c->last_y, data->stuck.threshold, (long long)now);
-    }
-    if (c->active)
-    {
-      LOG_DBG("stuck sample id=%u slot=%u range_x=%u range_y=%u elapsed_ms=%lld mode=%u",
-              c->id, c->slot, c->max_x - c->min_x, c->max_y - c->min_y,
-              (long long)(now - c->since_ms), data->confirmed_mode);
-    }
-    if (mature & BIT(i))
-    {
-      LOG_INF("stuck mature id=%u slot=%u range_x=%u range_y=%u elapsed_ms=%lld threshold=%u",
-              c->id, c->slot, c->max_x - c->min_x, c->max_y - c->min_y,
-              (long long)(now - c->since_ms), data->stuck.threshold);
-    }
-  }
-  return mature;
-}
-
-static void iqs915x_begin_reseed(struct iqs915x_data *data, bool forced)
-{
-  data->reseed_forced = forced;
-  data->reseed_id++;
-  atomic_clear(&data->output_enabled);
-  iqs915x_reset_input_session(data);
-  data->reseed_state = RESEED_ISSUE_TP_RESEED;
-  if (!data->streaming_expected)
-  {
-    iqs915x_begin_mode(data, IQS915X_MODE_ACTIVE, false);
-  }
-  LOG_INF("reseed prepare id=%u forced=%u enabled=%u t=%lld", data->reseed_id,
-          forced, (unsigned int)atomic_get(&data->requested_enabled), (long long)k_uptime_get());
-}
-
-/* Called only with a fresh status/sample, never with a debounce snapshot. */
-static bool iqs915x_maintenance_sample(struct iqs915x_data *data,
-                                      const struct iqs915x_stream_data *stream)
+/* Inspect only fresh IC status. Cached debounce frames must not replay Re-ATI. */
+static bool iqs915x_runtime_sample(struct iqs915x_data *data,
+                                   const struct iqs915x_stream_data *stream)
 {
   uint16_t info = stream->info_flags;
-  bool touch = (info & IQS915X_GLOBAL_TP_TOUCH) != 0;
-  bool suspended = atomic_get(&data->pm_suspended) != 0;
   if (!iqs915x_runtime_info(data, info)) { return false; }
-  if (data->reseed_state == RESEED_WAIT_TP_SCAN)
-  {
-    if ((info & IQS915X_CHARGING_MODE_MASK) != IQS915X_MODE_ACTIVE)
-    {
-      iqs915x_comm_failure(data, -EIO);
-      return false;
-    }
-    LOG_INF("reseed scan id=%u flags=0x%04x reati=%u ati_error=%u t=%lld",
-            data->reseed_id, info, (info & IQS915X_REATI_OCCURRED) != 0,
-            (info & IQS915X_ATI_ERROR) != 0, (long long)k_uptime_get());
-    /* A missing Re-ATI flag does not prove that reference drift was small. */
-    iqs915x_clear_stuck(data, "reseed-complete");
-    data->reseed_state = RESEED_IDLE;
-    data->power_retry_count = 0;
-    atomic_clear(&data->reseed_due);
-    iqs915x_restore_mode(data);
-    return false;
-  }
-  if (suspended) { return false; }
+  if (atomic_get(&data->pm_suspended)) { return false; }
   if ((info & IQS915X_CHARGING_MODE_MASK) != data->confirmed_mode)
   {
     iqs915x_comm_failure(data, -EIO);
     return false;
   }
   data->power_retry_count = 0;
-  if (data->confirmed_mode == IQS915X_MODE_LP2)
-  {
-    bool watch = iqs915x_stuck_deadline(&data->stuck) != INT64_MAX;
-    if (!touch) { iqs915x_clear_stuck(data, "lp2-no-touch"); }
-    int64_t now = k_uptime_get();
-    bool due = atomic_get(&data->reseed_due) != 0;
-    if ((!touch && (due || watch)) ||
-        (touch && (due || watch) && now >= data->stuck_probe_after_ms &&
-         (!watch || now >= iqs915x_stuck_deadline(&data->stuck))))
-    {
-      LOG_INF("reseed probe touch=%u due=%u t=%lld", touch, due, (long long)now);
-      data->no_touch_scans = 0;
-      data->reseed_state = RESEED_OBSERVE_ACTIVE;
-      iqs915x_begin_mode(data, IQS915X_MODE_ACTIVE, false);
-    }
-    return false;
-  }
-  if (info & IQS915X_REATI_OCCURRED) { return false; }
-  uint8_t mature = iqs915x_observe_stuck(data, stream);
-  if (mature)
-  {
-    iqs915x_begin_reseed(data, true);
-    return false;
-  }
-  if (data->reseed_state == RESEED_OBSERVE_ACTIVE)
-  {
-    uint8_t fingers = stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK;
-    if (!touch && fingers == 0)
-    {
-      if (++data->no_touch_scans >= 4) { iqs915x_begin_reseed(data, false); }
-      LOG_DBG("reseed no-touch scans=%u", data->no_touch_scans);
-    }
-    else
-    {
-      LOG_INF("reseed postponed touch=%u fingers=%u flags=0x%04x", touch, fingers, info);
-      data->reseed_state = RESEED_IDLE;
-      data->stuck_probe_after_ms = k_uptime_get() + IQS915X_STUCK_TIME_MS;
-      iqs915x_restore_mode(data);
-    }
-    return false;
-  }
-  return !(info & IQS915X_REATI_OCCURRED);
+  return data->confirmed_mode == IQS915X_MODE_ACTIVE &&
+         !(info & IQS915X_REATI_OCCURRED);
 }
 
 /* ============================================================
@@ -2546,7 +2369,6 @@ static void iqs915x_init_step_handler(const struct device *dev)
       data->streaming_expected = !(cfg & IQS915X_EVENT_MODE);
       data->ati_error_seen = false;
       data->comm_fallback_active = false;
-      iqs915x_clear_stuck(data, "initialization");
       data->applied_generation = iqs915x_request_generation(data);
       data->transition_generation = data->applied_generation;
       data->active_pending = false;
@@ -2707,9 +2529,8 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
     return;
   }
   bool output = atomic_get(&data->requested_enabled) != 0;
-  bool suspended = atomic_get(&data->pm_suspended) != 0;
   bool stable_lp2 = data->confirmed_mode == IQS915X_MODE_LP2 &&
-                    data->work_state == WORK_READ_DATA && data->reseed_state == RESEED_IDLE;
+                    data->work_state == WORK_READ_DATA;
   atomic_clear(&data->output_enabled);
   data->enabled = false;
   iqs915x_reset_input_session(data);
@@ -2717,33 +2538,15 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   data->transition_generation = generation;
   data->active_pending = false;
   data->lp2_pending = false;
-  if (output || suspended)
-  {
-    k_work_cancel_delayable(&data->reseed_work);
-    atomic_clear(&data->reseed_timer_armed);
-    atomic_clear(&data->reseed_due);
-  }
-  if (suspended) { iqs915x_clear_stuck(data, "pm-suspend"); }
   if (!output && stable_lp2)
   {
     data->power_force_comms = false;
-    iqs915x_schedule_lp2_reseed(data);
     iqs915x_complete_transition(data, 0);
     return;
   }
-  /* A reseed write can have reached the device even when I2C reported an error.
-   * Drain its next Active scan before honoring a new mode request. */
-  if (data->reseed_state == RESEED_WAIT_TP_SCAN) { return; }
-  if (data->reseed_state == RESEED_ISSUE_TP_RESEED && !suspended)
-  {
-    iqs915x_begin_mode(data, IQS915X_MODE_ACTIVE, false);
-    data->power_force_comms = output;
-    return;
-  }
-  data->reseed_state = RESEED_IDLE;
   iqs915x_restore_mode(data);
   LOG_INF("communication request generation=%u enabled=%u suspended=%u force=%u skip_streaming=%u",
-          generation, output, suspended, data->power_force_comms,
+          generation, output, (unsigned int)atomic_get(&data->pm_suspended), data->power_force_comms,
           data->work_state == WORK_SET_POWER);
 }
 
@@ -2808,9 +2611,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     iqs915x_apply_pending_power_request(data);
 
     if (atomic_get(&data->pm_suspended) && data->work_state == WORK_READ_DATA &&
-        data->reseed_state == RESEED_IDLE && data->confirmed_mode == IQS915X_MODE_LP2)
+        data->confirmed_mode == IQS915X_MODE_LP2)
     {
-      iqs915x_clear_stuck(data, "pm-suspend");
       /* Zephyr may suspend the I2C controller after the PM transition. */
       k_sem_take(&data->rdy_sem, K_FOREVER);
       continue;
@@ -2825,35 +2627,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (iqs915x_wait_window(data, force, INT64_MAX)) { iqs915x_mode_step(data); }
       continue;
     }
-    if (data->reseed_state == RESEED_ISSUE_TP_RESEED)
-    {
-      if (!iqs915x_wait_window(data, false, INT64_MAX)) { continue; }
-      ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL,
-                                IQS915X_MODE_ACTIVE | IQS915X_TP_RESEED);
-      LOG_INF("reseed request id=%u forced=%u rc=%d t=%lld", data->reseed_id,
-              data->reseed_forced, ret, (long long)k_uptime_get());
-      data->reseed_state = RESEED_WAIT_TP_SCAN;
-      if (ret < 0) { iqs915x_comm_failure(data, ret); }
-      continue;
-    }
-
     uint32_t frame_generation = iqs915x_request_generation(data);
     int64_t deadline = INT64_MAX;
-    if (!data->streaming_expected && iqs915x_output_is_enabled(data))
+    if (!data->streaming_expected && iqs915x_output_is_enabled(data) &&
+        data->finger_tracker.count_change_pending)
     {
-      deadline = iqs915x_stuck_deadline(&data->stuck);
-      if (data->finger_tracker.count_change_pending)
-      {
-        deadline = MIN(deadline, data->finger_tracker.candidate_since_ms +
-                                 IQS915X_FINGER_COUNT_DEBOUNCE_MS);
-      }
+      deadline = data->finger_tracker.candidate_since_ms +
+                 IQS915X_FINGER_COUNT_DEBOUNCE_MS;
     }
     bool window = iqs915x_wait_window(data, false, deadline);
     if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
-    bool probe_due = !data->streaming_expected &&
-                     k_uptime_get() >= iqs915x_stuck_deadline(&data->stuck);
     struct iqs915x_stream_data stream = {0};
-    if (probe_due) { window = true; }
     if (!window)
     {
       if (!data->finger_tracker.count_change_pending ||
@@ -2874,7 +2658,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         ret = iqs915x_read_stream(dev, &stream);
       }
       if (ret < 0) { iqs915x_comm_failure(data, ret); continue; }
-      bool allow_input = iqs915x_maintenance_sample(data, &stream);
+      bool allow_input = iqs915x_runtime_sample(data, &stream);
       if (!allow_input) { continue; }
       last_stream = stream;
       last_stream_generation = frame_generation;
@@ -3386,8 +3170,6 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
   iqs915x_configure_tap_profile(config, data);
-  data->stuck.enabled = data->swipe_resolution_x > 0 && data->swipe_resolution_y > 0;
-  data->stuck.threshold = MIN(data->swipe_resolution_x, data->swipe_resolution_y) / 10;
   uint16_t profile_period = 0;
   iqs915x_get_init_data_reg16(config, IQS915X_ACTIVE_MODE_REPORT_RATE, &profile_period);
   data->active_sampling_period_ms = config->report_rate_ms ? config->report_rate_ms : profile_period;
@@ -3396,8 +3178,8 @@ static int iqs915x_init(const struct device *dev)
   data->power_target_mode = IQS915X_MODE_ACTIVE;
   data->streaming_expected = true;
   data->comm_completed_ms = k_uptime_get();
-  LOG_INF("reseed policy interval_ms=60000 lp2_ms=500 active_ms=%u stuck_ms=10000 threshold=%u retry_s=1",
-          data->active_sampling_period_ms, data->stuck.threshold);
+  LOG_INF("ATI policy reseed=0 host_ati=init auto_reati=1 retry_s=1 lp2_ms=500 active_ms=%u",
+          data->active_sampling_period_ms);
   data->tap_and_hold_release_pending = false;
   data->single_tap_pending = false;
   data->tap_sequence_second_touch = false;
@@ -3406,9 +3188,6 @@ static int iqs915x_init(const struct device *dev)
   k_sem_init(&data->rdy_sem, 0, 1);
   k_sem_init(&data->transition_sem, 0, 1);
   atomic_clear(&data->pm_suspended);
-  atomic_clear(&data->reseed_due);
-  atomic_clear(&data->reseed_timer_armed);
-  data->reseed_state = RESEED_IDLE;
   k_work_init_delayable(&data->button_release_work,
                         iqs915x_button_release_work_handler);
   k_work_init_delayable(&data->tap_and_hold_release_work,
@@ -3419,8 +3198,6 @@ static int iqs915x_init(const struct device *dev)
                         iqs915x_tap_and_hold_start_work_handler);
   k_work_init_delayable(&data->scroll_inertia_work,
                         iqs915x_scroll_inertia_work_handler);
-  k_work_init_delayable(&data->reseed_work,
-                        iqs915x_reseed_work_handler);
 
   // リセットGPIOの設定（オプショナル）
   if (config->reset_gpio.port)

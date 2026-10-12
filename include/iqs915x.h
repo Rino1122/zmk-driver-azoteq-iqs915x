@@ -78,22 +78,21 @@ struct iqs915x_settings_limits {
  * ICが通信可能になるまでのクロックストレッチは発生し得る。
  * Active／Event Mode確認後も、座標の基準取得に2フレームを使う。
  *
- * 通常のLP2／非出力Active監視とmaintenance遷移はRDYを待つ。
+ * 通常のLP2通信と無効化のモード遷移はRDYを待つ。
  * RDYがsampling periodの3倍の間来なければ
  * Force Commsへフォールバックする。Event Modeを離れる操作と再有効化確認も
  * Force Commsを使う。各段階は1 transactionでSTOPにより通信窓を閉じる。
  *
- * LP2では1分ごとにreseedを試みる。Global TP Touchなしで非出力Activeへ移り、
- * 4回連続の無接触サンプルでTP Reseedを要求する。接触中は延期し、次のLP2
- * 無接触サンプルで再試行する。接触時は一時Activeで全取得finger座標を記録し、
- * 10秒後に再取得する。観測範囲がX/Yともmin(XY解像度)/10以内の指があれば
- * 強制reseedする。通常Activeでも同条件を監視し、実際の静止指も対象となる。
- * 候補の監視はenable/disableをまたいで継続する。reseed後は最新の要求状態へ
- * 戻し、ATI Errorの再試行はICに任せる（retry timeは1秒）。自動Re-ATIは有効。
- * reference drift／negative deltaの閾値はprofile側で適切に設定する。
+ * ドライバからATIを要求するのは初期化時（ICリセット後の再初期化を含む）のみ。
+ * 通常動作中はICの自動Re-ATIに任せ、Reseedや指スタック判定は行わない。
+ * 自動Re-ATIは共通の有効ビットで、reference drift／negative delta／positive delta
+ * の各条件が適用される。ATI targetと各閾値はprofileの値を保持する。
+ * Negative DeltaによるRe-ATIは閾値超過の15サイクル連続判定で発動する。
+ * Positive Deltaを使わない用途では、profileで発動しない閾値を設定する。
+ * ATI Errorの再試行はICに任せる（retry timeは1秒）。
  *
- * reseed／Re-ATIは入力状態も解除する。Device PM suspend中は監視を停止し、
- * 候補を破棄する。復帰時に無効なら1分タイマーを開始する。
+ * 自動Re-ATI検出時は入力状態を解除し、座標の基準を取り直す。
+ * Device PM suspend中はLP2移行後に通信を停止し、復帰時は保存した有効状態へ戻す。
  *
  * @param dev  IQS915xデバイスインスタンス
  * @param enabled  true=有効(Active), false=無効(LP2)

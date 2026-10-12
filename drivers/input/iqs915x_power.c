@@ -38,7 +38,6 @@ static int iqs915x_request_enabled(const struct device *dev, bool enabled,
   already_stable = ((atomic_get(&data->requested_enabled) != 0) == enabled) &&
                    data->initialized && !data->active_pending &&
                    !data->lp2_pending && data->work_state == WORK_READ_DATA &&
-                   data->reseed_state == RESEED_IDLE &&
                    (data->enabled == enabled);
 
   if (already_stable && !wait_for_completion) {
@@ -90,14 +89,10 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
   case PM_DEVICE_ACTION_SUSPEND:
     data->pm_saved_enabled = atomic_get(&data->requested_enabled) != 0;
     iqs915x_set_pm_suspended(data, true);
-    k_work_cancel_delayable(&data->reseed_work);
-    atomic_clear(&data->reseed_timer_armed);
-    atomic_clear(&data->reseed_due);
     {
       int ret = iqs915x_request_enabled(dev, false, true);
       if (ret < 0) {
         iqs915x_set_pm_suspended(data, false);
-        iqs915x_schedule_lp2_reseed(data);
       }
       return ret;
     }
@@ -105,9 +100,6 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
     {
       iqs915x_set_pm_suspended(data, false);
       int ret = iqs915x_request_enabled(dev, data->pm_saved_enabled, true);
-      if (ret == 0 && !data->pm_saved_enabled) {
-        iqs915x_schedule_lp2_reseed(data);
-      }
       return ret;
     }
   default:

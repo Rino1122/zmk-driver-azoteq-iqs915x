@@ -30,7 +30,6 @@
 #include <iqs915x.h>
 #include "iqs915x_scroll_motion.h"
 #include "iqs915x_scroll_inertia.h"
-#include "iqs915x_stuck.h"
 
 /* ============================================================
  * プロダクト情報レジスタ (Read-Only)
@@ -327,15 +326,6 @@ enum iqs915x_work_state
     WORK_CONFIRM_EVENT_MODE,
 };
 
-// 無接触確認／指スタックからのTP Reseed用ステート
-enum iqs915x_reseed_state
-{
-    RESEED_IDLE,
-    RESEED_OBSERVE_ACTIVE,
-    RESEED_ISSUE_TP_RESEED,
-    RESEED_WAIT_TP_SCAN,
-};
-
 enum iqs915x_two_finger_mode
 {
     IQS915X_2F_MODE_NONE = 0,
@@ -571,7 +561,6 @@ struct iqs915x_data
 
     // スクロール慣性用
     struct k_work_delayable scroll_inertia_work; // 慣性スクロールタイマー
-    struct k_work_delayable reseed_work; // LP2中の定期Reseedスケジューラ
     uint8_t gesture_pointer_suppress_ticks;      // gesture終了後のポインタ抑止残りtick数
 
     // Power mode制御
@@ -591,16 +580,7 @@ struct iqs915x_data
     bool lp2_pending;    // IQS915xへのLP2遷移待ち
     bool active_pending; // IQS915xのActive mode復帰待ち
     bool pm_saved_enabled;
-    atomic_t pm_suspended; // Device PM suspend中は定期Reseedを停止
-    atomic_t reseed_due; // 周期workから専用スレッドへ渡す要求
-    atomic_t reseed_timer_armed;
-    enum iqs915x_reseed_state reseed_state;
-    struct iqs915x_stuck_tracker stuck;
-    bool stuck_remap;
-    int64_t stuck_probe_after_ms;
-    uint8_t no_touch_scans;
-    bool reseed_forced;
-    uint32_t reseed_id;
+    atomic_t pm_suspended; // Device PM suspend中は通信と入力出力を停止
     uint16_t power_target_mode;
     bool power_force_comms; // 出力有効化の制御通信はRDYを待たずに進める
     uint16_t confirmed_mode;
