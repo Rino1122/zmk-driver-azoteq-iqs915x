@@ -349,7 +349,10 @@ The driver applies these communication and ATI settings while pre-patching init-
 Both Active and LP2 use Event Mode, including disabled-by-default startup.
 Init-data transfer and TP Re-ATI completion still run in Streaming Mode; the
 final initialization steps explicitly enable and verify Event Mode regardless
-of the requested output state. ALP Event is explicitly disabled in both modes.
+of the requested output state. ALP, TP Touch, Gesture, Switch and Snap events
+are explicitly disabled in both modes. TP Event is enabled only in Active;
+LP2 disables it because ALP sensing
+does not refresh trackpad coordinates. Re-ATI Event remains enabled in LP2.
 
 Enable/disable and Device PM transitions go directly to the power-mode write.
 Every control step uses clock-stretch Force Comms without waiting for an event
@@ -358,6 +361,10 @@ Each step performs one I2C transaction and ends its communication window with
 STOP. Disable/PM suspend completes only after both LP2 and Event Mode are
 confirmed. The output gate stays closed until both Active and Event Mode are
 confirmed on enable, with the existing two-frame pointer baseline guard afterward.
+A pointer frame checks the output gate and request generation once before
+submission. If disable arrives after X has been queued, the frame still sends
+Y with sync, so an orphaned X cannot accumulate into a later report. Subsequent
+frames are suppressed.
 The driver initiates control I2C immediately; clock stretching can still delay
 each transaction until the IC is ready. Actual transition latency needs hardware
 validation.
@@ -399,6 +406,7 @@ Host checks (no local west build is required):
 ```sh
 python3 tests/init_event_mode.py
 python3 tests/runtime_power.py
+python3 tests/pointer_frame.py
 ```
 
 The tests compile actual initialization/runtime control flow with mocked Zephyr

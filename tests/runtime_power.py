@@ -62,7 +62,7 @@ HARNESS = r'''
 DEFINITIONS
 static int64_t now, next_rdy;
 static uint16_t ic_mode, ic_cfg, info_extra, fingers;
-static bool no_rdy, touch, event_rdy;
+static bool no_rdy, touch, event_rdy, stale_tp;
 static int input_resets, input_frames, reads, writes;
 static int reject_cfg, reject_mode, io_errors;
 static int sem_waits, force_stretch_ms, forced_transactions;
@@ -73,15 +73,20 @@ static int txns;
 static uint16_t coords[8];
 static uint16_t period(void) { return ic_mode==IQS915X_MODE_LP2 ? 500 : 10; }
 static int64_t k_uptime_get(void) { return now; }
+static bool periodic_rdy(void) {
+  /* Model a final Active TP event persisting while ALP scans in LP2. */
+  return !(ic_cfg & IQS915X_EVENT_MODE) ||
+         (stale_tp && ic_mode==IQS915X_MODE_LP2 && (ic_cfg & IQS915X_TP_EVENT));
+}
 static int gpio_pin_get_dt(const struct gpio_dt_spec *g) {
   (void)g; return !no_rdy && (event_rdy ||
-      (!(ic_cfg & IQS915X_EVENT_MODE) && now >= next_rdy));
+      (periodic_rdy() && now >= next_rdy));
 }
 static int k_sem_take(struct k_sem *s,k_timeout_t timeout) {
   sem_waits++;
   if (s->count) { s->count=0; return 0; }
   int64_t end=timeout==K_FOREVER ? INT64_MAX : now+timeout;
-  if (!no_rdy && !(ic_cfg & IQS915X_EVENT_MODE) && next_rdy <= end) {
+  if (!no_rdy && periodic_rdy() && next_rdy <= end) {
     now=MAX(now,next_rdy); return 0;
   }
   assert(end!=INT64_MAX); now=end; return -1;
@@ -155,7 +160,7 @@ static struct device dev;
 static struct iqs915x_data d;
 static void setup(bool output) {
   now=0; next_rdy=output?INT64_MAX:500; txns=0;
-  no_rdy=touch=event_rdy=false; input_resets=input_frames=reads=writes=0;
+  no_rdy=touch=event_rdy=stale_tp=false; input_resets=input_frames=reads=writes=0;
   sem_waits=force_stretch_ms=forced_transactions=0;
   reject_cfg=reject_mode=io_errors=info_extra=fingers=0;
   for (int j=0;j<8;j++) coords[j]=UINT16_MAX;
@@ -166,7 +171,7 @@ static void setup(bool output) {
   d.enabled=d.requested_enabled=d.output_enabled=output;
   ic_mode=d.confirmed_mode=output?IQS915X_MODE_ACTIVE:IQS915X_MODE_LP2;
   d.streaming_expected=false;
-  ic_cfg=d.confirmed_config_settings=iqs915x_apply_config_settings_policy(0);
+  ic_cfg=d.confirmed_config_settings=iqs915x_config_settings_for_mode(0,ic_mode);
 }
 static void until_idle(void) {
   for (int i=0;i<40 && d.work_state!=WORK_READ_DATA;i++) run(&d,1);
@@ -234,6 +239,7 @@ int main(void) {
     assert(txn_reg[2]==IQS915X_CONFIG_SETTINGS && txn_write[2]);
     assert(txn_reg[3]==IQS915X_CONFIG_SETTINGS && !txn_write[3]);
     assert(d.pointer_resume_guard_frames==IQS915X_POINTER_RESUME_GUARD_FRAMES);
+    assert(ic_cfg & IQS915X_TP_EVENT);
     /* Steady-state input returns to event RDY, rather than forced polling. */
     no_rdy=false; event_rdy=true; now+=10; run(&d,1);
     assert(input_frames==1 && forced_transactions==4 && sem_waits==0);
@@ -241,7 +247,7 @@ int main(void) {
   /* Disable also forces every stage, completes only after Event read-back,
    * and keeps ALP events off even when stale settings contain that bit. */
   setup(true); no_rdy=true; force_stretch_ms=7;
-  ic_cfg=d.confirmed_config_settings|=IQS915X_ALP_EVENT;
+  ic_cfg=d.confirmed_config_settings|=IQS915X_ALP_EVENT|IQS915X_SWITCH_EVENT|IQS915X_SNAP_EVENT;
   d.requested_enabled=0; d.request_generation++;
   for (int step=0;step<4;step++) {
     run(&d,1);
@@ -249,12 +255,29 @@ int main(void) {
     assert(d.transition_sem.count==(step==3));
   }
   assert(d.work_state==WORK_READ_DATA && ic_mode==IQS915X_MODE_LP2);
+  assert(!(ic_cfg & IQS915X_TP_EVENT));
   assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_ALP_EVENT));
   assert(!d.streaming_expected && !sem_waits && forced_transactions==4 && now==28);
   assert(txn_reg[0]==IQS915X_SYSTEM_CONTROL && txn_write[0]);
   assert(txn_reg[1]==IQS915X_INFO_FLAGS && !txn_write[1]);
   assert(txn_reg[2]==IQS915X_CONFIG_SETTINGS && txn_write[2]);
   assert(txn_reg[3]==IQS915X_CONFIG_SETTINGS && !txn_write[3]);
+  /* Disable with a held finger and a stale TP event: LP2 must remain quiet
+   * after the forced control sequence rather than generating 500 ms RDY. */
+  setup(true); touch=stale_tp=true; fingers=1; coords[0]=coords[1]=100;
+  d.requested_enabled=0; d.request_generation++; run(&d,4);
+  assert(ic_mode==IQS915X_MODE_LP2 && !d.output_enabled && !input_frames);
+  assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_TP_EVENT));
+  assert(!(ic_cfg & (IQS915X_ALP_EVENT|IQS915X_TP_TOUCH_EVENT|IQS915X_GESTURE_EVENT|
+                    IQS915X_SWITCH_EVENT|IQS915X_SNAP_EVENT)));
+  int txns_after_disable=txns;
+  assert(!iqs915x_wait_window(&d,false,now+2000));
+  assert(txns==txns_after_disable && !d.comm_fallback_active);
+  /* Recovery events are still serviced; re-enable restores TP events. */
+  info_extra=IQS915X_REATI_OCCURRED; event_rdy=true; run(&d,1);
+  assert(txns==txns_after_disable+1 && !d.output_enabled);
+  d.requested_enabled=1; d.request_generation++; run(&d,4);
+  assert(d.output_enabled && ic_mode==IQS915X_MODE_ACTIVE && (ic_cfg & IQS915X_TP_EVENT));
   /* Disabled startup and PM suspend follow the same forced LP2 sequence. */
   for (int pm=0;pm<2;pm++) {
     setup(true); no_rdy=true; d.requested_enabled=0;
@@ -321,7 +344,7 @@ int main(void) {
   for (int i=0;i<3;i++) { event_rdy=true; run(&d,1); }
   assert(!d.initialized && !d.output_enabled && input_resets==1);
   /* Config writes that don't latch are verified and bounded. */
-  setup(true); ic_cfg&=~IQS915X_TP_EVENT;
+  setup(true); ic_cfg|=IQS915X_ALP_EVENT;
   d.requested_enabled=0; d.request_generation++; reject_cfg=10;
   run(&d,8); assert(!d.initialized && !d.output_enabled);
   /* ATI Error is informational: the driver never requests a software ATI. */
@@ -387,7 +410,8 @@ int main(void) {
                        patched[INDEX(IQS915X_CONFIG_SETTINGS+1)]<<8;
   assert(patched_cfg & IQS915X_TP_REATI_ENABLE);
   assert(!(patched_cfg & (IQS915X_EVENT_MODE|IQS915X_ALP_REATI_ENABLE|
-                         IQS915X_ALP_EVENT|IQS915X_TP_TOUCH_EVENT|IQS915X_FORCE_COMMS_METHOD)));
+                         IQS915X_ALP_EVENT|IQS915X_SWITCH_EVENT|IQS915X_SNAP_EVENT|
+                         IQS915X_TP_TOUCH_EVENT|IQS915X_FORCE_COMMS_METHOD)));
   puts("IQS915x runtime: LP2 Event Mode, forced enable/disable, watchdog, requests, ALP preservation, ATI and PM passed");
 }
 '''
@@ -396,7 +420,8 @@ def main():
     defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_REATI_MAX_WAIT|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
     names = ['iqs915x_request_generation', 'iqs915x_output_is_enabled',
              'iqs915x_power_retry_backoff_ms', 'iqs915x_complete_transition',
-             'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_without_event_mode',
+             'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
+             'iqs915x_config_settings_without_event_mode',
              'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
              'iqs915x_read_stream', 'iqs915x_prepare_init_chunk']
     functions = []

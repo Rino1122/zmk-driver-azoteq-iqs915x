@@ -82,6 +82,9 @@ struct iqs915x_settings_limits {
  * 有効化・無効化・Device PMのモード設定と読み戻し確認は、全段階で
  * RDYを待たずForce Commsを使う。LP2への遷移もEvent Mode確認後に完了する。
  * 各段階は1 transactionでSTOPにより通信窓を閉じる。
+ * LP2ではTP Eventも無効にし、Active復帰時に再び有効にする。
+ * 無効化要求時にX送信が始まっていた場合、そのフレームのY/syncまで送信する。
+ * 以降のポインタフレームは破棄し、未同期のXを後続イベントに残さない。
  *
  * ドライバからATIを要求するのは初期化時（ICリセット後の再初期化を含む）のみ。
  * 通常動作中はICの自動Re-ATIに任せ、Reseedや指スタック判定は行わない。

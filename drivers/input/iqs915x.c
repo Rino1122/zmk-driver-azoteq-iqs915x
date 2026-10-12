@@ -133,27 +133,25 @@ static bool iqs915x_report_key(struct iqs915x_data *data, uint16_t code,
   return input_report_key(data->dev, code, value, sync, K_FOREVER) == 0;
 }
 
-static bool iqs915x_report_rel(struct iqs915x_data *data, uint16_t code,
-                               int32_t value, bool sync)
-{
-  if (!iqs915x_output_is_enabled(data))
-  {
-    return false;
-  }
-
-  return input_report_rel(data->dev, code, value, sync, K_FOREVER) == 0;
-}
-
 static void iqs915x_report_pointer_pair(struct iqs915x_data *data,
-                                        int32_t x, int32_t y)
+                                        uint32_t generation, int32_t x, int32_t y)
 {
-  if (!iqs915x_output_is_enabled(data))
+  if (!iqs915x_work_session_is_current(data, generation))
   {
     return;
   }
 
-  (void)iqs915x_report_rel(data, INPUT_REL_X, x, false);
-  (void)iqs915x_report_rel(data, INPUT_REL_Y, y, true);
+  /* Admit or reject the whole frame. Once X is queued, Y must close it even
+   * if disable arrives between the two submissions. Otherwise an unsynced X
+   * can be accumulated into a later button release or pointer frame. */
+  int ret = input_report_rel(data->dev, INPUT_REL_X, x, false, K_FOREVER);
+  if (ret < 0)
+  {
+    LOG_WRN("pointer frame X submission failed: %d", ret);
+    return;
+  }
+  ret = input_report_rel(data->dev, INPUT_REL_Y, y, true, K_FOREVER);
+  if (ret < 0) { LOG_WRN("pointer frame sync submission failed: %d", ret); }
 }
 
 static uint16_t iqs915x_apply_config_settings_policy(uint16_t cfg)
@@ -161,7 +159,17 @@ static uint16_t iqs915x_apply_config_settings_policy(uint16_t cfg)
   cfg |= IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT;
   cfg |= IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT;
   cfg &= ~(IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT |
-           IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT);
+           IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT |
+           IQS915X_SWITCH_EVENT | IQS915X_SNAP_EVENT);
+  return cfg;
+}
+
+static uint16_t iqs915x_config_settings_for_mode(uint16_t cfg, uint16_t mode)
+{
+  cfg = iqs915x_apply_config_settings_policy(cfg);
+  /* ALP sensing does not refresh TP coordinates in LP2. A TP event from the
+   * final Active contact must not keep requesting communication there. */
+  if (mode == IQS915X_MODE_LP2) { cfg &= ~IQS915X_TP_EVENT; }
   return cfg;
 }
 
@@ -946,7 +954,8 @@ static bool iqs915x_wait_window(struct iqs915x_data *data, bool force, int64_t t
 static void iqs915x_mode_step(struct iqs915x_data *data)
 {
   const struct device *dev = data->dev;
-  uint16_t cfg = iqs915x_apply_config_settings_policy(data->confirmed_config_settings);
+  uint16_t cfg = iqs915x_config_settings_for_mode(data->confirmed_config_settings,
+                                                data->power_target_mode);
   uint16_t value = 0;
   int ret = 0;
   switch (data->work_state)
@@ -983,9 +992,9 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
         }
         iqs915x_complete_transition(data, 0);
       }
-      LOG_INF("communication config confirmed mode=%u event=%u enabled=%u",
+      LOG_INF("communication config confirmed mode=%u event=%u enabled=%u cfg=0x%04x",
               data->confirmed_mode, !!(value & IQS915X_EVENT_MODE),
-              (unsigned int)atomic_get(&data->requested_enabled));
+              (unsigned int)atomic_get(&data->requested_enabled), value);
     }
     break;
   case WORK_SET_POWER:
@@ -1006,8 +1015,9 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
       data->active_pending = false;
       data->lp2_pending = false;
       data->work_state = WORK_SET_EVENT_MODE;
-      LOG_INF("communication mode confirmed mode=%u output=%u t=%lld",
-              data->confirmed_mode, data->relatch_target_enabled, (long long)k_uptime_get());
+      LOG_INF("communication mode confirmed mode=%u output=%u info=0x%04x t=%lld",
+              data->confirmed_mode, data->relatch_target_enabled, value,
+              (long long)k_uptime_get());
     }
     break;
   default:
@@ -2312,7 +2322,8 @@ static void iqs915x_init_step_handler(const struct device *dev)
     uint16_t expected = IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT |
                         IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT;
     uint16_t forbidden = IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT |
-                         IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT;
+                         IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT |
+                         IQS915X_SWITCH_EVENT | IQS915X_SNAP_EVENT;
 
     if ((cfg & expected) == expected && (cfg & forbidden) == 0)
     {
@@ -2608,6 +2619,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (data->confirmed_mode == IQS915X_MODE_LP2)
       {
         ret = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &stream.info_flags);
+        if (!ret)
+        {
+          LOG_DBG("lp2 event: info=0x%04x cfg=0x%04x t=%lld", stream.info_flags,
+                  data->confirmed_config_settings, (long long)k_uptime_get());
+        }
       }
       else
       {
@@ -3033,7 +3049,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
                 if (rel_x != 0 || rel_y != 0)
                 {
-                  iqs915x_report_pointer_pair(data, rel_x, rel_y);
+                  iqs915x_report_pointer_pair(data, frame_generation, rel_x, rel_y);
                 }
                 k_mutex_unlock(&data->settings_lock);
               }
