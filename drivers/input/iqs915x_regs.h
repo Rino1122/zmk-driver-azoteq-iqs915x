@@ -307,6 +307,8 @@ enum iqs915x_init_step
     INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_ACK_RESET,           // リセットACK
     INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
+    INIT_PREPARE_STREAMING,   // 保持済みCONFIG_SETTINGSからRe-ATI待機用設定を準備
+    INIT_SET_STREAMING,       // Event Modeを一時解除してRe-ATI完了RDYを確保
     INIT_REQUEST_REATI,       // TP Re-ATIリクエスト
     INIT_WAIT_REATI,          // TP Re-ATI完了待機
     INIT_PREPARE_EVENT_MODE,  // CONFIG_SETTINGS読み取りとEvent Mode書き込み値準備
@@ -488,7 +490,7 @@ struct iqs915x_data
     uint8_t wait_count;                 // SW ResetやRe-ATIなどの待機リトライカウンタ
     uint8_t init_chunk_retry_count;      // 現在のinit-dataチャンク書き込みリトライ回数
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
-    uint16_t init_pending_cfg;           // Event Mode強制設定で次RDYに持ち越すCONFIG_SETTINGS値
+    uint16_t init_pending_cfg;           // 初期化中の通信設定を次transactionへ持ち越す値
     uint16_t confirmed_config_settings;  // 初期化時にread-back確認したCONFIG_SETTINGS値
     uint8_t power_retry_count;
     atomic_t transition_result;

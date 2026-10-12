@@ -303,7 +303,9 @@ practical Japanese guide to each scroll parameter and tuning workflow.
 
 ## Initialization data (IQS9150/IQS9151)
 
-The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot.
+The IQS9150/IQS9151 does **not** have NVM, so all register settings must be
+written via I2C after an IC reset. A host reboot or soft-off wake can retain the
+powered IC's settings.
 The driver compiles `drivers/input/IQS9150_init.h` as the sole source of the
 1174 initialization bytes (`0x115C..0x15EB` + `0x2000..0x2005`). CMake runs
 `scripts/generate_init_array.py` automatically to generate an array of references
@@ -332,7 +334,26 @@ been removed; migrate firmware overlays by removing them and the profile node.
 The Azoteq header supplies the base bytes. Before each transfer, the driver
 patches a temporary buffer with its sensor settings and mandatory protocol bits.
 Read-back verification uses the same patched bytes. The export itself is never
-modified. Runtime reset repeats this same initialization sequence.
+modified. At driver startup, the first INFO_FLAGS read uses Force Comms and
+selects the initialization path from SHOW_RESET:
+
+- SHOW_RESET set: transfer init-data, acknowledge reset, request TP Re-ATI,
+  and verify the Event Mode policy as before.
+- SHOW_RESET clear: assume the IC is already configured, preserve its sensor
+  settings, and skip software reset, init-data transfer and reset acknowledgement.
+  Read the retained communication settings, temporarily select Streaming with
+  Manual Control, request Active TP Re-ATI, then restore and verify Event Mode.
+
+Both paths still force TP Re-ATI. The initial status check, retained-config
+read/write, Re-ATI request and Event policy read/write use Force Comms so startup
+cannot wait for a finger event in retained LP2. Re-ATI completion and init-data
+transfer remain RDY-driven, with one transaction per communication window.
+The optional reset GPIO is configured inactive at startup without a reset pulse.
+Changes to the initialization header take effect on the next IC reset; a host
+reboot with SHOW_RESET clear keeps the previous sensor settings.
+
+An IC reset detected at runtime takes the full initialization path. Existing
+bounded software-reset recovery remains available for initialization failures.
 
 The driver applies these communication and ATI settings while pre-patching init-data:
 

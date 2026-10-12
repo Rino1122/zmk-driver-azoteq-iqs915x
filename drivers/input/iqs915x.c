@@ -2037,11 +2037,11 @@ static void iqs915x_init_step_handler(const struct device *dev)
     }
     else
     {
-      // warm bootなどでSHOW_RESETが立っていない場合は、
-      // ソフトウェアリセットで既知の初期化シーケンスへ戻す
-      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Requesting software reset.",
+      // ICが設定を保持しているwarm bootではinit-dataを再転送しない。
+      // Event ModeのLP2が保持されていても、ActiveでTP Re-ATIを要求する。
+      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Retaining init-data; requesting Re-ATI.",
               info_flags);
-      data->init_step = INIT_SOFTWARE_RESET;
+      data->init_step = INIT_PREPARE_STREAMING;
     }
     break;
   }
@@ -2260,6 +2260,32 @@ static void iqs915x_init_step_handler(const struct device *dev)
     break;
   }
 
+  case INIT_PREPARE_STREAMING:
+  {
+    uint16_t cfg = 0;
+    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to read retained CONFIG_SETTINGS: %d", ret);
+      return;
+    }
+    data->init_pending_cfg = iqs915x_config_settings_without_event_mode(cfg);
+    data->init_step = INIT_SET_STREAMING;
+    break;
+  }
+
+  case INIT_SET_STREAMING:
+    // Re-ATI後の通信が接触イベントに依存しないようStreamingへ移る。
+    ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, data->init_pending_cfg);
+    if (ret < 0)
+    {
+      LOG_ERR("Failed to prepare Streaming for Re-ATI: %d", ret);
+      return;
+    }
+    data->streaming_expected = true;
+    data->init_step = INIT_REQUEST_REATI;
+    break;
+
   case INIT_REQUEST_REATI:
   {
     uint16_t sys_ctrl = IQS915X_MODE_ACTIVE | IQS915X_REATI_TP;
@@ -2402,6 +2428,14 @@ static void iqs915x_init_step_handler(const struct device *dev)
       break;
     }
 
+    if (stream.info_flags & IQS915X_SHOW_RESET)
+    {
+      // 保持設定を使う途中でICがリセットされた場合は通常の初期化へ戻る。
+      LOG_WRN("Init: SHOW_RESET during Re-ATI wait; checking reset again");
+      data->init_step = INIT_CHECK_SHOW_RESET;
+      break;
+    }
+
     // REATI_OCCURRED (bit4) フラグでTP Re-ATI完了を検出する。
     // この段階で要求したTP Re-ATIの完了を初期化完了の必須条件にする。
     // このフラグはRe-ATIが実行されたRDYサイクルで1回だけセットされる
@@ -2539,12 +2573,17 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     if (!data->initialized)
     {
       // Event Mode can stop RDY immediately when no finger event is present.
-      // Force both the write and read-back so verification and policy retries
-      // do not depend on touch or a split central. Each step ends with STOP.
-      if (data->init_step == INIT_SET_EVENT_MODE ||
+      // Force the startup check and warm-boot preparation as well as Event
+      // verification. An IC retained in LP2 may have no RDY at all. Each
+      // transaction still ends one separate communication window with STOP.
+      if (data->init_step == INIT_CHECK_SHOW_RESET ||
+          data->init_step == INIT_PREPARE_STREAMING ||
+          data->init_step == INIT_SET_STREAMING ||
+          data->init_step == INIT_REQUEST_REATI ||
+          data->init_step == INIT_PREPARE_EVENT_MODE ||
+          data->init_step == INIT_SET_EVENT_MODE ||
           data->init_step == INIT_CONFIRM_EVENT_MODE ||
-          data->init_step == INIT_SOFTWARE_RESET ||
-          (data->init_step == INIT_CHECK_SHOW_RESET && data->comm_fallback_active))
+          data->init_step == INIT_SOFTWARE_RESET)
       {
         enum iqs915x_init_step previous_step = data->init_step;
 
@@ -2558,8 +2597,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         continue;
       }
 
-      // Configuration transfer and Re-ATI wait remain RDY-driven. The first
-      // status check also supports a warm IC left in Event Mode.
+      // Configuration transfer and Re-ATI wait remain RDY-driven.
       //
       // ただし割り込みのエッジ取りこぼし対策として：
       // - すでにRDYがLowになっている場合はセマフォをgiveしてすぐ進む
@@ -2569,7 +2607,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         k_sem_give(&data->rdy_sem);
       }
       ret = k_sem_take(&data->rdy_sem, K_MSEC(2000));
-      if (ret == 0 || data->init_step == INIT_CHECK_SHOW_RESET) {
+      if (ret == 0) {
         iqs915x_init_step_handler(dev);
       } else {
         LOG_WRN("Timed out waiting for IQS915x RDY during initialization");
@@ -3180,17 +3218,13 @@ static int iqs915x_init(const struct device *dev)
       return -ENODEV;
     }
 
-    ret = gpio_pin_configure_dt(&config->reset_gpio, GPIO_OUTPUT_ACTIVE);
+    // 起動時にICをリセットすると保持設定を使えないため、非アクティブで維持する。
+    ret = gpio_pin_configure_dt(&config->reset_gpio, GPIO_OUTPUT_INACTIVE);
     if (ret < 0)
     {
       LOG_ERR("Failed to configure reset GPIO: %d", ret);
       return ret;
     }
-
-    gpio_pin_set_dt(&config->reset_gpio, 1);
-    k_msleep(1);
-    gpio_pin_set_dt(&config->reset_gpio, 0);
-    k_msleep(10);
   }
 
   // RDY GPIOの設定

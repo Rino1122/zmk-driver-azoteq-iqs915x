@@ -86,6 +86,8 @@ struct iqs915x_settings_limits {
  * 無効化要求時にX送信が始まっていた場合、そのフレームのY/syncまで送信する。
  * 以降のポインタフレームは破棄し、未同期のXを後続イベントに残さない。
  *
+ * ホスト起動時（soft off復帰を含む）はSHOW_RESETを確認し、0なら保持済みの
+ * init-dataを使い、1ならinit-dataを転送する。両経路ともTP Re-ATIを要求する。
  * ドライバからATIを要求するのは初期化時（ICリセット後の再初期化を含む）のみ。
  * 通常動作中はICの自動Re-ATIに任せ、Reseedや指スタック判定は行わない。
  * 自動Re-ATIは共通の有効ビットで、reference drift／negative delta／positive delta

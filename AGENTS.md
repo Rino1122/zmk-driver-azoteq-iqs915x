@@ -19,7 +19,8 @@
 - `drivers/input/iqs915x.c` は IQS915x 専用の実装です。
   - 16-bit little-endian register read/write を実装しています。
   - RDY GPIO 割り込みで専用スレッドを起こし、1 RDY 期間に 1 I2C transaction で処理する設計です。
-  - 初期化は state machine で進みます。SHOW_RESET 確認、必要時 SW reset、init-data chunk write、ACK reset/Re-ATI、Event Mode/Manual Control 確認、通常動作へ遷移します。
+  - 初期化は state machine で進みます。SHOW_RESET があれば init-data chunk write と ACK reset、なければ保持済み設定を使って転送を省略します。両経路とも TP Re-ATI と Event Mode/Manual Control 確認後に通常動作へ遷移します。異常時の SW reset による再初期化は維持します。
+  - 起動時の SHOW_RESET 確認と保持設定の通信モード変更は Force Comms で進めます。任意の reset GPIO は起動時に非アクティブに設定し、リセットパルスは出しません。
   - init-data 書き込み中に、ドライバ設定値と必須ビットをバッファへ事前パッチします。
   - runtime reset は `SHOW_RESET` で検出し、操作状態を解除して再初期化します。
 - 入力イベント機能はかなり実装済みです。
