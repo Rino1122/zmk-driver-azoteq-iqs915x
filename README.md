@@ -336,7 +336,8 @@ modified. Runtime reset repeats this same initialization sequence.
 
 The driver applies these communication and ATI settings while pre-patching init-data:
 
-- ALP is disabled (`ALP Setup`, bit 31), so TP channels are sensed in LP2.
+- ALP Setup, including ALP Enable (bit 31), retains the Azoteq header values.
+  An ALP-enabled export therefore uses ALP sensing in LP2.
 - LP2 sampling period is fixed at 500 ms; LP1/LP2 Auto-Prox is disabled.
 - Automatic TP Re-ATI and its event are enabled. ALP Re-ATI/events and
   `TP_TOUCH_EVENT` are disabled. Re-ATI retry time is fixed at 1 second.
@@ -345,25 +346,26 @@ The driver applies these communication and ATI settings while pre-patching init-
   `IQS9150_init.h`. Positive delta recovery is intended for snap domes; for a trackpad
   that does not use it, supply a sufficiently high threshold in the header.
 
-Output-enabled Active uses Event Mode. LP2 and Active during mode transitions
-with input output disabled use Streaming Mode. Each control step performs one I2C
-transaction and ends its communication window with STOP. Configuration and
-charging mode are verified before output resumes. Leaving Event Mode and
-verifying its re-enable use clock-stretch Force Comms because there may be no
-finger event. Output enable, including PM resume to enabled Active, uses Force
-Comms for every control step without waiting for RDY. When Streaming settings
-are already confirmed, it goes directly to the Active mode write instead of
-rewriting and rechecking the same settings in LP2. The output gate remains
-closed until both Active and Event Mode are confirmed, with the existing
-two-frame pointer baseline guard afterward. The driver initiates control I2C
-immediately; clock stretching can still delay each transaction until the IC is
-ready. Actual enable latency needs hardware validation.
+Both Active and LP2 use Event Mode, including disabled-by-default startup.
+Init-data transfer and TP Re-ATI completion still run in Streaming Mode; the
+final initialization steps explicitly enable and verify Event Mode regardless
+of the requested output state. ALP Event is explicitly disabled in both modes.
 
-Normal Streaming reads and disable transitions wait for RDY. If RDY does
-not arrive within three sampling periods since the last transaction, the driver
-falls back to Force Comms: 1500 ms in LP2, or three times the actual Active period from
-the driver-owned Active sampling period. During mode changes the longer period applies.
-API and timer wakes do not count as RDY samples or restart that deadline.
+Enable/disable and Device PM transitions go directly to the power-mode write.
+Every control step uses clock-stretch Force Comms without waiting for an event
+or RDY: mode write, mode read-back, Event policy write, and Event policy read-back.
+Each step performs one I2C transaction and ends its communication window with
+STOP. Disable/PM suspend completes only after both LP2 and Event Mode are
+confirmed. The output gate stays closed until both Active and Event Mode are
+confirmed on enable, with the existing two-frame pointer baseline guard afterward.
+The driver initiates control I2C immediately; clock stretching can still delay
+each transaction until the IC is ready. Actual transition latency needs hardware
+validation.
+
+Normal Active/LP2 reads wait for event RDY. With no event, the driver waits
+without periodic Force Comms polling. API and timer wakes do not count as RDY
+samples. The three-sampling-period watchdog applies only when Streaming is
+expected, not during normal Event Mode operation.
 
 In LP2, the driver reads only fresh `INFO_FLAGS`; coordinates and `NUM_FINGERS`
 are not assumed to update. It remains in LP2 until an enable or PM request
@@ -401,9 +403,9 @@ python3 tests/runtime_power.py
 
 The tests compile actual initialization/runtime control flow with mocked Zephyr
 and IC services, and check that long LP2 waits and stationary single/multiple
-contacts do not initiate reseed or coordinate probes. They also check streaming
-timing, Force Comms fallback, output enable without RDY (with and without touch),
-request reversals, Re-ATI/ATI Error, header tuning preservation and PM handling.
+contacts do not initiate reseed or coordinate probes. They also check idle LP2
+Event Mode, Force Comms enable/disable without RDY, Streaming watchdog timing,
+request reversals, Re-ATI/ATI Error, ALP/header tuning preservation and PM handling.
 Hardware validation should include startup, tap/drag, scroll/inertia, 3/4-finger
 swipe, runtime enable/disable, stationary single/multiple fingers, negative delta
 recovery, communication fallback and reset.

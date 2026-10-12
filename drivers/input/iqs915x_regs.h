@@ -318,8 +318,6 @@ enum iqs915x_init_step
 enum iqs915x_work_state
 {
     WORK_READ_DATA,
-    WORK_SET_STREAMING,
-    WORK_CONFIRM_STREAMING,
     WORK_SET_POWER,
     WORK_CONFIRM_POWER,
     WORK_SET_EVENT_MODE,
@@ -582,7 +580,7 @@ struct iqs915x_data
     bool pm_saved_enabled;
     atomic_t pm_suspended; // Device PM suspend中は通信と入力出力を停止
     uint16_t power_target_mode;
-    bool power_force_comms; // 出力有効化の制御通信はRDYを待たずに進める
+    bool power_force_comms; // 有効化・無効化の制御通信はRDYを待たずに進める
     uint16_t confirmed_mode;
     uint32_t active_sampling_period_ms;
     int64_t comm_completed_ms;

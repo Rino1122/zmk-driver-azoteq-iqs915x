@@ -64,7 +64,7 @@ static int64_t now, next_rdy;
 static uint16_t ic_mode, ic_cfg, info_extra, fingers;
 static bool no_rdy, touch, event_rdy;
 static int input_resets, input_frames, reads, writes;
-static int reject_cfg, io_errors;
+static int reject_cfg, reject_mode, io_errors;
 static int sem_waits, force_stretch_ms, forced_transactions;
 static uint16_t txn_reg[1024];
 static bool txn_write[1024];
@@ -104,7 +104,7 @@ static int i2c_write_dt(const struct i2c_dt_spec *i,const uint8_t *b,size_t len)
     if (reject_cfg) reject_cfg--; else ic_cfg=value;
   } else {
     assert(reg==IQS915X_SYSTEM_CONTROL);
-    ic_mode=value & IQS915X_CHARGING_MODE_MASK;
+    if (reject_mode) reject_mode--; else ic_mode=value & IQS915X_CHARGING_MODE_MASK;
     /* Runtime writes may select a mode, but must never request calibration. */
     assert(!(value & (IQS915X_TP_RESEED | BIT(4) | IQS915X_REATI_TP)));
   }
@@ -157,7 +157,7 @@ static void setup(bool output) {
   now=0; next_rdy=output?INT64_MAX:500; txns=0;
   no_rdy=touch=event_rdy=false; input_resets=input_frames=reads=writes=0;
   sem_waits=force_stretch_ms=forced_transactions=0;
-  reject_cfg=io_errors=info_extra=fingers=0;
+  reject_cfg=reject_mode=io_errors=info_extra=fingers=0;
   for (int j=0;j<8;j++) coords[j]=UINT16_MAX;
   memset(&d,0,sizeof(d)); memset(&config,0,sizeof(config));
   dev=(struct device){&d,&config}; d.dev=&dev; d.initialized=true;
@@ -165,25 +165,29 @@ static void setup(bool output) {
   d.active_sampling_period_ms=10;
   d.enabled=d.requested_enabled=d.output_enabled=output;
   ic_mode=d.confirmed_mode=output?IQS915X_MODE_ACTIVE:IQS915X_MODE_LP2;
-  d.streaming_expected=!output;
-  ic_cfg=d.confirmed_config_settings=output ? iqs915x_apply_config_settings_policy(0) :
-                                              iqs915x_config_settings_without_event_mode(0);
+  d.streaming_expected=false;
+  ic_cfg=d.confirmed_config_settings=iqs915x_apply_config_settings_policy(0);
 }
 static void until_idle(void) {
   for (int i=0;i<40 && d.work_state!=WORK_READ_DATA;i++) run(&d,1);
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 int main(void) {
-  /* Fresh LP2 data only; no periodic Force Comms while RDY arrives. */
-  setup(false); run(&d,3);
-  assert(reads==3 && writes==0 && now==1500 && !d.comm_fallback_active);
-  for (int i=0;i<3;i++) assert(txn_reg[i]==IQS915X_INFO_FLAGS && !txn_write[i]);
-  /* LP2 remains LP2 for over two minutes, with or without Global TP Touch. */
+  /* LP2 is Event Mode: no event means no forced polling, even after minutes.
+   * A bounded timer lets the harness observe the normally indefinite wait. */
+  setup(false); now=150000;
+  assert(!iqs915x_wait_window(&d,false,now+100));
+  assert(!reads && !writes && !forced_transactions && !d.comm_fallback_active);
+  /* Fresh LP2 status is read only on RDY, without opening input output. */
   for (int contact=0; contact<2; contact++) {
     setup(false); touch=contact;
-    run(&d,300);
+    for (int i=0;i<300;i++) {
+      now=(i+1)*500; event_rdy=true; run(&d,1);
+    }
     assert(now==150000 && reads==300 && !writes && !input_frames && !input_resets);
     assert(d.confirmed_mode==IQS915X_MODE_LP2 && !d.output_enabled);
+    assert((ic_cfg & IQS915X_EVENT_MODE) && !forced_transactions);
+    for (int i=0;i<txns;i++) assert(txn_reg[i]==IQS915X_INFO_FLAGS && !txn_write[i]);
   }
   /* A stationary single or multiple contact in Active never forces reseed.
    * Only actual events produce reads; elapsed time causes no control writes. */
@@ -197,11 +201,12 @@ int main(void) {
     assert(d.output_enabled && (ic_cfg & IQS915X_EVENT_MODE) && !forced_transactions);
   }
   /* A stopped stream waits precisely 3T from the previous STOP, repeatedly. */
-  setup(false); no_rdy=true; run(&d,1); assert(now==1500 && reads==1 && d.comm_fallback_active);
+  setup(false); d.streaming_expected=true; ic_cfg&=~IQS915X_EVENT_MODE;
+  no_rdy=true; run(&d,1); assert(now==1500 && reads==1 && d.comm_fallback_active);
   run(&d,1); assert(now==3000 && reads==2);
   no_rdy=false; run(&d,1); assert(!d.comm_fallback_active);
   /* Actual Active period, spurious wakes, and a transition use the right 3T. */
-  setup(false); no_rdy=true; d.confirmed_mode=IQS915X_MODE_ACTIVE;
+  setup(false); d.streaming_expected=true; no_rdy=true; d.confirmed_mode=IQS915X_MODE_ACTIVE;
   d.active_sampling_period_ms=37;
   k_sem_give(&d.rdy_sem);
   assert(iqs915x_wait_window(&d,false,INT64_MAX) && now==111);
@@ -233,19 +238,55 @@ int main(void) {
     no_rdy=false; event_rdy=true; now+=10; run(&d,1);
     assert(input_frames==1 && forced_transactions==4 && sem_waits==0);
   }
+  /* Disable also forces every stage, completes only after Event read-back,
+   * and keeps ALP events off even when stale settings contain that bit. */
+  setup(true); no_rdy=true; force_stretch_ms=7;
+  ic_cfg=d.confirmed_config_settings|=IQS915X_ALP_EVENT;
+  d.requested_enabled=0; d.request_generation++;
+  for (int step=0;step<4;step++) {
+    run(&d,1);
+    assert(!d.output_enabled && !input_frames);
+    assert(d.transition_sem.count==(step==3));
+  }
+  assert(d.work_state==WORK_READ_DATA && ic_mode==IQS915X_MODE_LP2);
+  assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_ALP_EVENT));
+  assert(!d.streaming_expected && !sem_waits && forced_transactions==4 && now==28);
+  assert(txn_reg[0]==IQS915X_SYSTEM_CONTROL && txn_write[0]);
+  assert(txn_reg[1]==IQS915X_INFO_FLAGS && !txn_write[1]);
+  assert(txn_reg[2]==IQS915X_CONFIG_SETTINGS && txn_write[2]);
+  assert(txn_reg[3]==IQS915X_CONFIG_SETTINGS && !txn_write[3]);
+  /* Disabled startup and PM suspend follow the same forced LP2 sequence. */
+  for (int pm=0;pm<2;pm++) {
+    setup(true); no_rdy=true; d.requested_enabled=0;
+    d.pm_suspended=pm; d.lp2_pending=true;
+    run(&d,2); assert(!d.transition_sem.count);
+    run(&d,2);
+    assert(d.transition_sem.count && !d.output_enabled && !sem_waits);
+    assert(ic_mode==IQS915X_MODE_LP2 && (ic_cfg & IQS915X_EVENT_MODE));
+  }
   /* An unconfirmed configuration is repaired and verified, still without RDY. */
   setup(false); no_rdy=true; force_stretch_ms=7;
-  d.confirmed_config_settings=0;
+  ic_cfg=d.confirmed_config_settings=0;
   d.requested_enabled=1; d.request_generation++;
-  run(&d,6);
-  assert(d.output_enabled && forced_transactions==6 && sem_waits==0 && now==42);
-  assert(txn_reg[0]==IQS915X_CONFIG_SETTINGS && txn_write[0]);
-  assert(txn_reg[1]==IQS915X_CONFIG_SETTINGS && !txn_write[1]);
-  assert(txn_reg[2]==IQS915X_SYSTEM_CONTROL && txn_write[2]);
+  run(&d,4);
+  assert(d.output_enabled && forced_transactions==4 && sem_waits==0 && now==28);
+  assert(txn_reg[0]==IQS915X_SYSTEM_CONTROL && txn_write[0]);
+  assert(txn_reg[2]==IQS915X_CONFIG_SETTINGS && txn_write[2]);
   /* Failed/mismatched Event Mode confirmation never opens the output gate. */
   setup(false); no_rdy=true; d.requested_enabled=1; d.request_generation++;
-  run(&d,2); reject_cfg=10;
+  run(&d,2); ic_cfg&=~IQS915X_TP_EVENT; reject_cfg=10;
   run(&d,6); assert(!d.initialized && !d.output_enabled && !input_frames && sem_waits==0);
+  /* LP2 mode read-back mismatch is retried without RDY, before completion. */
+  setup(true); no_rdy=true; d.requested_enabled=0; d.request_generation++;
+  reject_mode=1; run(&d,2);
+  assert(ic_mode==IQS915X_MODE_ACTIVE && !d.transition_sem.count && !d.output_enabled);
+  until_idle();
+  assert(ic_mode==IQS915X_MODE_LP2 && d.transition_sem.count && !sem_waits);
+  /* A failed disable Event read-back cannot report PM suspend complete. */
+  setup(true); no_rdy=true; d.requested_enabled=0; d.pm_suspended=1;
+  d.request_generation++; run(&d,3); io_errors=1; run(&d,1);
+  assert(!d.transition_sem.count && !d.output_enabled);
+  until_idle(); assert(d.transition_sem.count && !sem_waits);
   /* An I2C error on an urgent control step keeps the normal bounded backoff. */
   setup(false); no_rdy=true; d.requested_enabled=1; d.request_generation++;
   io_errors=1; run(&d,1); assert(!d.output_enabled && now==20 && d.power_retry_count==1);
@@ -257,25 +298,34 @@ int main(void) {
   int txns_before=txns;
   assert(!iqs915x_wait_window(&d,true,INT64_MAX) && txns==txns_before);
   until_idle(); assert(!d.output_enabled && !d.power_force_comms && ic_mode==IQS915X_MODE_LP2);
-  /* Reverse an enable before opening the output gate. */
-  setup(false); d.requested_enabled=1; d.request_generation++; run(&d,1);
-  d.requested_enabled=0; d.request_generation++; run(&d,1); until_idle();
-  assert(!d.output_enabled && ic_mode==IQS915X_MODE_LP2);
+  /* Reverse either request after each intermediate stage, without an RDY. */
+  for (int output=0;output<2;output++) {
+    for (int step=1;step<4;step++) {
+      setup(output); no_rdy=true;
+      d.requested_enabled=!output; d.request_generation++; run(&d,step);
+      d.requested_enabled=output; d.request_generation++; run(&d,1); until_idle();
+      assert(d.output_enabled==output && !sem_waits);
+      assert(ic_mode==(output?IQS915X_MODE_ACTIVE:IQS915X_MODE_LP2));
+      assert((ic_cfg & IQS915X_EVENT_MODE) && !d.streaming_expected);
+    }
+  }
   /* A busy frame is ignored; repeated busy status or I2C errors recover by reset. */
-  setup(false); info_extra=0xEEEE; run(&d,1);
+  setup(false); info_extra=0xEEEE; event_rdy=true; run(&d,1);
   assert(d.initialized && d.runtime_busy_count==1 && !writes && !input_frames);
-  run(&d,1); assert(d.runtime_busy_count==0);
+  event_rdy=true; run(&d,1); assert(d.runtime_busy_count==0);
   for (int i=0;i<IQS915X_INIT_REATI_MAX_WAIT;i++) {
-    info_extra=0xEEEE; run(&d,1);
+    info_extra=0xEEEE; event_rdy=true; run(&d,1);
   }
   assert(!d.initialized && !d.output_enabled && input_resets==1);
-  setup(false); io_errors=3; run(&d,3);
+  setup(false); io_errors=3;
+  for (int i=0;i<3;i++) { event_rdy=true; run(&d,1); }
   assert(!d.initialized && !d.output_enabled && input_resets==1);
   /* Config writes that don't latch are verified and bounded. */
-  setup(true); d.requested_enabled=0; d.request_generation++; reject_cfg=10;
-  run(&d,15); assert(!d.initialized && !d.output_enabled);
+  setup(true); ic_cfg&=~IQS915X_TP_EVENT;
+  d.requested_enabled=0; d.request_generation++; reject_cfg=10;
+  run(&d,8); assert(!d.initialized && !d.output_enabled);
   /* ATI Error is informational: the driver never requests a software ATI. */
-  setup(false); info_extra=IQS915X_ATI_ERROR; run(&d,1);
+  setup(false); info_extra=IQS915X_ATI_ERROR; event_rdy=true; run(&d,1);
   assert(d.ati_error_seen && !writes);
   /* Runtime Re-ATI resets input; cached debounce frames do not
    * replay it. This uses the actual runtime loop prefix. */
@@ -284,9 +334,9 @@ int main(void) {
   now=20; next_rdy=20; ic_cfg&=~IQS915X_EVENT_MODE;
   run(&d,1); assert(input_resets==1 && !input_frames && d.output_enabled);
   assert(d.pointer_resume_guard_frames==IQS915X_POINTER_RESUME_GUARD_FRAMES && !writes);
-  setup(false); info_extra=IQS915X_REATI_OCCURRED|IQS915X_ATI_ERROR; run(&d,1);
+  setup(false); info_extra=IQS915X_REATI_OCCURRED|IQS915X_ATI_ERROR; event_rdy=true; run(&d,1);
   assert(input_resets==1 && d.ati_error_seen && !d.output_enabled && !writes);
-  info_extra=IQS915X_REATI_OCCURRED; run(&d,1);
+  info_extra=IQS915X_REATI_OCCURRED; event_rdy=true; run(&d,1);
   assert(input_resets==2 && !d.ati_error_seen && !writes);
   /* SHOW_RESET still starts reinitialization with the input gate closed. */
   setup(true); info_extra=IQS915X_SHOW_RESET; event_rdy=true; run(&d,1);
@@ -318,7 +368,15 @@ int main(void) {
   #define INDEX(reg) ((reg)-IQS915X_INIT_DATA_BASE_ADDR)
   assert(!(patched[INDEX(IQS915X_SYSTEM_CONTROL)] & 0xf8));
   assert(patched[INDEX(IQS915X_REATI_RETRY_TIME)]==1);
-  assert(!(patched[INDEX(IQS915X_ALP_SETUP+3)] & BIT(7)));
+  for (int i=0;i<4;i++) assert(patched[INDEX(IQS915X_ALP_SETUP+i)]==profile[INDEX(IQS915X_ALP_SETUP+i)]);
+  /* Passing ALP Enable through also preserves an export that disables it. */
+  profile[INDEX(IQS915X_ALP_SETUP+3)] &= ~BIT(7);
+  for (uint16_t offset=0;offset<sizeof(profile);) {
+    uint16_t addr,count;
+    assert(!iqs915x_prepare_init_chunk(&dev,offset,&addr,&count,patched+offset,false));
+    offset+=count;
+  }
+  for (int i=0;i<4;i++) assert(patched[INDEX(IQS915X_ALP_SETUP+i)]==profile[INDEX(IQS915X_ALP_SETUP+i)]);
   assert(!(patched[INDEX(IQS915X_OTHER_SETTINGS)] & (BIT(4)|BIT(5))));
   assert((patched[INDEX(IQS915X_LP2_MODE_REPORT_RATE)] |
          patched[INDEX(IQS915X_LP2_MODE_REPORT_RATE+1)]<<8)==500);
@@ -329,8 +387,8 @@ int main(void) {
                        patched[INDEX(IQS915X_CONFIG_SETTINGS+1)]<<8;
   assert(patched_cfg & IQS915X_TP_REATI_ENABLE);
   assert(!(patched_cfg & (IQS915X_EVENT_MODE|IQS915X_ALP_REATI_ENABLE|
-                         IQS915X_TP_TOUCH_EVENT|IQS915X_FORCE_COMMS_METHOD)));
-  puts("IQS915x runtime: no reseed, streaming, watchdog, forced enable, requests, ATI and PM passed");
+                         IQS915X_ALP_EVENT|IQS915X_TP_TOUCH_EVENT|IQS915X_FORCE_COMMS_METHOD)));
+  puts("IQS915x runtime: LP2 Event Mode, forced enable/disable, watchdog, requests, ALP preservation, ATI and PM passed");
 }
 '''
 

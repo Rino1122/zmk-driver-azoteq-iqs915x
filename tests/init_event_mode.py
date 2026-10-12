@@ -42,7 +42,7 @@ def main():
         re.search(r"^#define " + name + r"\b.*$", source + registers, re.M)[0]
         for name in names
     )
-    policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy") + "\n" + block(source, "static uint16_t iqs915x_config_settings_without_event_mode")
+    policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy")
     cases = source[source.index("  case INIT_PREPARE_EVENT_MODE:"):
                    source.index("  case INIT_WAIT_REATI:", source.index("  case INIT_PREPARE_EVENT_MODE:"))]
     thread = source[source.index("static void iqs915x_thread_main("):]
@@ -130,7 +130,7 @@ static struct iqs915x_data setup(bool enabled) {
   ic_cfg = 0;
   return (struct iqs915x_data){
     .init_step = INIT_SET_EVENT_MODE,
-    .init_pending_cfg = enabled ? iqs915x_apply_config_settings_policy(0) : iqs915x_config_settings_without_event_mode(0),
+    .init_pending_cfg = iqs915x_apply_config_settings_policy(IQS915X_ALP_EVENT),
     .requested_enabled = enabled,
   };
 }
@@ -143,6 +143,8 @@ int main(void) {
   run(&dev, 12);
   assert(data.initialized && data.init_step == INIT_COMPLETE);
   assert(data.lp2_pending && !data.enabled && !data.output_enabled);
+  assert(!data.streaming_expected && (ic_cfg & IQS915X_EVENT_MODE));
+  assert(!(ic_cfg & IQS915X_ALP_EVENT));
   assert(writes == 1 && reads == 1 && waits == 0 && rdy_checks == 0 && sleeps == 0);
   /* An enabled startup opens the normal output gate instead. */
   data = setup(true);
@@ -172,7 +174,21 @@ int main(void) {
   run(&dev, 1);
   assert(!data.initialized && data.init_step == INIT_WAIT_REATI);
   assert(waits == 1 && rdy_checks == 1 && writes == 0 && reads == 0);
-  puts("IQS915x Event Mode init: 6 regression scenarios passed");
+  /* Actual preparation and retry must select Event Mode for either output
+   * request, and clear a stale ALP Event bit before writing the policy. */
+  for (int enabled=0; enabled<2; enabled++) {
+    data = setup(enabled);
+    data.init_step = INIT_PREPARE_EVENT_MODE;
+    ic_cfg = IQS915X_ALP_EVENT;
+    iqs915x_init_step_handler(&dev);
+    assert(data.init_pending_cfg & IQS915X_EVENT_MODE);
+    assert(!(data.init_pending_cfg & IQS915X_ALP_EVENT));
+    rejects = 1;
+    run(&dev, 12);
+    assert(data.initialized && !data.streaming_expected);
+    assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_ALP_EVENT));
+  }
+  puts("IQS915x Event Mode init: 8 regression scenarios passed");
 }
 '''
     for marker, code in (("DEFINITIONS", definitions), ("ENUM", enum),

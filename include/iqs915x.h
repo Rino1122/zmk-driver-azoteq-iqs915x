@@ -70,18 +70,18 @@ struct iqs915x_settings_limits {
  * @brief トラックパッドの有効/無効を設定する
  *
  * enabled=false: 出力ゲートを即座に閉じ、専用スレッドで操作状態を解除して
- *                TP channelを500 ms周期でセンシングするLP2 Streamingへ移行する
+ *                初期化データのALP Enable設定に従うLP2 Event Modeへ移行する
  * enabled=true:  RDYを待たずForce CommsでActive／Event Modeを設定・確認し、
  *                新しい入力セッションを開始する
  *
- * 有効化時は、確認済みのStreaming設定を再設定せず直接Active切り替えへ進む。
+ * Active／LP2ともEvent Modeを使用し、直接モード切り替えへ進む。
  * ICが通信可能になるまでのクロックストレッチは発生し得る。
  * Active／Event Mode確認後も、座標の基準取得に2フレームを使う。
  *
- * 通常のLP2通信と無効化のモード遷移はRDYを待つ。
- * RDYがsampling periodの3倍の間来なければ
- * Force Commsへフォールバックする。Event Modeを離れる操作と再有効化確認も
- * Force Commsを使う。各段階は1 transactionでSTOPにより通信窓を閉じる。
+ * 通常のActive／LP2通信はイベントによるRDYを待つ。
+ * 有効化・無効化・Device PMのモード設定と読み戻し確認は、全段階で
+ * RDYを待たずForce Commsを使う。LP2への遷移もEvent Mode確認後に完了する。
+ * 各段階は1 transactionでSTOPにより通信窓を閉じる。
  *
  * ドライバからATIを要求するのは初期化時（ICリセット後の再初期化を含む）のみ。
  * 通常動作中はICの自動Re-ATIに任せ、Reseedや指スタック判定は行わない。

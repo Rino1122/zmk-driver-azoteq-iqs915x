@@ -777,9 +777,8 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * Power mode control
  *
  * Manual Control有効時は、ホストがSystem ControlのMode Selectで
- * Active/LP2を切り替える。イベントモード中はRDY待ちのない期間も
- * あるため、Event Modeを離れる最初の操作はForce Commsで進める。
- * Streaming中の操作はRDYを待ち、3 sampling periodsでフォールバックする。
+ * Active/LP2ともEvent Modeを使う。イベントがなければRDYが来ないため、
+ * 有効化・無効化とも全ての制御段階をForce Commsで進める。
  * ============================================================ */
 
 static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
@@ -882,14 +881,10 @@ static void iqs915x_begin_mode(struct iqs915x_data *data, uint16_t mode, bool ou
   data->relatch_target_enabled = output;
   data->transition_generation = iqs915x_request_generation(data);
   data->power_retry_count = 0;
-  data->power_force_comms = output;
-  /* LP2 already has a verified Streaming configuration. Enabling output must
-   * not spend two additional LP2 periods rewriting and checking that value.
-   * Disable transitions retain their RDY-driven verification sequence. */
-  bool streaming_confirmed = data->streaming_expected &&
-      data->confirmed_config_settings == iqs915x_config_settings_without_event_mode(
-          data->confirmed_config_settings);
-  data->work_state = output && streaming_confirmed ? WORK_SET_POWER : WORK_SET_STREAMING;
+  data->power_force_comms = true;
+  /* Both modes share the Event policy. Switch power directly, then verify
+   * both the charging mode and communication policy before completing. */
+  data->work_state = WORK_SET_POWER;
 }
 
 static void iqs915x_restore_mode(struct iqs915x_data *data)
@@ -954,50 +949,43 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
   uint16_t cfg = iqs915x_apply_config_settings_policy(data->confirmed_config_settings);
   uint16_t value = 0;
   int ret = 0;
-  bool event = data->work_state == WORK_SET_EVENT_MODE ||
-               data->work_state == WORK_CONFIRM_EVENT_MODE;
-  if (!event) { cfg &= ~IQS915X_EVENT_MODE; }
   switch (data->work_state)
   {
-  case WORK_SET_STREAMING:
   case WORK_SET_EVENT_MODE:
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (!ret)
     {
-      data->streaming_expected = !event;
-      data->work_state = event ? WORK_CONFIRM_EVENT_MODE : WORK_CONFIRM_STREAMING;
+      data->streaming_expected = false;
+      data->work_state = WORK_CONFIRM_EVENT_MODE;
     }
     break;
-  case WORK_CONFIRM_STREAMING:
   case WORK_CONFIRM_EVENT_MODE:
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &value);
     if (!ret && value != cfg)
     {
       LOG_WRN("communication config mismatch expected=0x%04x actual=0x%04x", cfg, value);
-      data->work_state = event ? WORK_SET_EVENT_MODE : WORK_SET_STREAMING;
+      data->work_state = WORK_SET_EVENT_MODE;
       ret = -EIO;
     }
     else if (!ret)
     {
       data->confirmed_config_settings = value;
-      if (!event)
+      data->work_state = WORK_READ_DATA;
+      data->power_force_comms = false;
+      if (data->transition_generation == iqs915x_request_generation(data))
       {
-        data->work_state = WORK_SET_POWER;
-      }
-      else
-      {
-        data->work_state = WORK_READ_DATA;
-        if (data->transition_generation == iqs915x_request_generation(data) &&
+        if (data->relatch_target_enabled &&
             atomic_get(&data->requested_enabled) && !atomic_get(&data->pm_suspended))
         {
           data->enabled = true;
           data->pointer_resume_guard_frames = IQS915X_POINTER_RESUME_GUARD_FRAMES;
           atomic_set(&data->output_enabled, 1);
-          iqs915x_complete_transition(data, 0);
         }
+        iqs915x_complete_transition(data, 0);
       }
       LOG_INF("communication config confirmed mode=%u event=%u enabled=%u",
-              data->confirmed_mode, event, (unsigned int)atomic_get(&data->requested_enabled));
+              data->confirmed_mode, !!(value & IQS915X_EVENT_MODE),
+              (unsigned int)atomic_get(&data->requested_enabled));
     }
     break;
   case WORK_SET_POWER:
@@ -1017,11 +1005,7 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
       data->confirmed_mode = data->power_target_mode;
       data->active_pending = false;
       data->lp2_pending = false;
-      data->work_state = data->relatch_target_enabled ? WORK_SET_EVENT_MODE : WORK_READ_DATA;
-      if (data->confirmed_mode == IQS915X_MODE_LP2)
-      {
-        iqs915x_complete_transition(data, 0);
-      }
+      data->work_state = WORK_SET_EVENT_MODE;
       LOG_INF("communication mode confirmed mode=%u output=%u t=%lld",
               data->confirmed_mode, data->relatch_target_enabled, (long long)k_uptime_get());
     }
@@ -1904,17 +1888,12 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       }
       else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE)
       {
-        // TP channelsを500 msごとにセンシングする。
+        // LP2のセンシング周期はALP Enable設定にかかわらず500 msにする。
         buffer[i] = IQS915X_LP2_SAMPLING_PERIOD_MS & 0xFF;
       }
       else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE + 1)
       {
         buffer[i] = (IQS915X_LP2_SAMPLING_PERIOD_MS >> 8) & 0xFF;
-      }
-      else if (current_addr == IQS915X_ALP_SETUP + 3)
-      {
-        // ALP Enable (bit31) = 0: TP channels sense in LP1/LP2.
-        buffer[i] &= ~BIT(7);
       }
       else if (current_addr == IQS915X_OTHER_SETTINGS)
       {
@@ -2290,7 +2269,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
   case INIT_PREPARE_EVENT_MODE:
   {
     // SHOW_RESET clearとTP Re-ATI完了後にEvent Modeを明示writeする。
-    // 出力有効ActiveはTP/Re-ATI Event、無効起動はStreamingを使う。
+    // 出力有効・無効ともTP/Re-ATI Eventを使う。
     // Gesture/TP Touch/ALP Eventは無効にする。
     uint16_t cfg = 0;
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
@@ -2299,9 +2278,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
       return;
     }
-    data->init_pending_cfg = atomic_get(&data->requested_enabled) ?
-        iqs915x_apply_config_settings_policy(cfg) :
-        iqs915x_config_settings_without_event_mode(cfg);
+    data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->wait_count = 0;
     data->init_step = INIT_SET_EVENT_MODE;
     break;
@@ -2332,12 +2309,10 @@ static void iqs915x_init_step_handler(const struct device *dev)
       return;
     }
 
-    uint16_t expected = IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT |
+    uint16_t expected = IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT |
                         IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT;
     uint16_t forbidden = IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT |
                          IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT;
-    if (atomic_get(&data->requested_enabled)) { expected |= IQS915X_EVENT_MODE; }
-    else { forbidden |= IQS915X_EVENT_MODE; }
 
     if ((cfg & expected) == expected && (cfg & forbidden) == 0)
     {
@@ -2391,9 +2366,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     LOG_WRN("Init: CONFIG_SETTINGS policy mismatch (0x%04x), "
             "retrying force (%d/%d)",
             cfg, data->wait_count, IQS915X_INIT_EVENT_MODE_MAX_RETRIES);
-    data->init_pending_cfg = atomic_get(&data->requested_enabled) ?
-        iqs915x_apply_config_settings_policy(cfg) :
-        iqs915x_config_settings_without_event_mode(cfg);
+    data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->init_step = INIT_SET_EVENT_MODE;
     break;
   }
@@ -2419,7 +2392,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     }
 
     // REATI_OCCURRED (bit4) フラグでTP Re-ATI完了を検出する。
-    // ALPは無効なので、TP Re-ATIだけを初期化完了の必須条件にする。
+    // この段階で要求したTP Re-ATIの完了を初期化完了の必須条件にする。
     // このフラグはRe-ATIが実行されたRDYサイクルで1回だけセットされる
     if (stream.info_flags & IQS915X_REATI_OCCURRED)
     {
@@ -2531,15 +2504,14 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
     return;
   }
   iqs915x_restore_mode(data);
-  LOG_INF("communication request generation=%u enabled=%u suspended=%u force=%u skip_streaming=%u",
-          generation, output, (unsigned int)atomic_get(&data->pm_suspended), data->power_force_comms,
-          data->work_state == WORK_SET_POWER);
+  LOG_INF("communication request generation=%u enabled=%u suspended=%u force=%u",
+          generation, output, (unsigned int)atomic_get(&data->pm_suspended), data->power_force_comms);
 }
 
 /* ============================================================
  * メインスレッド
  *
- * RDY割り込みでセマフォが解放され、ストリーミングデータをraw読み取りする。
+ * RDY割り込みでセマフォが解放され、レジスタ指定のwrite-readで読み取る。
  * ActiveはREL_Xから44 bytes、LP2はINFO_FLAGSのみを読む。
  * ============================================================ */
 static void iqs915x_thread_main(void *p1, void *p2, void *p3)
@@ -2605,12 +2577,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
     if (data->work_state != WORK_READ_DATA)
     {
-      /* Output enable (including PM resume) is latency-sensitive. Initiate
+      /* Enable/disable and PM transitions cannot depend on an event. Initiate
        * each transaction immediately; the IC clock-stretches to its next safe
        * communication window. Each STOP still ends one separate window. */
-      bool force = data->power_force_comms || !data->streaming_expected ||
-                   data->work_state == WORK_CONFIRM_EVENT_MODE;
-      if (iqs915x_wait_window(data, force, INT64_MAX)) { iqs915x_mode_step(data); }
+      if (iqs915x_wait_window(data, true, INT64_MAX)) { iqs915x_mode_step(data); }
       continue;
     }
     uint32_t frame_generation = iqs915x_request_generation(data);
@@ -3135,7 +3105,7 @@ static int iqs915x_init(const struct device *dev)
   data->init_restart_count = 0;
   data->init_pending_cfg = 0;
   data->confirmed_config_settings = 0;
-  // disabled-by-defaultの場合は初期化完了後にStreamingのLP2へ移行する。
+  // disabled-by-defaultの場合は初期化完了後にEvent ModeのLP2へ移行する。
   atomic_set(&data->requested_enabled, !config->disabled_by_default);
   atomic_clear(&data->output_enabled);
   atomic_set(&data->request_generation, 0);
