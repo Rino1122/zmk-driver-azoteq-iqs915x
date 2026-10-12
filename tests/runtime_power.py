@@ -58,6 +58,7 @@ HARNESS = r'''
 #include <errno.h>
 #include <stdio.h>
 #include "iqs915x_internal.h"
+#include "iqs915x_sensor_config.h"
 DEFINITIONS
 static int64_t now, next_rdy;
 static uint16_t ic_mode, ic_cfg, info_extra, fingers;

@@ -12,16 +12,15 @@
   - 必須: `rdy-gpios`
   - 任意: `reset-gpios`
   - 機能フラグ: `one-finger-tap`, `press-and-hold`, `two-finger-tap`, `scroll`, `scroll-inertia`, `three-finger-swipe`, `four-finger-swipe`, `report-absolute`, `disabled-by-default`
-  - 調整値: スクロール慣性、スワイプ閾値、タップ/ホールド時間、report rate、軸入れ替え/反転など
-- IQS915x 向け初期化データと座標補正は `azoteq,iqs915x-profile` DTS
-  phandle から供給します。ドライバはボード固有データを内蔵しません。
-  - Azoteq export の検証用原本: `drivers/input/IQS9150_init.h`
-  - 利用側の profile は 1174 bytes の init-data と軸別 LUT を持ちます。
+  - 調整値: スクロール慣性、スワイプ閾値、タップ/ホールド時間、入力処理の設定など
+- IQS915x の初期化データは `drivers/input/IQS9150_init.h` を直接コンパイルします。
+  - CMake が `scripts/generate_init_array.py` で1174個のマクロ参照配列を自動生成します。DTSへの変換・注入はありません。
+  - 初期化時の上書き値と座標補正は `drivers/input/iqs915x_sensor_config.h` で管理します。
 - `drivers/input/iqs915x.c` は IQS915x 専用の実装です。
   - 16-bit little-endian register read/write を実装しています。
   - RDY GPIO 割り込みで専用スレッドを起こし、1 RDY 期間に 1 I2C transaction で処理する設計です。
   - 初期化は state machine で進みます。SHOW_RESET 確認、必要時 SW reset、init-data chunk write、ACK reset/Re-ATI、Event Mode/Manual Control 確認、通常動作へ遷移します。
-  - init-data 書き込み中に、DTS 設定値とドライバ必須ビットをバッファへ事前パッチします。
+  - init-data 書き込み中に、ドライバ設定値と必須ビットをバッファへ事前パッチします。
   - runtime reset は `SHOW_RESET` で検出し、操作状態を解除して再初期化します。
 - 入力イベント機能はかなり実装済みです。
   - 相対ポインタ移動: IQS915x の `REL_X/REL_Y` を `INPUT_REL_X/Y` として出します。
@@ -51,7 +50,7 @@
   - `dts/bindings/input/azoteq,iqs915x-common.yaml`
   - `struct iqs915x_config` in `drivers/input/iqs915x_regs.h`
   - `IQS915X_INIT(n)` in `drivers/input/iqs915x.c`
-- init-data register の既定値を変える変更では、`drivers/input/IQS9150_init.h` を置き換えるか、`iqs915x.c` の init-data pre-patch に明示的に追加してください。
+- init-data register の既定値を変える変更では、`drivers/input/IQS9150_init.h` を置き換えるか、`iqs915x_sensor_config.h` の上書き値、または `iqs915x.c` の init-data pre-patch を明示的に変更してください。
 - 1 RDY 期間中の I2C transaction 数に注意してください。複数 register 操作が必要な処理は state machine で RDY cycle をまたがせる設計に合わせてください。
 - pointer, tap, scroll, swipe の競合を触る場合は、`iqs915x_update_finger_state()`, `iqs915x_handle_multifinger_swipe()`, `gesture_pointer_suppress_ticks`, `allow_pointer_report` の関係を先に読んでください。
 - ボタン押下を追加する場合は、必ず解除経路も同時に確認してください。`button_release_work`, `hold_release_work`, runtime reset, `iqs915x_set_enabled(false)` が関連します。
@@ -59,6 +58,6 @@
 
 ## 変更後の確認
 
-- 少なくとも `scripts/convert_init_header.py drivers/input/IQS9150_init.h` が 1174 bytes を抽出できることを確認してください。
+- 少なくとも `python3 tests/init_header.py` と `python3 tests/init_data.py` が成功することを確認してください。
 - 可能なら利用側 ZMK workspace で firmware build を実行してください。
 - 実機確認では、起動時 init 完了ログ、tap/drag、scroll、scroll inertia、3/4 finger swipe、runtime disable/enable、runtime reset 復帰を分けて確認してください。

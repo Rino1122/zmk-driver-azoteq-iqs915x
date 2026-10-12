@@ -1,9 +1,4 @@
 properties:
-  profile:
-    type: phandle
-    required: true
-    description: Board-specific initialization and coordinate calibration profile.
-
   rdy-gpios:
     type: phandle-array
     required: true
@@ -33,18 +28,6 @@ properties:
   scroll:
     type: boolean
     description: "Enable driver-side two-finger scroll from absolute coordinates"
-
-  switch-xy:
-    type: boolean
-    description: "Swap x and y axes"
-
-  flip-x:
-    type: boolean
-    description: "Invert x axis direction"
-
-  flip-y:
-    type: boolean
-    description: "Invert y axis direction"
 
   scroll-divisor:
     type: int
@@ -202,13 +185,6 @@ properties:
     description: |
       Denominator of the dominant-axis lock ratio for 3/4-finger swipes.
       Default 3/2 means the dominant axis must be about 1.5x the other axis.
-
-  report-rate-ms:
-    type: int
-    description: |
-      Active mode sampling period in ms. Lower values = smoother cursor but
-      higher power consumption. If not set, IQS9150 NVM default is used.
-      Typical: 10 (100Hz default), 5 (200Hz), 2 (500Hz).
 
   coordinate-correction:
     type: boolean

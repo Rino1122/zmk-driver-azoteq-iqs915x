@@ -301,7 +301,7 @@ enum iqs915x_init_step
     INIT_CHECK_SHOW_RESET,    // SHOW_RESETフラグ確認
     INIT_SOFTWARE_RESET,      // ソフトウェアリセット発行
     INIT_WAIT_SOFTWARE_RESET, // ソフトウェアリセット完了待機
-    INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、DTS設定を事前適用済み）
+    INIT_WRITE_INIT_DATA,     // init-dataブロック書き込み（複数RDYサイクル、ドライバ設定を事前適用済み）
     INIT_VERIFY_INIT_CHUNK,   // 書き込み失敗チャンクのread-back確認
     INIT_ACK_RESET,           // リセットACK
     INIT_VERIFY_SHOW_RESET_CLEAR, // ACK_RESET後のSHOW_RESETクリア確認
@@ -405,7 +405,7 @@ struct iqs915x_config
     struct gpio_dt_spec rdy_gpio;
     struct gpio_dt_spec reset_gpio;
 
-    // 初期化データ（NVM非搭載デバイス用）
+    // ドライバ内蔵の初期化データと座標補正（DTSからの注入は不可）
     const uint8_t *init_data;
     uint16_t init_data_len;
     const uint16_t *coord_lut_x_q15;
@@ -444,7 +444,7 @@ struct iqs915x_config
     uint16_t swipe_direction_lock_denominator;
 
     // タイミング設定
-    uint16_t report_rate_ms; // Active Modeサンプリング周期(ms), 0=NVMデフォルト
+    uint16_t report_rate_ms; // ドライバ設定のActive Modeサンプリング周期(ms)
 
     // 座標補正
     bool coordinate_correction; // true=絶対座標にブロック内LUT補正を適用

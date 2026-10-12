@@ -36,8 +36,6 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         status = "okay";
         compatible = "azoteq,iqs915x";
         reg = <0x56>;
-        /* Required board profile: init-data and coordinate calibration. */
-        profile = <&board_iqs915x_profile>;
 
         reset-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
         rdy-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
@@ -82,7 +80,6 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         swipe-direction-lock-numerator = <3>;
         swipe-direction-lock-denominator = <2>;
 
-        switch-xy;
     };
 };
 ```
@@ -103,7 +100,7 @@ changed. `pointer-sensitivity-percent` is the base scale; speeds at or below
 `pointer-accel-threshold` use that base scale, speeds at or above
 `pointer-accel-saturation` use `pointer-accel-max-percent`, and speeds between
 them are linearly interpolated. Speeds are normalized to a 10 ms report interval
-using `report-rate-ms` when configured. When `pointer-accel` is omitted and
+using the driver-owned Active sampling period (15 ms). When `pointer-accel` is omitted and
 `pointer-sensitivity-percent` is left at `100`, pointer output is unchanged from
 the raw absolute-coordinate delta path.
 
@@ -307,29 +304,35 @@ practical Japanese guide to each scroll parameter and tuning workflow.
 ## Initialization data (IQS9150/IQS9151)
 
 The IQS9150/IQS9151 does **not** have NVM, so all register settings must be written via I2C at every boot.
-The board supplies an `azoteq,iqs915x-profile` phandle containing the complete
-initialization byte stream and coordinate calibration tables. This keeps the
-driver reusable across boards while preserving the existing 1174-byte export.
+The driver compiles `drivers/input/IQS9150_init.h` as the sole source of the
+1174 initialization bytes (`0x115C..0x15EB` + `0x2000..0x2005`). CMake runs
+`scripts/generate_init_array.py` automatically to generate an array of references
+to the export's C macros. The generated header includes the original export;
+there is no manually copied array or DTS conversion. Header or generator changes
+regenerate the array before compilation. Invalid byte counts, section addresses,
+duplicate definitions and out-of-range values fail the build.
 
-- `init-data`: 1174 bytes (`0x115C..0x15EB` + `0x2000..0x2005`)
-- `x/y-coordinate-lut-q15`: per-axis half-block correction curves
-- `x/y-coordinate-blocks`: profile-specific block counts
+`drivers/input/iqs915x_sensor_config.h` owns the coordinate LUTs (17 entries per
+axis, 6 X blocks and 4 Y blocks) and initialization overrides: Active sampling
+period 15 ms, LP2 sampling period 500 ms, Re-ATI retry 1 second and axis
+orientation. Firmware DTS supplies only the I2C/GPIO wiring and input behavior
+settings, such as tap, scroll, acceleration and enable state. The former
+`profile`, `report-rate-ms`, `switch-xy`, `flip-x` and `flip-y` properties have
+been removed; migrate firmware overlays by removing them and the profile node.
 
-The original `drivers/input/IQS9150_init.h` is retained as the Azoteq export
-source for byte-count validation and future profile regeneration. It is not
-compiled into the driver.
+### Updating initialization settings
 
-### Updating a board profile
-
-1. Export a new `IQS9150_init.h` with the **Azoteq GUI**.
-2. Convert its values into the board's `azoteq,iqs915x-profile` DTS node.
-3. Verify the profile contains exactly 1174 bytes and keep DTS tuning
-   properties (`report-rate-ms`, scroll settings, etc.) in the sensor node.
+1. Replace `drivers/input/IQS9150_init.h` with the **Azoteq GUI** export.
+2. Adjust driver overrides/calibration in `iqs915x_sensor_config.h` as needed.
+3. Build the firmware with the updated driver revision. No conversion or copying
+   into firmware DTS is required.
 
 ### Priority
 
-The driver writes the profile-provided init-data first, then applies individual DTS properties (e.g. `report-rate-ms`) as register overrides. The conversion script emits the profile DTS array by default; use `--c-header` only for legacy tooling.
-This priority is determined by the driver's initialization sequence in C code, not by DTS property order.
+The Azoteq header supplies the base bytes. Before each transfer, the driver
+patches a temporary buffer with its sensor settings and mandatory protocol bits.
+Read-back verification uses the same patched bytes. The export itself is never
+modified. Runtime reset repeats this same initialization sequence.
 
 The driver applies these communication and ATI settings while pre-patching init-data:
 
@@ -338,9 +341,9 @@ The driver applies these communication and ATI settings while pre-patching init-
 - Automatic TP Re-ATI and its event are enabled. ALP Re-ATI/events and
   `TP_TOUCH_EVENT` are disabled. Re-ATI retry time is fixed at 1 second.
 - ATI target, reference drift limit, and both negative and positive delta
-  Re-ATI thresholds retain the profile values. Tune these values in the supplied
-  init-data. Positive delta recovery is intended for snap domes; for a trackpad
-  that does not use it, supply a sufficiently high threshold in the profile.
+  Re-ATI thresholds retain the Azoteq header values. Tune these values in
+  `IQS9150_init.h`. Positive delta recovery is intended for snap domes; for a trackpad
+  that does not use it, supply a sufficiently high threshold in the header.
 
 Output-enabled Active uses Event Mode. LP2 and Active during mode transitions
 with input output disabled use Streaming Mode. Each control step performs one I2C
@@ -359,7 +362,7 @@ ready. Actual enable latency needs hardware validation.
 Normal Streaming reads and disable transitions wait for RDY. If RDY does
 not arrive within three sampling periods since the last transaction, the driver
 falls back to Force Comms: 1500 ms in LP2, or three times the actual Active period from
-`report-rate-ms` / the profile. During mode changes the longer period applies.
+the driver-owned Active sampling period. During mode changes the longer period applies.
 API and timer wakes do not count as RDY samples or restart that deadline.
 
 In LP2, the driver reads only fresh `INFO_FLAGS`; coordinates and `NUM_FINGERS`
@@ -374,12 +377,12 @@ adjustment (datasheet section 5.5.3). A real stationary contact therefore no
 longer causes the driver to overwrite the reference.
 
 Runtime recovery relies on the IC's automatic TP Re-ATI. Negative delta exceeding
-the profile threshold for 15 consecutive sensing cycles triggers Re-ATI. Its
+the header threshold for 15 consecutive sensing cycles triggers Re-ATI. Its
 counter may restart on a power-mode change. The automatic Re-ATI enable is
 shared with reference drift and positive delta recovery; enabling it does not
-select negative delta alone. Reference drift remains subject to the profile
+select negative delta alone. Reference drift remains subject to the header
 limit. Positive delta is for snap-dome recovery and can be kept inactive with
-a sufficiently high profile threshold (datasheet section 5.8.2).
+a sufficiently high header threshold (datasheet section 5.8.2).
 
 ATI Error retries are handled by the IC with the configured one-second suppression
 time. Runtime Re-ATI releases held buttons, cancels pending tap/drag/inertia work,
@@ -400,7 +403,7 @@ The tests compile actual initialization/runtime control flow with mocked Zephyr
 and IC services, and check that long LP2 waits and stationary single/multiple
 contacts do not initiate reseed or coordinate probes. They also check streaming
 timing, Force Comms fallback, output enable without RDY (with and without touch),
-request reversals, Re-ATI/ATI Error, profile tuning preservation and PM handling.
+request reversals, Re-ATI/ATI Error, header tuning preservation and PM handling.
 Hardware validation should include startup, tap/drag, scroll/inertia, 3/4-finger
 swipe, runtime enable/disable, stationary single/multiple fingers, negative delta
 recovery, communication fallback and reset.

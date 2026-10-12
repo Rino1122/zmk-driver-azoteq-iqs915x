@@ -33,6 +33,8 @@
 #include <iqs915x.h>
 #include "iqs915x_internal.h"
 #include "iqs915x_power.h"
+#include "iqs915x_init_array.h"
+#include "iqs915x_sensor_config.h"
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
@@ -47,7 +49,6 @@ static const uint8_t iqs915x_device_api = 0;
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
-#define IQS915X_LP2_SAMPLING_PERIOD_MS 500U
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
@@ -1873,7 +1874,6 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
     {
       uint16_t current_addr = *addr + i;
       uint8_t original = buffer[i];
-      bool dts_patch = false;
 
       // === 強制パッチ: ドライバの固定設定と必須ビット修正 ===
       if (current_addr == IQS915X_SYSTEM_CONTROL)
@@ -1923,20 +1923,18 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       }
       else if (current_addr == IQS915X_REATI_RETRY_TIME)
       {
-        buffer[i] = 1; // ATI Error suppression time, in seconds.
+        buffer[i] = IQS915X_REATI_RETRY_SECONDS;
       }
-      // === DTSプリパッチ: DTS設定値を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
+      // === ドライバ設定を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
       else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
                config->report_rate_ms > 0)
       {
         buffer[i] = config->report_rate_ms & 0xFF;
-        dts_patch = true;
       }
       else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE + 1 &&
                config->report_rate_ms > 0)
       {
         buffer[i] = (config->report_rate_ms >> 8) & 0xFF;
-        dts_patch = true;
       }
       else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
       {
@@ -1949,37 +1947,25 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         if (config->switch_xy)
           set |= IQS915X_SWITCH_XY_AXIS;
         buffer[i] = (buffer[i] & ~clr) | set;
-        dts_patch = true;
       }
       else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
       {
         // tap/holdはドライバ側で指本数・位置・時間から判定する。
         uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
         buffer[i] &= ~clr;
-        dts_patch = true;
       }
       else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
       {
         // two-finger tap/scrollはabsolute座標からドライバ側で判定する。
         uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
         buffer[i] &= ~clr;
-        dts_patch = true;
       }
       // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
       if (log_changes && buffer[i] != original)
       {
-        if (dts_patch)
-        {
-          LOG_WRN("Init: init-data pre-patched by DTS at reg 0x%04x: "
-                  "0x%02x -> 0x%02x",
-                  current_addr, original, buffer[i]);
-        }
-        else
-        {
-          LOG_WRN("Init: init-data overridden at reg 0x%04x: "
-                  "init-data=0x%02x -> forced=0x%02x",
-                  current_addr, original, buffer[i]);
-        }
+        LOG_WRN("Init: init-data overridden by driver at reg 0x%04x: "
+                "0x%02x -> 0x%02x",
+                current_addr, original, buffer[i]);
       }
     }
 
@@ -3268,29 +3254,30 @@ static int iqs915x_init(const struct device *dev)
 /* ============================================================
  * デバイスインスタンスマクロ
  * ============================================================ */
+BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data) == IQS915X_INIT_DATA_TOTAL_SIZE,
+             "IQS915x header must supply 1174 init bytes");
+BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_x) == 17 && ARRAY_SIZE(iqs915x_coord_lut_y) == 17,
+             "IQS915x coordinate LUTs must have 17 entries");
+BUILD_ASSERT(IQS915X_COORD_X_BLOCKS > 0 && IQS915X_COORD_Y_BLOCKS > 0,
+             "IQS915x coordinate block counts must be positive");
+BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PERIOD_MS <= UINT16_MAX,
+             "IQS915x Active sampling period must fit a nonzero 16-bit value");
+
 #define IQS915X_INIT(n)                                                                                                                                                                            \
   BUILD_ASSERT(DT_INST_PROP(n, scroll_inertia_initial_velocity_percent) >= 100 && DT_INST_PROP(n, scroll_inertia_initial_velocity_percent) <= 1000, "IQS915x inertia initial velocity must be 100-1000 percent"); \
   static struct iqs915x_data iqs915x_data_##n;                                                                                                                                                     \
-  static const uint8_t iqs915x_init_data_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), init_data);                                                                                                \
-  static const uint16_t iqs915x_coord_lut_x_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_lut_q15);                                                                                \
-  static const uint16_t iqs915x_coord_lut_y_##n[] = DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_lut_q15);                                                                                \
-  BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data_##n) == IQS915X_INIT_DATA_TOTAL_SIZE, "IQS915x profile init-data must be 1174 bytes");                                                           \
-  BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_x_##n) == 17, "IQS915x X coordinate LUT must have 17 entries");                                                                                     \
-  BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_y_##n) == 17, "IQS915x Y coordinate LUT must have 17 entries");                                                                                     \
-  BUILD_ASSERT(DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_blocks) > 0, "IQS915x X coordinate block count must be positive");                                                            \
-  BUILD_ASSERT(DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_blocks) > 0, "IQS915x Y coordinate block count must be positive");                                                            \
   static const struct iqs915x_config iqs915x_config_##n = {                                                                                                                                        \
       .i2c = I2C_DT_SPEC_INST_GET(n),                                                                                                                                                              \
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                                                                                                                             \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                                                                                                                                 \
-      .init_data = iqs915x_init_data_##n,                                                                                                                                                           \
-      .init_data_len = ARRAY_SIZE(iqs915x_init_data_##n),                                                                                                                                          \
-      .coord_lut_x_q15 = iqs915x_coord_lut_x_##n,                                                                                                                                                  \
-      .coord_lut_x_len = ARRAY_SIZE(iqs915x_coord_lut_x_##n),                                                                                                                                      \
-      .coord_lut_y_q15 = iqs915x_coord_lut_y_##n,                                                                                                                                                  \
-      .coord_lut_y_len = ARRAY_SIZE(iqs915x_coord_lut_y_##n),                                                                                                                                      \
-      .coord_x_blocks = DT_PROP(DT_INST_PHANDLE(n, profile), x_coordinate_blocks),                                                                                                                 \
-      .coord_y_blocks = DT_PROP(DT_INST_PHANDLE(n, profile), y_coordinate_blocks),                                                                                                                 \
+      .init_data = iqs915x_init_data,                                                                                                                                                           \
+      .init_data_len = ARRAY_SIZE(iqs915x_init_data),                                                                                                                                          \
+      .coord_lut_x_q15 = iqs915x_coord_lut_x,                                                                                                                                                  \
+      .coord_lut_x_len = ARRAY_SIZE(iqs915x_coord_lut_x),                                                                                                                                      \
+      .coord_lut_y_q15 = iqs915x_coord_lut_y,                                                                                                                                                  \
+      .coord_lut_y_len = ARRAY_SIZE(iqs915x_coord_lut_y),                                                                                                                                      \
+      .coord_x_blocks = IQS915X_COORD_X_BLOCKS,                                                                                                                 \
+      .coord_y_blocks = IQS915X_COORD_Y_BLOCKS,                                                                                                                 \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                                                                                           \
       .tap_and_hold = DT_INST_PROP(n, tap_and_hold),                                                                                                                                               \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                                                                                           \
@@ -3324,12 +3311,12 @@ static int iqs915x_init(const struct device *dev)
       .swipe_direction_settle_frames = DT_INST_PROP_OR(n, swipe_direction_settle_frames, 2),                                                                                                      \
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
-      .report_rate_ms = DT_INST_PROP_OR(n, report_rate_ms, 0),                                                                                                                                     \
+      .report_rate_ms = IQS915X_ACTIVE_SAMPLING_PERIOD_MS,                                                                                                                                     \
       .coordinate_correction = DT_INST_PROP(n, coordinate_correction),                                                                                                                             \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
-      .switch_xy = DT_INST_PROP(n, switch_xy),                                                                                                                                                     \
-      .flip_x = DT_INST_PROP(n, flip_x),                                                                                                                                                           \
-      .flip_y = DT_INST_PROP(n, flip_y),                                                                                                                                                           \
+      .switch_xy = IQS915X_SENSOR_SWITCH_XY,                                                                                                                                                     \
+      .flip_x = IQS915X_SENSOR_FLIP_X,                                                                                                                                                           \
+      .flip_y = IQS915X_SENSOR_FLIP_Y,                                                                                                                                                           \
       .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                                                                                                                                 \
   };                                                                                                                                                                                               \
   IQS915X_PM_DEVICE_DEFINE(n);                                                                                                                                                                    \
