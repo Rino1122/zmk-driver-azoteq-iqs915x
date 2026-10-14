@@ -449,3 +449,9 @@ This driver is forked from the [zmk-driver-azoteq-iqs5xx](https://github.com/use
 - **RDY line**: Active-low by default (IQS5xx is active-high).
 - **Gesture support**: Extended with double tap, triple tap, swipe-and-hold, and more.
 - **Max touches**: Up to 7 fingers (IQS5xx supports up to 5).
+
+### Harbour activation policy regression checks
+
+Layer selection and persistence belong to the LandsFall central firmware. The existing settings API v2 and asynchronous `iqs915x_set_enabled()` are reused; its successful return confirms request acceptance, not completed Active-mode transition.
+
+Run `python3 tests/runtime_session_reset.py` for the production request/reset paths: immediate output gating, button/hold release, inertia cancellation and stale work rejection after re-enable. Also run `tests/runtime_power.py`, `tests/pointer_frame.py`, `tests/init_header.py` and `tests/init_data.py`. These host tests complement firmware builds and do not establish physical USB/BLE behavior.
