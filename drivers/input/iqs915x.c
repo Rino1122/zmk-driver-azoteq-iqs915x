@@ -48,6 +48,8 @@ static const uint8_t iqs915x_device_api = 0;
 #define IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT 10
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
+#define IQS915X_INIT_BUSY_RETRY_MS 150
+#define IQS915X_INIT_BUSY 1 /* Successful read with IC busy, distinct from I2C errors. */
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
@@ -2000,7 +2002,7 @@ static void iqs915x_restart_initialization(const struct device *dev,
 /* ============================================================
  * 初期化ステートマシン
  * ============================================================ */
-static void iqs915x_init_step_handler(const struct device *dev)
+static int iqs915x_init_step_handler(const struct device *dev)
 {
   struct iqs915x_data *data = dev->data;
   const struct iqs915x_config *config = dev->config;
@@ -2016,14 +2018,14 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read Info Flags: %d", ret);
-      return; // 次のRDYでリトライ
+      return ret; // 次のRDYでリトライ
     }
 
     if (info_flags == 0xEEEE)
     {
-      // ICがまだビジー状態。次のRDYサイクルで再試行する
+      // 正常なbusy応答を通信エラーと区別し、次のRDYで再試行する。
       LOG_DBG("Init: IC busy (0xEEEE), waiting...");
-      break;
+      return IQS915X_INIT_BUSY;
     }
 
     // INFO_FLAGS bit7 = SHOW_RESET。電源投入直後のリセット時にセットされる
@@ -2052,7 +2054,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to send SW Reset: %d", ret);
-      return;
+      return ret;
     }
     data->init_step = INIT_WAIT_SOFTWARE_RESET;
     data->wait_count = 0;
@@ -2072,7 +2074,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read during SW Reset wait: %d", ret);
-      return;
+      return ret;
     }
 
     if (stream.info_flags == 0xEEEE)
@@ -2100,7 +2102,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to send initial ACK reset: %d", ret);
-      return;
+      return ret;
     }
     LOG_INF("Init: ACK_RESET sent");
     data->init_step = INIT_VERIFY_SHOW_RESET_CLEAR;
@@ -2117,7 +2119,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read Info Flags after ACK reset: %d", ret);
-      return;
+      return ret;
     }
 
     if (info_flags == 0xEEEE)
@@ -2155,7 +2157,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       // init-dataは必須。YAMLバインディングでrequired: trueとしているため
       // 通常はビルド時にエラーとなるが、実行時の安全策としても確認する。
       LOG_ERR("Init: init-data is required but not set. Halting.");
-      return;
+      return -EINVAL;
     }
 
     uint16_t offset = data->init_data_offset;
@@ -2185,7 +2187,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
       {
         data->init_step = INIT_VERIFY_INIT_CHUNK;
       }
-      return; // 次のRDYで同じチャンクをリトライまたはread-backする
+      return ret; // 次のRDYで同じチャンクをリトライまたはread-backする
     }
 
     LOG_DBG("Init: Wrote %d bytes at 0x%04x (%d/%d)", chunk, addr,
@@ -2267,7 +2269,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read retained CONFIG_SETTINGS: %d", ret);
-      return;
+      return ret;
     }
     data->init_pending_cfg = iqs915x_config_settings_without_event_mode(cfg);
     data->init_step = INIT_SET_STREAMING;
@@ -2280,7 +2282,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to prepare Streaming for Re-ATI: %d", ret);
-      return;
+      return ret;
     }
     data->streaming_expected = true;
     data->init_step = INIT_REQUEST_REATI;
@@ -2294,7 +2296,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to request Re-ATI: %d", ret);
-      return;
+      return ret;
     }
     LOG_INF("Init: Re-ATI requested");
     data->init_step = INIT_WAIT_REATI;
@@ -2312,7 +2314,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
-      return;
+      return ret;
     }
     data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->wait_count = 0;
@@ -2326,7 +2328,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to force Event Mode + Manual Control: %d", ret);
-      return;
+      return ret;
     }
     LOG_INF("Init: communication policy written (CONFIG_SETTINGS=0x%04x)",
             data->init_pending_cfg);
@@ -2342,7 +2344,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to confirm CONFIG_SETTINGS: %d", ret);
-      return;
+      return ret;
     }
 
     uint16_t expected = IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT |
@@ -2417,7 +2419,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
-      return; // 次のRDYでリトライ
+      return ret; // 次のRDYでリトライ
     }
 
     if (stream.info_flags == 0xEEEE)
@@ -2475,6 +2477,7 @@ static void iqs915x_init_step_handler(const struct device *dev)
   case INIT_FAILED:
     break;
   }
+  return 0;
 }
 
 static void iqs915x_reset_input_session(struct iqs915x_data *data)
@@ -2587,8 +2590,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         enum iqs915x_init_step previous_step = data->init_step;
 
-        iqs915x_init_step_handler(dev);
-        if (data->init_step == previous_step)
+        ret = iqs915x_init_step_handler(dev);
+        if (previous_step == INIT_CHECK_SHOW_RESET && ret == IQS915X_INIT_BUSY)
+        {
+          // The read consumed the previous RDY notification. Wake on the next
+          // RDY instead of sleeping through it. A bounded wait also retries via
+          // Force Comms if no new edge arrives; retained Event Mode may be quiet.
+          k_sem_take(&data->rdy_sem, K_MSEC(IQS915X_INIT_BUSY_RETRY_MS));
+        }
+        else if (data->init_step == previous_step)
         {
           // An I2C error leaves the step unchanged. Keep the original two-second
           // retry interval instead of spinning on a non-responsive device.

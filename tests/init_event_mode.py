@@ -41,6 +41,7 @@ def main():
         "IQS915X_SWITCH_EVENT", "IQS915X_SNAP_EVENT",
         "IQS915X_ALP_REATI_ENABLE", "IQS915X_ALP_EVENT", "IQS915X_MODE_ACTIVE",
         "IQS915X_INIT_EVENT_MODE_MAX_RETRIES", "IQS915X_POINTER_RESUME_GUARD_FRAMES",
+        "IQS915X_INIT_BUSY_RETRY_MS", "IQS915X_INIT_BUSY",
     )
     definitions = "\n".join(
         re.search(r"^#define " + name + r"\b.*$", source + registers, re.M)[0]
@@ -89,6 +90,7 @@ struct iqs915x_data {
 struct reset_gpio { int port; };
 struct iqs915x_config { int rdy_gpio; struct reset_gpio reset_gpio; };
 struct device { struct iqs915x_data *data; const struct iqs915x_config *config; };
+static int busy_waits, busy_edges, read_error_code;
 static int writes, reads, sleeps, waits, rdy_checks, rejects, write_errors, read_errors;
 static uint16_t ic_cfg, ic_info;
 static bool reati_ready, reset_during_reati;
@@ -111,6 +113,11 @@ static void iqs915x_restart_initialization(const struct device *dev, const char 
 static int gpio_pin_get_dt(const int *gpio) { (void)gpio; rdy_checks++; return reati_ready; }
 static void k_sem_give(int *sem) { *sem = 1; }
 static int k_sem_take(int *sem, int timeout) {
+  if (timeout == IQS915X_INIT_BUSY_RETRY_MS) {
+    busy_waits++;
+    if (busy_edges) { busy_edges--; ic_info=IQS915X_SHOW_RESET; return 0; }
+    return -1;
+  }
   assert(timeout == 2000); waits++;
   if (*sem) { *sem = 0; return 0; }
   return -1;
@@ -133,7 +140,7 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg, uint16_t 
 }
 static int iqs915x_read_reg16(const struct device *dev, uint16_t reg, uint16_t *cfg) {
   (void)dev; reads++;
-  if (read_errors) { read_errors--; return -5; }
+  if (read_errors) { read_errors--; return read_error_code; }
   assert(reg==IQS915X_CONFIG_SETTINGS || reg==IQS915X_INFO_FLAGS);
   *cfg = reg==IQS915X_CONFIG_SETTINGS ? ic_cfg : ic_info; return 0;
 }
@@ -153,13 +160,14 @@ RESET_GPIO
   return 0;
 }
 POLICY
-static void iqs915x_init_step_handler(const struct device *dev) {
+static int iqs915x_init_step_handler(const struct device *dev) {
   struct iqs915x_data *data = dev->data;
   int ret;
   switch (data->init_step) {
 CASES
   default: assert(data->init_step == INIT_WRITE_INIT_DATA); break;
   }
+  return 0;
 }
 static void run(const struct device *dev, int iterations) {
   struct iqs915x_data *data = dev->data;
@@ -170,6 +178,7 @@ INITIALIZATION
   }
 }
 static struct iqs915x_data setup(bool enabled) {
+  busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
   ic_cfg = ic_info = 0;
   reati_ready=reset_during_reati=false; reati_requests=stream_reads=0;
@@ -265,13 +274,26 @@ int main(void) {
   run(&dev,1);
   assert(data.init_step==INIT_WRITE_INIT_DATA && !data.init_data_offset);
   assert(!data.init_chunk_retry_count && !writes && !reati_requests && !waits);
-  /* A busy startup and a failed retained-config read back off and retry. */
+  /* Busy uses a bounded RDY wait, even without edges; I2C errors back off. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; ic_info=0xEEEE;
-  run(&dev,1); assert(data.init_step==INIT_CHECK_SHOW_RESET && sleeps==1 && !writes);
+  run(&dev,1); assert(data.init_step==INIT_CHECK_SHOW_RESET && !sleeps && busy_waits==1 && !writes);
   ic_info=IQS915X_MODE_LP2; run(&dev,1);
   read_errors=1; run(&dev,1);
-  assert(data.init_step==INIT_PREPARE_STREAMING && sleeps==2);
+  assert(data.init_step==INIT_PREPARE_STREAMING && sleeps==1);
   run(&dev,12); assert(data.initialized && reati_requests==1);
+  /* A new RDY wakes the busy wait and the very next check starts transfer. */
+  data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; ic_info=0xEEEE;
+  busy_edges=1;
+  run(&dev,1);
+  assert(data.init_step==INIT_CHECK_SHOW_RESET && busy_waits==1 && !sleeps);
+  run(&dev,1);
+  assert(data.init_step==INIT_WRITE_INIT_DATA && reads==2 && !writes && !waits);
+  /* Actual startup read errors retain the long backoff, without a busy wait. */
+  data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; read_errors=1; read_error_code=-EBUSY;
+  run(&dev,1);
+  assert(data.init_step==INIT_CHECK_SHOW_RESET && sleeps==1 && !busy_waits);
+  ic_info=IQS915X_SHOW_RESET; run(&dev,1);
+  assert(data.init_step==INIT_WRITE_INIT_DATA && reads==2);
   /* An actual IC reset during warm Re-ATI must return to the full path. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET;
   ic_info=IQS915X_MODE_LP2; reset_during_reati=true;
