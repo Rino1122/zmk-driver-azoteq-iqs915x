@@ -455,3 +455,15 @@ This driver is forked from the [zmk-driver-azoteq-iqs5xx](https://github.com/use
 Layer selection and persistence belong to the LandsFall central firmware. The existing settings API v2 and asynchronous `iqs915x_set_enabled()` are reused; its successful return confirms request acceptance, not completed Active-mode transition.
 
 Run `python3 tests/runtime_session_reset.py` for the production request/reset paths: immediate output gating, button/hold release, inertia cancellation and stale work rejection after re-enable. Also run `tests/runtime_power.py`, `tests/pointer_frame.py`, `tests/init_header.py` and `tests/init_data.py`. These host tests complement firmware builds and do not establish physical USB/BLE behavior.
+
+### Device PM failure recovery
+
+Suspend must run before the parent I2C controller is suspended, and resume
+must run after the controller is available. Suspend waits for LP2 and Event
+Mode confirmation. If it fails, Zephyr keeps the device ACTIVE: the driver
+restores the previous enable request asynchronously with a new generation
+to supersede late LP2 work. This restores intent, not proof of hardware recovery
+on a broken bus. Runtime enable requests return `-EBUSY` during a PM transition
+or while suspended, and must be retried by the caller if still needed.
+
+Run `python3 tests/pm_recovery.py` for PM rollback and request exclusion.

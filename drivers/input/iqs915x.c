@@ -3138,6 +3138,7 @@ static int iqs915x_init(const struct device *dev)
   }
 
   k_mutex_init(&data->settings_lock);
+  k_mutex_init(&data->power_lock);
   atomic_clear(&data->settings_ready);
   data->runtime_settings = (struct iqs915x_settings){
       .version = IQS915X_SETTINGS_VERSION_2,

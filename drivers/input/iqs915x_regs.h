@@ -479,6 +479,7 @@ struct iqs915x_data
 
     // Runtime pointer/inertia settings and state shared with system workqueue.
     struct k_mutex settings_lock;
+    struct k_mutex power_lock; /* Serialize runtime requests and Device PM. */
     struct iqs915x_settings runtime_settings;
     atomic_t settings_ready;
 

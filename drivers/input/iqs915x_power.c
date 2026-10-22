@@ -81,7 +81,7 @@ static int iqs915x_request_enabled(const struct device *dev, bool enabled,
 }
 
 #if IS_ENABLED(CONFIG_PM_DEVICE)
-int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
+static int iqs915x_pm_action_locked(const struct device *dev, enum pm_device_action action)
 {
   struct iqs915x_data *data = dev->data;
 
@@ -93,6 +93,12 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
       int ret = iqs915x_request_enabled(dev, false, true);
       if (ret < 0) {
         iqs915x_set_pm_suspended(data, false);
+        /* SUSPEND failed, so Zephyr leaves this device ACTIVE and will not
+         * call RESUME during rollback. Restore the original intent ourselves.
+         * A new generation supersedes any late LP2 completion; recovery is
+         * asynchronous so the original failure is returned without another
+         * two-second wait. The caller must keep I2C available on failure. */
+        (void)iqs915x_request_enabled(dev, data->pm_saved_enabled, false);
       }
       return ret;
     }
@@ -106,11 +112,30 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
     return -ENOTSUP;
   }
 }
+
+int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
+{
+  struct iqs915x_data *data = dev->data;
+  k_mutex_lock(&data->power_lock, K_FOREVER);
+  int ret = iqs915x_pm_action_locked(dev, action);
+  k_mutex_unlock(&data->power_lock);
+  return ret;
+}
 #endif
 
 int iqs915x_set_enabled(const struct device *dev, bool enabled)
 {
-  return iqs915x_request_enabled(dev, enabled, false);
+  struct iqs915x_data *data = dev->data;
+  /* Never let a runtime request reverse a PM transition or re-enable an IC
+   * whose bus has already been suspended. Do not hold settings_lock while
+   * waiting for the worker: the worker uses it to finish transitions. */
+  if (k_mutex_lock(&data->power_lock, K_NO_WAIT) < 0) {
+    return -EBUSY;
+  }
+  int ret = atomic_get(&data->pm_suspended) ? -EBUSY :
+            iqs915x_request_enabled(dev, enabled, false);
+  k_mutex_unlock(&data->power_lock);
+  return ret;
 }
 
 bool iqs915x_get_enabled(const struct device *dev)

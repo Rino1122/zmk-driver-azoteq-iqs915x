@@ -69,6 +69,10 @@ struct iqs915x_settings_limits {
 /**
  * @brief トラックパッドの有効/無効を設定する
  *
+ * Device PMの処理中・サスペンド中は -EBUSY を返し、要求を変更しない。
+ * PM suspendはLP2/Event Mode確認後に成功する。失敗時は停止前の有効要求を
+ * 新しい世代で非同期に復元するため、呼出側はI2Cを利用可能なまま保つこと。
+ *
  * enabled=false: 出力ゲートを即座に閉じ、専用スレッドで操作状態を解除して
  *                初期化データのALP Enable設定に従うLP2 Event Modeへ移行する
  * enabled=true:  RDYを待たずForce CommsでActive／Event Modeを設定・確認し、
