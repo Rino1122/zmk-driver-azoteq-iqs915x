@@ -66,6 +66,7 @@ static void iqs915x_mark_initialized(struct iqs915x_data *data, bool initialized
 {
   k_mutex_lock(&data->settings_lock, K_FOREVER);
   data->initialized = initialized;
+  if (initialized) atomic_set(&data->lifecycle, IQS915X_READY);
   if (initialized)
   {
     atomic_set(&data->settings_ready, 1);
@@ -791,8 +792,26 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * 有効化・無効化とも全ての制御段階をForce Commsで進める。
  * ============================================================ */
 
+static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
+{
+  atomic_clear(&data->output_enabled);
+  data->enabled = false;
+  iqs915x_reset_input_session(data);
+  iqs915x_mark_initialized(data, false);
+  atomic_set(&data->last_error, error);
+  atomic_clear(&data->mode_transitioning);
+  atomic_set(&data->lifecycle, absent ? IQS915X_ABSENT : IQS915X_FAULT);
+  const struct iqs915x_config *cfg = data->dev->config;
+  gpio_pin_interrupt_configure_dt(&cfg->rdy_gpio, GPIO_INT_DISABLE);
+  iqs915x_complete_transition(data, error);
+}
+
 static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
 {
+  atomic_set(&data->lifecycle, IQS915X_RECOVERING);
+  data->init_deadline = k_uptime_get() + 10000;
+  data->probe_failures = 0;
+  data->ic_suspended = false;
   atomic_clear(&data->output_enabled);
   data->enabled = false;
   iqs915x_reset_input_session(data);
@@ -875,7 +894,7 @@ static void iqs915x_comm_failure(struct iqs915x_data *data, int ret)
           data->work_state, data->power_retry_count, ret);
   if (data->power_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
   {
-    iqs915x_runtime_reset(data, "communication-retries-exhausted");
+    iqs915x_terminal(data, true, ret);
   }
   else
   {
@@ -900,6 +919,12 @@ static void iqs915x_begin_mode(struct iqs915x_data *data, uint16_t mode, bool ou
 static void iqs915x_restore_mode(struct iqs915x_data *data)
 {
   bool output = atomic_get(&data->requested_enabled) != 0;
+  if (data->ic_suspended) {
+    /* Clearing Suspend wakes the sensor and starts automatic reseed. */
+    int ret = iqs915x_write_reg16(data->dev, IQS915X_SYSTEM_CONTROL, IQS915X_MODE_ACTIVE);
+    if (ret < 0) { iqs915x_comm_failure(data, ret); return; }
+    data->ic_suspended = false;
+  }
   iqs915x_begin_mode(data, output ? IQS915X_MODE_ACTIVE : IQS915X_MODE_LP2, output);
 }
 
@@ -983,6 +1008,9 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
       data->confirmed_config_settings = value;
       data->work_state = WORK_READ_DATA;
       data->power_force_comms = false;
+      atomic_set(&data->actual_mode, data->confirmed_mode == IQS915X_MODE_ACTIVE ?
+                 IQS915X_POWER_ACTIVE : IQS915X_POWER_LP2);
+      atomic_clear(&data->mode_transitioning);
       if (data->transition_generation == iqs915x_request_generation(data))
       {
         if (data->relatch_target_enabled &&
@@ -1761,6 +1789,7 @@ static int iqs915x_settings_device_check(const struct device *dev,
   }
 
   *data_out = dev->data;
+  if (atomic_get(&(*data_out)->lifecycle) >= IQS915X_ABSENT) return -ENODEV;
   return 0;
 }
 
@@ -2028,6 +2057,12 @@ static int iqs915x_init_step_handler(const struct device *dev)
       return IQS915X_INIT_BUSY;
     }
 
+    data->probe_failures = 0;
+    atomic_set(&data->lifecycle, IQS915X_INITIALIZING);
+    /* Force Comms reads alone do not clear a retained Suspend bit. */
+    ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, IQS915X_MODE_ACTIVE);
+    if (ret < 0) return ret;
+
     // INFO_FLAGS bit7 = SHOW_RESET。電源投入直後のリセット時にセットされる
     if (info_flags & IQS915X_SHOW_RESET)
     {
@@ -2039,6 +2074,14 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
     else
     {
+      uint16_t actual_x = 0, expected_x = 0;
+      ret = iqs915x_read_reg16(dev, IQS915X_X_RESOLUTION, &actual_x);
+      if (ret < 0) return ret;
+      iqs915x_get_init_data_reg16(config, IQS915X_X_RESOLUTION, &expected_x);
+      if (actual_x != expected_x) {
+        data->init_step = INIT_SOFTWARE_RESET;
+        break;
+      }
       // ICが設定を保持しているwarm bootではinit-dataを再転送しない。
       // Event ModeのLP2が保持されていても、ActiveでTP Re-ATIを要求する。
       LOG_INF("Init: SHOW_RESET is not set (0x%04x). Retaining init-data; requesting Re-ATI.",
@@ -2366,6 +2409,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       data->init_pending_cfg = 0;
       data->confirmed_config_settings = cfg;
       data->confirmed_mode = IQS915X_MODE_ACTIVE;
+      atomic_set(&data->actual_mode, IQS915X_POWER_ACTIVE);
       data->streaming_expected = !(cfg & IQS915X_EVENT_MODE);
       data->ati_error_seen = false;
       data->comm_fallback_active = false;
@@ -2536,6 +2580,7 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
     return;
   }
   bool output = atomic_get(&data->requested_enabled) != 0;
+  bool suspend = atomic_get(&data->requested_mode) == IQS915X_POWER_SUSPEND;
   bool stable_lp2 = data->confirmed_mode == IQS915X_MODE_LP2 &&
                     data->work_state == WORK_READ_DATA;
   atomic_clear(&data->output_enabled);
@@ -2545,9 +2590,27 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
   data->transition_generation = generation;
   data->active_pending = false;
   data->lp2_pending = false;
-  if (!output && stable_lp2)
+  if (suspend) {
+    if (!data->ic_suspended) {
+      int ret = iqs915x_write_reg16(data->dev, IQS915X_SYSTEM_CONTROL, IQS915X_SUSPEND);
+      if (ret < 0) {
+        data->applied_generation = generation - 1;
+        iqs915x_comm_failure(data, ret);
+        return;
+      }
+      data->ic_suspended = true;
+    }
+    data->work_state = WORK_READ_DATA;
+    atomic_set(&data->actual_mode, IQS915X_POWER_SUSPEND);
+    atomic_clear(&data->mode_transitioning);
+    iqs915x_complete_transition(data, 0);
+    return;
+  }
+  if (!output && stable_lp2 && !data->ic_suspended)
   {
     data->power_force_comms = false;
+    atomic_set(&data->actual_mode, IQS915X_POWER_LP2);
+    atomic_clear(&data->mode_transitioning);
     iqs915x_complete_transition(data, 0);
     return;
   }
@@ -2573,6 +2636,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
   while (true)
   {
+    if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) {
+      k_sem_take(&data->rdy_sem, K_FOREVER);
+      continue;
+    }
+    if (!data->initialized && (k_uptime_get() >= data->init_deadline || data->init_step == INIT_FAILED)) {
+      iqs915x_terminal(data, false, -ETIMEDOUT);
+      continue;
+    }
     if (!data->initialized)
     {
       // Event Mode can stop RDY immediately when no finger event is present.
@@ -2598,6 +2669,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           // Force Comms if no new edge arrives; retained Event Mode may be quiet.
           k_sem_take(&data->rdy_sem, K_MSEC(IQS915X_INIT_BUSY_RETRY_MS));
         }
+        else if (ret < 0 && ret != IQS915X_INIT_BUSY) {
+          if (++data->probe_failures >= 3) iqs915x_terminal(data, true, ret);
+          else k_sleep(K_MSEC(100));
+        }
         else if (data->init_step == previous_step)
         {
           // An I2C error leaves the step unchanged. Keep the original two-second
@@ -2616,7 +2691,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         k_sem_give(&data->rdy_sem);
       }
-      ret = k_sem_take(&data->rdy_sem, K_MSEC(2000));
+      ret = k_sem_take(&data->rdy_sem, K_MSEC(100));
       if (ret == 0) {
         iqs915x_init_step_handler(dev);
       } else {
@@ -2627,6 +2702,21 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     iqs915x_apply_pending_power_request(data);
 
+    if (data->ic_suspended) {
+      if (!atomic_get(&data->pm_suspended) && gpio_pin_get_dt(&((const struct iqs915x_config *)data->dev->config)->rdy_gpio) > 0) {
+        uint16_t info;
+        int rc = iqs915x_read_reg16(dev, IQS915X_INFO_FLAGS, &info);
+        if (rc < 0) iqs915x_comm_failure(data, rc);
+        else if (info & IQS915X_SHOW_RESET) iqs915x_runtime_reset(data, "suspended-reset");
+        else {
+          /* An unsolicited RDY must not leave a sensor awake. */
+          int rc2 = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, IQS915X_SUSPEND);
+          if (rc2 < 0) iqs915x_comm_failure(data, rc2);
+          else { data->power_retry_count = 0; k_sleep(K_MSEC(1)); }
+        }
+      } else k_sem_take(&data->rdy_sem, K_FOREVER);
+      continue;
+    }
     if (atomic_get(&data->pm_suspended) && data->work_state == WORK_READ_DATA &&
         data->confirmed_mode == IQS915X_MODE_LP2)
     {
@@ -3161,6 +3251,11 @@ static int iqs915x_init(const struct device *dev)
       },
   };
   data->dev = dev;
+  data->init_deadline = k_uptime_get() + 10000;
+  atomic_set(&data->lifecycle, IQS915X_PROBING);
+  atomic_set(&data->mode_transitioning, 1);
+  atomic_set(&data->requested_mode, config->disabled_by_default ? IQS915X_POWER_SUSPEND : IQS915X_POWER_ACTIVE);
+  atomic_set(&data->actual_mode, IQS915X_POWER_ACTIVE);
   data->init_step = INIT_CHECK_SHOW_RESET;
   data->work_state = WORK_READ_DATA;
   iqs915x_mark_initialized(data, false);

@@ -39,6 +39,11 @@ harness = r'''
 #define K_MSEC(n) (n)
 #define IQS915X_POWER_TRANSITION_WAIT_MS 2000
 #define IQS915X_MODE_LP2 2
+#define IQS915X_POWER_ACTIVE 0
+#define IQS915X_POWER_LP2 1
+#define IQS915X_POWER_SUSPEND 2
+#define IQS915X_SYSTEM_CONTROL 0x11BC
+#define IQS915X_SUSPEND (1<<11)
 #define WORK_READ_DATA 0
 #define WORK_SET_POWER 1
 #define INPUT_BTN_0 272
@@ -58,6 +63,8 @@ struct iqs915x_data {
  struct k_mutex settings_lock;
  struct k_sem rdy_sem, transition_sem;
  atomic_t requested_enabled, output_enabled, request_generation, pm_suspended, transition_result;
+ atomic_t requested_mode, actual_mode, mode_transitioning;
+ bool ic_suspended;
  bool initialized, active_pending, lp2_pending, enabled, power_force_comms;
  uint32_t applied_generation, transition_generation;
  uint8_t buttons_pressed;
@@ -88,6 +95,8 @@ static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data) { (void)d
 static void iqs915x_reset_runtime_gesture_state(struct iqs915x_data *data) { (void)data; gesture_resets++; }
 static void iqs915x_complete_transition(struct iqs915x_data *data, int result) { (void)data; assert(!result); }
 static void iqs915x_restore_mode(struct iqs915x_data *data) { restores++; data->work_state=WORK_SET_POWER; }
+static int iqs915x_write_reg16(const struct device *dev, int reg, int value) { (void)dev; (void)reg; (void)value; return 0; }
+static void iqs915x_comm_failure(struct iqs915x_data *data, int error) { (void)data; (void)error; assert(false); }
 FUNCTIONS
 int main(void) {
  struct iqs915x_data data={0}; struct device dev={&data}; data.dev=&dev;

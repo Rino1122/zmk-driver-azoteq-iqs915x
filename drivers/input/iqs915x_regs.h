@@ -457,7 +457,7 @@ struct iqs915x_config
     bool flip_y;
 
     // Power mode制御
-    bool disabled_by_default; // 起動時にトラックパッドを無効（初期化完了後にLP2）状態で開始
+    bool disabled_by_default; // 起動時にトラックパッドを無効（初期化完了後にIC固有Suspend）状態で開始
 };
 
 // ランタイムデータ（実行時に変化する状態）
@@ -482,6 +482,15 @@ struct iqs915x_data
     struct k_mutex power_lock; /* Serialize runtime requests and Device PM. */
     struct iqs915x_settings runtime_settings;
     atomic_t settings_ready;
+    atomic_t lifecycle;
+    atomic_t requested_mode;
+    atomic_t actual_mode;
+    atomic_t last_error;
+    atomic_t mode_transitioning;
+    int64_t init_deadline;
+    uint8_t probe_failures;
+    uint8_t pm_saved_mode;
+    bool ic_suspended;
 
     // ステートマシン
     enum iqs915x_init_step init_step;   // 初期化進行状態

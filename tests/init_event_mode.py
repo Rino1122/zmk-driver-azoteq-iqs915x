@@ -32,7 +32,7 @@ def main():
     registers = (root / "drivers/input/iqs915x_regs.h").read_text()
     enum = block(registers, "enum iqs915x_init_step") + ";"
     names = (
-        "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
+        "IQS915X_X_RESOLUTION", "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
         "IQS915X_INFO_FLAGS", "IQS915X_SHOW_RESET", "IQS915X_SYSTEM_CONTROL",
         "IQS915X_REATI_TP", "IQS915X_REATI_OCCURRED", "IQS915X_ALP_REATI_OCCURRED",
         "IQS915X_MODE_LP2", "IQS915X_INIT_REATI_MAX_WAIT",
@@ -73,6 +73,8 @@ def main():
 #define LOG_WRN(...) ((void)0)
 #define LOG_DBG(...) ((void)0)
 #define WORK_READ_DATA 0
+#define IQS915X_POWER_ACTIVE 0
+#define IQS915X_INITIALIZING 1
 /* Actual register constants and initialization states. */
 DEFINITIONS
 ENUM
@@ -84,6 +86,7 @@ struct iqs915x_data {
   uint16_t init_pending_cfg, confirmed_config_settings;
   uint32_t applied_generation, transition_generation;
   int requested_enabled, output_enabled, rdy_sem;
+  int actual_mode, probe_failures, lifecycle;
   bool is_touching, streaming_expected, ati_error_seen, comm_fallback_active;
   uint16_t confirmed_mode, init_data_offset;
 };
@@ -118,17 +121,18 @@ static int k_sem_take(int *sem, int timeout) {
     if (busy_edges) { busy_edges--; ic_info=IQS915X_SHOW_RESET; return 0; }
     return -1;
   }
-  assert(timeout == 2000); waits++;
+  assert(timeout == 100); waits++;
   if (*sem) { *sem = 0; return 0; }
   return -1;
 }
-static void k_sleep(int delay) { assert(delay == 2000); sleeps++; }
+static void k_sleep(int delay) { assert(delay == 100 || delay == 2000); sleeps++; }
 static int iqs915x_write_reg16(const struct device *dev, uint16_t reg, uint16_t cfg) {
   (void)dev; writes++;
   last_write_reg=reg; last_write_value=cfg;
   if (write_errors) { write_errors--; return -5; }
   if (reg==IQS915X_SYSTEM_CONTROL) {
     /* Normal warm startup must only request Active TP Re-ATI, never SW reset. */
+    if (cfg==IQS915X_MODE_ACTIVE) return 0;
     assert(cfg==(IQS915X_MODE_ACTIVE|IQS915X_REATI_TP));
     reati_requests++; reati_ready=true;
     ic_info=reset_during_reati ? IQS915X_SHOW_RESET : IQS915X_REATI_OCCURRED;
@@ -141,6 +145,7 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg, uint16_t 
 static int iqs915x_read_reg16(const struct device *dev, uint16_t reg, uint16_t *cfg) {
   (void)dev; reads++;
   if (read_errors) { read_errors--; return read_error_code; }
+  if (reg==IQS915X_X_RESOLUTION) { *cfg=6000; return 0; }
   assert(reg==IQS915X_CONFIG_SETTINGS || reg==IQS915X_INFO_FLAGS);
   *cfg = reg==IQS915X_CONFIG_SETTINGS ? ic_cfg : ic_info; return 0;
 }
@@ -160,8 +165,11 @@ RESET_GPIO
   return 0;
 }
 POLICY
+static void iqs915x_get_init_data_reg16(const void *config, int reg, uint16_t *out) { (void)config; (void)reg; *out=6000; }
+static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error) { (void)absent; (void)error; data->init_step=INIT_FAILED; }
 static int iqs915x_init_step_handler(const struct device *dev) {
   struct iqs915x_data *data = dev->data;
+  const struct iqs915x_config *config = dev->config;
   int ret;
   switch (data->init_step) {
 CASES
@@ -250,7 +258,7 @@ int main(void) {
     ic_info=IQS915X_MODE_LP2;
     ic_cfg=iqs915x_apply_config_settings_policy(0) & ~IQS915X_TP_EVENT;
     run(&dev,1);
-    assert(data.init_step==INIT_PREPARE_STREAMING && reads==1 && !writes);
+    assert(data.init_step==INIT_PREPARE_STREAMING && reads==2 && writes==1);
     run(&dev,1);
     assert(data.init_step==INIT_SET_STREAMING && !(data.init_pending_cfg & IQS915X_EVENT_MODE));
     write_errors=1; run(&dev,1);
@@ -273,7 +281,7 @@ int main(void) {
   ic_info=IQS915X_SHOW_RESET;
   run(&dev,1);
   assert(data.init_step==INIT_WRITE_INIT_DATA && !data.init_data_offset);
-  assert(!data.init_chunk_retry_count && !writes && !reati_requests && !waits);
+  assert(!data.init_chunk_retry_count && writes==1 && !reati_requests && !waits);
   /* Busy uses a bounded RDY wait, even without edges; I2C errors back off. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; ic_info=0xEEEE;
   run(&dev,1); assert(data.init_step==INIT_CHECK_SHOW_RESET && !sleeps && busy_waits==1 && !writes);
@@ -287,7 +295,7 @@ int main(void) {
   run(&dev,1);
   assert(data.init_step==INIT_CHECK_SHOW_RESET && busy_waits==1 && !sleeps);
   run(&dev,1);
-  assert(data.init_step==INIT_WRITE_INIT_DATA && reads==2 && !writes && !waits);
+  assert(data.init_step==INIT_WRITE_INIT_DATA && reads==2 && writes==1 && !waits);
   /* Actual startup read errors retain the long backoff, without a busy wait. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; read_errors=1; read_error_code=-EBUSY;
   run(&dev,1);

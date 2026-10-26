@@ -32,7 +32,7 @@
   - 2本指 vertical/horizontal scroll: `GESTURE_X/Y` を wheel/hwheel に変換します。
   - scroll inertia: Q8 fixed-point 風の減衰、remainder 保持、delayable work による継続出力を持ちます。
   - 3本指/4本指 swipe: 指群の centroid 移動から方向を判定し、F13-F20 既定の one-shot key tap を出します。
-  - `disabled-by-default` と `iqs915x_set_enabled()`/`iqs915x_get_enabled()` による Active/LP2 runtime 切り替え API があります。
+  - `disabled-by-default` と `iqs915x_set_enabled()`/`iqs915x_get_enabled()` による Active/LP2の簡易APIと`iqs915x_set_mode()`によるIC固有Suspend制御、`iqs915x_get_status()`による検出・遷移状態 API があります。
 - `drivers/input/iqs915x_regs.h` は IQS915x の register map、bit flag、state/data/config 構造体をまとめています。
 - `include/iqs915x.h` は runtime enable/disable API の公開ヘッダーです。
 
@@ -40,7 +40,7 @@
 
 - pinch inertia は未接続のため binding から削除しました。
 - `iqs915x.c` 冒頭コメントには「raw read を使う」とある一方、実装の `iqs915x_read_stream()` は `i2c_write_read_dt()` で `IQS915X_REL_X` から 44 bytes を読んでいます。I2C シーケンス前提を変更する場合はコメントと実装を必ず同期してください。
-- Device PM の suspend/resume は既存の Active/LP2 state machine を通り、遅延 work と入力状態をリセットしてから復帰します。
+- Device PM の suspend/resume はIC固有Suspendと元の要求モードの復元を使い、遅延 work と入力状態をリセットしてから復帰します。
 - `.gitignore` で `docs/` は無視されています。ローカルには datasheet や調整メモがある場合がありますが、追跡済みファイルとしては扱わないでください。
 - Zephyr/ZMK のビルド環境はこのリポジトリ単体には含まれていません。変更確認は、利用側 firmware workspace から ZMK build で行う前提です。ローカルでのwestビルドは行わないこと。
 

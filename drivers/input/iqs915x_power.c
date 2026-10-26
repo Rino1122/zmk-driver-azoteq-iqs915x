@@ -64,6 +64,7 @@ static int iqs915x_request_enabled(const struct device *dev, bool enabled,
     }
   }
 
+  atomic_set(&data->mode_transitioning, 1);
   atomic_inc(&data->request_generation);
   k_sem_give(&data->rdy_sem);
 
@@ -88,6 +89,8 @@ static int iqs915x_pm_action_locked(const struct device *dev, enum pm_device_act
   switch (action) {
   case PM_DEVICE_ACTION_SUSPEND:
     data->pm_saved_enabled = atomic_get(&data->requested_enabled) != 0;
+    data->pm_saved_mode = atomic_get(&data->requested_mode);
+    atomic_set(&data->requested_mode, IQS915X_POWER_SUSPEND);
     iqs915x_set_pm_suspended(data, true);
     {
       int ret = iqs915x_request_enabled(dev, false, true);
@@ -98,6 +101,7 @@ static int iqs915x_pm_action_locked(const struct device *dev, enum pm_device_act
          * A new generation supersedes any late LP2 completion; recovery is
          * asynchronous so the original failure is returned without another
          * two-second wait. The caller must keep I2C available on failure. */
+        atomic_set(&data->requested_mode, data->pm_saved_mode);
         (void)iqs915x_request_enabled(dev, data->pm_saved_enabled, false);
       }
       return ret;
@@ -105,6 +109,7 @@ static int iqs915x_pm_action_locked(const struct device *dev, enum pm_device_act
   case PM_DEVICE_ACTION_RESUME:
     {
       iqs915x_set_pm_suspended(data, false);
+      atomic_set(&data->requested_mode, data->pm_saved_mode);
       int ret = iqs915x_request_enabled(dev, data->pm_saved_enabled, true);
       return ret;
     }
@@ -116,6 +121,7 @@ static int iqs915x_pm_action_locked(const struct device *dev, enum pm_device_act
 int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
 {
   struct iqs915x_data *data = dev->data;
+  if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) return 0;
   k_mutex_lock(&data->power_lock, K_FOREVER);
   int ret = iqs915x_pm_action_locked(dev, action);
   k_mutex_unlock(&data->power_lock);
@@ -123,19 +129,51 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action)
 }
 #endif
 
-int iqs915x_set_enabled(const struct device *dev, bool enabled)
+int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode)
 {
+  if (!dev || !device_is_ready(dev)) return -ENODEV;
+  if ((unsigned)mode > IQS915X_POWER_SUSPEND) return -EINVAL;
   struct iqs915x_data *data = dev->data;
-  /* Never let a runtime request reverse a PM transition or re-enable an IC
-   * whose bus has already been suspended. Do not hold settings_lock while
-   * waiting for the worker: the worker uses it to finish transitions. */
-  if (k_mutex_lock(&data->power_lock, K_NO_WAIT) < 0) {
-    return -EBUSY;
+  if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) return -ENODEV;
+  if (k_mutex_lock(&data->power_lock, K_NO_WAIT) < 0) return -EBUSY;
+  int ret = -EBUSY;
+  if (!atomic_get(&data->pm_suspended)) {
+    if (atomic_get(&data->requested_mode) == (atomic_val_t)mode &&
+        mode != IQS915X_POWER_ACTIVE && !atomic_get(&data->mode_transitioning) && data->initialized) {
+      ret = 0;
+    } else {
+      atomic_set(&data->requested_mode, mode);
+      atomic_set(&data->mode_transitioning, 1);
+      /* Force a new generation even when both LP2 and Suspend disable output. */
+      atomic_clear(&data->output_enabled);
+      atomic_set(&data->requested_enabled, mode == IQS915X_POWER_ACTIVE);
+      atomic_inc(&data->request_generation);
+      k_sem_give(&data->rdy_sem);
+      ret = 0;
+    }
   }
-  int ret = atomic_get(&data->pm_suspended) ? -EBUSY :
-            iqs915x_request_enabled(dev, enabled, false);
   k_mutex_unlock(&data->power_lock);
   return ret;
+}
+
+int iqs915x_set_enabled(const struct device *dev, bool enabled)
+{
+  return iqs915x_set_mode(dev, enabled ? IQS915X_POWER_ACTIVE : IQS915X_POWER_LP2);
+}
+
+int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status)
+{
+  if (!dev || !device_is_ready(dev) || !status) return -ENODEV;
+  struct iqs915x_data *data = dev->data;
+  *status = (struct iqs915x_status) {
+    .lifecycle = atomic_get(&data->lifecycle),
+    .requested_mode = atomic_get(&data->requested_mode),
+    .actual_mode = atomic_get(&data->actual_mode),
+    .transitioning = atomic_get(&data->mode_transitioning),
+    .last_error = atomic_get(&data->last_error),
+    .generation = atomic_get(&data->request_generation),
+  };
+  return 0;
 }
 
 bool iqs915x_get_enabled(const struct device *dev)

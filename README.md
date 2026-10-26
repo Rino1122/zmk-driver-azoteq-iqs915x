@@ -467,3 +467,28 @@ on a broken bus. Runtime enable requests return `-EBUSY` during a PM transition
 or while suspended, and must be retried by the caller if still needed.
 
 Run `python3 tests/pm_recovery.py` for PM rollback and request exclusion.
+
+
+## Lifecycle and IC Suspend
+
+The current driver offers `iqs915x_set_mode()` for Active, LP2 and the IC's
+retentive Suspend mode, plus `iqs915x_get_status()` for cached lifecycle and
+completion state. Unselected sensors start with output closed and enter Suspend
+after initialization. Suspend entry finishes with the write's STOP; no confirming
+read wakes the sensor again. Suspend exit clears the bit using Force Comms and
+allows the IC's automatic reseed. Device PM uses Suspend and restores the previous
+requested mode.
+
+Startup uses Force Comms even without RDY. Three unanswered transactions latch
+ABSENT; the using firmware must configure a finite I2C transfer timeout (Bretagne:
+1000 ms). Initialization has a 10-second deadline and otherwise latches FAULT.
+Terminal states disable RDY and stop all retries until this MCU boots again;
+reading status never re-probes the sensor. A known sensor's SHOW_RESET starts
+recovery and reapplies the latest requested mode. The initialization header stays
+owned by this driver. When the MCU is powered off it cannot service a sensor reset.
+
+Tests: `init_header.py`, `init_data.py`, `init_event_mode.py`, `runtime_power.py`,
+`runtime_session_reset.py`, and `pointer_frame.py` in `tests/`. Runtime power tests
+compile the production boot loop, mode state machine and PM/API paths, including
+three-attempt absence latching, busy initialization timeout, Suspend entry/resume,
+and cached access without I2C. A successful build is not hardware power validation.

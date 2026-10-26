@@ -13,6 +13,26 @@
 #define IQS915X_SETTINGS_VERSION_1 1U
 #define IQS915X_SETTINGS_VERSION_2 2U
 
+/** Lifecycle is independent of Zephyr device readiness. ABSENT/FAULT latch until MCU boot. */
+enum iqs915x_lifecycle { IQS915X_PROBING, IQS915X_INITIALIZING, IQS915X_READY,
+                       IQS915X_RECOVERING, IQS915X_ABSENT, IQS915X_FAULT };
+enum iqs915x_mode { IQS915X_POWER_ACTIVE, IQS915X_POWER_LP2, IQS915X_POWER_SUSPEND };
+struct iqs915x_status {
+  enum iqs915x_lifecycle lifecycle;
+  enum iqs915x_mode requested_mode;
+  enum iqs915x_mode actual_mode;
+  bool transitioning;
+  int last_error;
+  uint32_t generation;
+};
+/** Nonblocking mode request; does not retry a terminal device. Suspend is the
+ * IC's data-retaining Suspend bit, not LP2. It closes output immediately.
+ * Waking from Suspend triggers the IC's automatic reseed. Device PM uses
+ * Suspend and restores the previous requested mode on resume. */
+int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode);
+/** Cached MCU state only: never initiates I2C or wakes a suspended sensor. */
+int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status);
+
 /** Runtime pointer acceleration controls. */
 struct iqs915x_pointer_settings {
   bool enabled;
@@ -66,49 +86,12 @@ struct iqs915x_settings_limits {
   struct iqs915x_setting_range inertia_initial_velocity_percent;
 };
 
-/**
- * @brief トラックパッドの有効/無効を設定する
- *
- * Device PMの処理中・サスペンド中は -EBUSY を返し、要求を変更しない。
- * PM suspendはLP2/Event Mode確認後に成功する。失敗時は停止前の有効要求を
- * 新しい世代で非同期に復元するため、呼出側はI2Cを利用可能なまま保つこと。
- *
- * enabled=false: 出力ゲートを即座に閉じ、専用スレッドで操作状態を解除して
- *                初期化データのALP Enable設定に従うLP2 Event Modeへ移行する
- * enabled=true:  RDYを待たずForce CommsでActive／Event Modeを設定・確認し、
- *                新しい入力セッションを開始する
- *
- * Active／LP2ともEvent Modeを使用し、直接モード切り替えへ進む。
- * ICが通信可能になるまでのクロックストレッチは発生し得る。
- * Active／Event Mode確認後も、座標の基準取得に2フレームを使う。
- *
- * 通常のActive／LP2通信はイベントによるRDYを待つ。
- * 有効化・無効化・Device PMのモード設定と読み戻し確認は、全段階で
- * RDYを待たずForce Commsを使う。LP2への遷移もEvent Mode確認後に完了する。
- * 各段階は1 transactionでSTOPにより通信窓を閉じる。
- * LP2ではTP Eventも無効にし、Active復帰時に再び有効にする。
- * 無効化要求時にX送信が始まっていた場合、そのフレームのY/syncまで送信する。
- * 以降のポインタフレームは破棄し、未同期のXを後続イベントに残さない。
- *
- * ホスト起動時（soft off復帰を含む）はSHOW_RESETを確認し、0なら保持済みの
- * init-dataを使い、1ならinit-dataを転送する。両経路ともTP Re-ATIを要求する。
- * ドライバからATIを要求するのは初期化時（ICリセット後の再初期化を含む）のみ。
- * 通常動作中はICの自動Re-ATIに任せ、Reseedや指スタック判定は行わない。
- * 自動Re-ATIは共通の有効ビットで、reference drift／negative delta／positive delta
- * の各条件が適用される。ATI targetと各閾値はprofileの値を保持する。
- * Negative DeltaによるRe-ATIは閾値超過の15サイクル連続判定で発動する。
- * Positive Deltaを使わない用途では、profileで発動しない閾値を設定する。
- * ATI Errorの再試行はICに任せる（retry timeは1秒）。
- *
- * 自動Re-ATI検出時は入力状態を解除し、座標の基準を取り直す。
- * Device PM suspend中はLP2移行後に通信を停止し、復帰時は保存した有効状態へ戻す。
- *
- * @param dev  IQS915xデバイスインスタンス
- * @param enabled  true=有効(Active), false=無効(LP2)
- * 本関数は要求を非同期に登録する。短時間に要求が反転した場合は最新の要求が
- * 優先され、古い入力セッションのイベントは破棄される。
- *
- * @return 0 on success, negative errno on failure
+/** Convenience request: true selects Active, false selects LP2.
+ * Use set_mode(SUSPEND) for an unselected sensor. Returns -ENODEV after a
+ * latched absence/fault and -EBUSY during Device PM. Requests are asynchronous;
+ * get_status distinguishes acceptance from actual completion. Active/LP2
+ * transitions use Force Comms and retain the two-frame pointer baseline guard.
+ * Device PM always enters IC Suspend and restores the previous mode on resume.
  */
 int iqs915x_set_enabled(const struct device *dev, bool enabled);
 
@@ -116,7 +99,7 @@ int iqs915x_set_enabled(const struct device *dev, bool enabled);
  * @brief トラックパッドの現在の有効/無効状態を取得する
  *
  * @param dev  IQS915xデバイスインスタンス
- * @return true=有効(Active要求中を含む), false=無効(LP2要求中を含む)
+ * @return true=有効(Active要求中を含む), false=無効(LP2/Suspend要求中を含む)
  */
 bool iqs915x_get_enabled(const struct device *dev);
 

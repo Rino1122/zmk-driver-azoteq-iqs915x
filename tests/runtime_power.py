@@ -30,7 +30,10 @@ STUB = r'''
 #define CONFIG_INPUT_AZOTEQ_IQS915X_THREAD_STACK_SIZE 1
 #define K_KERNEL_STACK_MEMBER(name,size) char name[size]
 #define K_MSEC(n) (n)
+#define GPIO_INT_DISABLE 0
+static int gpio_pin_interrupt_configure_dt(const void *p, int mode) { (void)p; (void)mode; return 0; }
 #define K_FOREVER INT64_MAX
+#define K_NO_WAIT 0
 #define LOG_INF(...) ((void)0)
 #define LOG_DBG(...) ((void)0)
 #define LOG_WRN(...) ((void)0)
@@ -50,6 +53,11 @@ struct k_work_delayable { struct k_work work; int scheduled; };
 static int atomic_get(const atomic_t *p) { return *p; }
 static void atomic_set(atomic_t *p,int n) { *p=n; }
 static void atomic_clear(atomic_t *p) { *p=0; }
+static int k_mutex_lock(struct k_mutex *m, int64_t timeout) { (void)m; (void)timeout; return 0; }
+static void k_mutex_unlock(struct k_mutex *m) { (void)m; }
+static bool device_is_ready(const struct device *dev) { return dev != NULL; }
+static void atomic_inc(atomic_t *v) { (*v)++; }
+static bool atomic_cas(atomic_t *v,int old,int next) { if (*v!=old) return false; *v=next; return true; }
 static void k_sem_reset(struct k_sem *s) { s->count=0; }
 static void k_sem_give(struct k_sem *s) { s->count=1; }
 '''
@@ -60,12 +68,16 @@ HARNESS = r'''
 #include "iqs915x_internal.h"
 #include "iqs915x_sensor_config.h"
 DEFINITIONS
+#define IQS915X_POWER_TRANSITION_WAIT_MS 2000
+enum pm_device_action { PM_DEVICE_ACTION_SUSPEND, PM_DEVICE_ACTION_RESUME };
+static void (*wait_hook)(void);
 static int64_t now, next_rdy;
 static uint16_t ic_mode, ic_cfg, info_extra, fingers;
 static bool no_rdy, touch, event_rdy, stale_tp;
 static int input_resets, input_frames, reads, writes;
 static int reject_cfg, reject_mode, io_errors;
 static int sem_waits, force_stretch_ms, forced_transactions;
+static int boot_calls, boot_result, parked;
 static uint16_t txn_reg[1024];
 static bool txn_write[1024];
 static int64_t txn_time[1024];
@@ -84,8 +96,10 @@ static int gpio_pin_get_dt(const struct gpio_dt_spec *g) {
 }
 static int k_sem_take(struct k_sem *s,k_timeout_t timeout) {
   sem_waits++;
+  if (wait_hook && timeout==2000) wait_hook();
   if (s->count) { s->count=0; return 0; }
-  int64_t end=timeout==K_FOREVER ? INT64_MAX : now+timeout;
+  if (timeout==K_FOREVER) { parked++; return -1; }
+  int64_t end=now+timeout;
   if (!no_rdy && periodic_rdy() && next_rdy <= end) {
     now=MAX(now,next_rdy); return 0;
   }
@@ -145,6 +159,8 @@ static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *c,
 }
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *s) { (void)s; }
 FUNCTIONS
+static int iqs915x_init_step_handler(const struct device *dev) { (void)dev; boot_calls++; return boot_result; }
+BOOT
 static void run(struct iqs915x_data *data,int steps) {
   const struct device *dev=data->dev;
   int ret;
@@ -169,15 +185,52 @@ static void setup(bool output) {
   d.swipe_resolution_x=d.swipe_resolution_y=1000;
   d.active_sampling_period_ms=10;
   d.enabled=d.requested_enabled=d.output_enabled=output;
+  d.requested_mode=output?IQS915X_POWER_ACTIVE:IQS915X_POWER_LP2;
   ic_mode=d.confirmed_mode=output?IQS915X_MODE_ACTIVE:IQS915X_MODE_LP2;
   d.streaming_expected=false;
   ic_cfg=d.confirmed_config_settings=iqs915x_config_settings_for_mode(0,ic_mode);
+}
+static void complete_pm(void) {
+  iqs915x_apply_pending_power_request(&d);
+  for (int i=0;i<30 && d.work_state!=WORK_READ_DATA;i++) iqs915x_mode_step(&d);
 }
 static void until_idle(void) {
   for (int i=0;i<40 && d.work_state!=WORK_READ_DATA;i++) run(&d,1);
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 int main(void) {
+  setup(false); d.initialized=false; d.init_step=INIT_CHECK_SHOW_RESET;
+  d.init_deadline=10000; boot_calls=parked=0; boot_result=-ENODEV;
+  boot_run(&d,10);
+  assert(boot_calls==3 && parked==7 && d.lifecycle==IQS915X_ABSENT && !d.output_enabled);
+  /* A valid busy reply is not an absent IC, but initialization is bounded. */
+  setup(false); d.initialized=false; d.init_step=INIT_CHECK_SHOW_RESET;
+  d.init_deadline=10000; boot_calls=parked=0; boot_result=IQS915X_INIT_BUSY;
+  boot_run(&d,120);
+  assert(d.lifecycle==IQS915X_FAULT && now>=10000 && parked>0);
+  /* IC Suspend performs exactly one final write and never a confirming read. */
+  setup(false); d.requested_mode=IQS915X_POWER_SUSPEND; d.request_generation++;
+  iqs915x_apply_pending_power_request(&d);
+  assert(d.ic_suspended && d.actual_mode==IQS915X_POWER_SUSPEND && !d.output_enabled);
+  assert(txns==1 && txn_write[0] && txn_reg[0]==IQS915X_SYSTEM_CONTROL && !reads);
+  d.requested_mode=IQS915X_POWER_ACTIVE; d.requested_enabled=1; d.request_generation++;
+  iqs915x_apply_pending_power_request(&d); until_idle();
+  assert(!d.ic_suspended && d.output_enabled && d.actual_mode==IQS915X_POWER_ACTIVE);
+  setup(true); iqs915x_terminal(&d, true, -ENODEV);
+  assert(d.lifecycle==IQS915X_ABSENT && !d.output_enabled && !d.initialized && d.last_error==-ENODEV);
+  setup(true); d.lifecycle=IQS915X_READY; wait_hook=complete_pm;
+  assert(!iqs915x_pm_action(&dev, PM_DEVICE_ACTION_SUSPEND));
+  assert(d.pm_suspended && d.actual_mode==IQS915X_POWER_SUSPEND && d.ic_suspended);
+  assert(iqs915x_set_mode(&dev, IQS915X_POWER_ACTIVE)==-EBUSY);
+  assert(!iqs915x_pm_action(&dev, PM_DEVICE_ACTION_RESUME));
+  assert(!d.pm_suspended && d.output_enabled && d.actual_mode==IQS915X_POWER_ACTIVE);
+  wait_hook=NULL;
+  setup(false); iqs915x_terminal(&d,true,-ENODEV);
+  int stopped=txns;
+  assert(iqs915x_set_mode(&dev,IQS915X_POWER_ACTIVE)==-ENODEV);
+  assert(!iqs915x_pm_action(&dev,PM_DEVICE_ACTION_SUSPEND) && txns==stopped);
+  struct iqs915x_status cached;
+  assert(!iqs915x_get_status(&dev,&cached) && cached.lifecycle==IQS915X_ABSENT && txns==stopped);
   /* LP2 is Event Mode: no event means no forced polling, even after minutes.
    * A bounded timer lets the harness observe the normally indefinite wait. */
   setup(false); now=150000;
@@ -417,7 +470,7 @@ int main(void) {
 '''
 
 def main():
-    defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_REATI_MAX_WAIT|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
+    defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_REATI_MAX_WAIT|INIT_BUSY|INIT_BUSY_RETRY_MS|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
     names = ['iqs915x_request_generation', 'iqs915x_output_is_enabled',
              'iqs915x_power_retry_backoff_ms', 'iqs915x_complete_transition',
              'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
@@ -430,13 +483,23 @@ def main():
         functions.append(block(SOURCE, m[0]))
     gestures = (ROOT/'drivers/input/iqs915x_gestures.c').read_text()
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
-    a = SOURCE.index('static void iqs915x_runtime_reset(')
+    a = SOURCE.index('static void iqs915x_terminal(')
     b = SOURCE.index('/* ============================================================\n * ボタンリリース遅延処理', a)
     functions.append(SOURCE[a:b])
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))
+    power = (ROOT / 'drivers/input/iqs915x_power.c').read_text()
+    for marker in ['static void iqs915x_set_pm_suspended(', 'static int iqs915x_request_enabled(',
+                   'static int iqs915x_pm_action_locked(', 'int iqs915x_pm_action(',
+                   'int iqs915x_set_mode(', 'int iqs915x_set_enabled(',
+                   'int iqs915x_get_status(', 'bool iqs915x_get_enabled(']:
+        functions.append(block(power, marker))
     a = SOURCE.index('    iqs915x_apply_pending_power_request(data);', SOURCE.index('static void iqs915x_thread_main('))
     b = SOURCE.index('    // =========================================================\n    // ドラッグ解除チェック', a)
-    code = HARNESS.replace('DEFINITIONS', defs).replace('FUNCTIONS', '\n'.join(functions)).replace('PREFIX', SOURCE[a:b])
+    boot_start = SOURCE.index('  while (true)', SOURCE.index('static void iqs915x_thread_main('))
+    boot_end = SOURCE.index('    iqs915x_apply_pending_power_request(data);', boot_start)
+    boot = "static void boot_run(struct iqs915x_data *data, int steps) { const struct device *dev=data->dev; const struct iqs915x_config *config=dev->config; int ret;\n" + SOURCE[boot_start:boot_end].replace('while (true)', 'while (steps-- > 0)', 1) + "}}"
+    code = HARNESS.replace('DEFINITIONS', defs).replace('FUNCTIONS', '\n'.join(functions)).replace('PREFIX', SOURCE[SOURCE.index('    iqs915x_apply_pending_power_request(data);', SOURCE.index('static void iqs915x_thread_main(')):SOURCE.index('    // =========================================================\n    // ドラッグ解除チェック', boot_end)]).replace('BOOT', boot)
+
     with tempfile.TemporaryDirectory(prefix='iqs915x-runtime-') as tmp:
         directory = Path(tmp)
         (directory/'stub.h').write_text(STUB)
