@@ -208,6 +208,9 @@ int main(void) {
   d.init_deadline=10000; boot_calls=parked=0; boot_result=IQS915X_INIT_BUSY;
   boot_run(&d,120);
   assert(d.lifecycle==IQS915X_FAULT && now>=10000 && parked>0);
+  setup(true); d.power_retry_count=IQS915X_POWER_TRANSITION_MAX_RETRIES-1;
+  iqs915x_comm_failure(&d,-EIO);
+  assert(d.lifecycle==IQS915X_FAULT); /* Responsive but invalid mode is not absence. */
   /* IC Suspend performs exactly one final write and never a confirming read. */
   setup(false); d.requested_mode=IQS915X_POWER_SUSPEND; d.request_generation++;
   iqs915x_apply_pending_power_request(&d);

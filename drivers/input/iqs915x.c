@@ -203,6 +203,7 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
   struct iqs915x_data *data = dev->data;
   k_sem_reset(&data->rdy_sem);
   int ret = i2c_write_dt(&config->i2c, buf, sizeof(buf));
+  atomic_set(&data->last_error, ret < 0 ? ret : 0);
   data->comm_completed_ms = k_uptime_get();
   return ret;
 }
@@ -216,6 +217,7 @@ static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
   uint8_t buf[2];
   k_sem_reset(&((struct iqs915x_data *)dev->data)->rdy_sem);
   int ret = i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, sizeof(buf));
+  atomic_set(&((struct iqs915x_data *)dev->data)->last_error, ret < 0 ? ret : 0);
   ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
   if (ret < 0)
   {
@@ -894,7 +896,7 @@ static void iqs915x_comm_failure(struct iqs915x_data *data, int ret)
           data->work_state, data->power_retry_count, ret);
   if (data->power_retry_count >= IQS915X_POWER_TRANSITION_MAX_RETRIES)
   {
-    iqs915x_terminal(data, true, ret);
+    iqs915x_terminal(data, atomic_get(&data->last_error) < 0, ret);
   }
   else
   {
@@ -2662,6 +2664,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         enum iqs915x_init_step previous_step = data->init_step;
 
         ret = iqs915x_init_step_handler(dev);
+        if (ret == 0) data->probe_failures = 0;
         if (previous_step == INIT_CHECK_SHOW_RESET && ret == IQS915X_INIT_BUSY)
         {
           // The read consumed the previous RDY notification. Wake on the next
