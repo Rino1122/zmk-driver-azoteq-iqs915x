@@ -97,6 +97,8 @@ static void iqs915x_complete_transition(struct iqs915x_data *data, int result) {
 static void iqs915x_restore_mode(struct iqs915x_data *data) { restores++; data->work_state=WORK_SET_POWER; }
 static int iqs915x_write_reg16(const struct device *dev, int reg, int value) { (void)dev; (void)reg; (void)value; return 0; }
 static void iqs915x_comm_failure(struct iqs915x_data *data, int error) { (void)data; (void)error; assert(false); }
+static int contact_ends;
+static void iqs915x_end_contact_session(struct iqs915x_data *data) { (void)data; contact_ends++; }
 FUNCTIONS
 int main(void) {
  struct iqs915x_data data={0}; struct device dev={&data}; data.dev=&dev;
@@ -112,6 +114,7 @@ int main(void) {
  assert(!data.output_enabled && !data.requested_enabled && data.request_generation==21);
  assert(!iqs915x_work_session_is_current(&data, 20));
  iqs915x_apply_pending_power_request(&data);
+ assert(contact_ends==1);
  assert(releases==2 && !data.buttons_pressed && !data.active_tap_hold);
  assert(!data.scroll_inertia_work.scheduled && !data.scroll_inertia_state.velocity && !data.scroll_inertia_state.remainder);
  assert(!data.inertia_scroll_x_acc && !data.inertia_scroll_y_acc && !data.scroll_x_acc && !data.scroll_y_acc && !data.scroll_contact_fingers);

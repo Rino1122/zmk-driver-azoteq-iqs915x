@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile production power-control code and exercise failures and request races."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -10,6 +11,7 @@ source = '\n'.join(s for s in source.splitlines() if not s.startswith('#include'
 stub = r'''
 #include <assert.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,8 +30,11 @@ struct iqs915x_data {
     int pm_suspended, requested_enabled, output_enabled, request_generation, transition_result;
     bool initialized, active_pending, lp2_pending, enabled, pm_saved_enabled;
     int work_state;
+    int mode_transitioning, requested_mode, actual_mode, last_error, lifecycle, pm_saved_mode;
 };
 struct device { struct iqs915x_data *data; };
+static bool device_is_ready(const struct device *dev) { return dev != NULL; }
+PUBLIC_TYPES
 enum pm_device_action { PM_DEVICE_ACTION_SUSPEND, PM_DEVICE_ACTION_RESUME, OTHER };
 static int atomic_get(const int *p) { return *p; }
 static void atomic_set(int *p, int v) { *p=v; }
@@ -65,10 +70,14 @@ static int k_sem_take(struct k_sem *sem, int timeout) {
     return 0;
 }
 '''
+public = (root/'include/iqs915x.h').read_text()
+public_types = '\n'.join(re.search(pattern, public, re.S)[0] for pattern in (r'enum iqs915x_lifecycle.*?};', r'enum iqs915x_mode.*?};', r'struct iqs915x_status.*?};'))
+stub = stub.replace('PUBLIC_TYPES', public_types)
 main = r'''
 static void reset(bool enabled) {
     memset(&data,0,sizeof(data));
     data.initialized=true;
+    data.requested_mode=enabled ? IQS915X_POWER_ACTIVE : IQS915X_POWER_LP2;
     data.enabled=data.requested_enabled=data.output_enabled=enabled;
     worker_result=wait_result=raced=0; inject_request=false;
 }

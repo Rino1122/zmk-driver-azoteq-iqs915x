@@ -488,6 +488,8 @@ def main():
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
     a = SOURCE.index('static void iqs915x_terminal(')
     b = SOURCE.index('/* ============================================================\n * ボタンリリース遅延処理', a)
+    functions.append(block(SOURCE, 'static void iqs915x_end_contact_session('))
+    functions.append(block(SOURCE, 'static bool iqs915x_deliver_contacts('))
     functions.append(SOURCE[a:b])
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))
     power = (ROOT / 'drivers/input/iqs915x_power.c').read_text()

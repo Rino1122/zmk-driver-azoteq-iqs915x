@@ -9,6 +9,35 @@
 #include <zephyr/device.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <iqs915x_contacts.h>
+
+
+/** Single synchronous subscriber per sensor. Called from the sensor thread,
+ * outside I2C communication, under the subscription mutex. Must not block,
+ * perform I2C, retain frame pointers or call driver APIs: copy/queue the frame.
+ * SESSION_END closes the supplied generation even when count=0. Frames from
+ * older generations must be discarded by consumers after an end marker.
+ * Switch to MOUSE and wait for the power/request boundary before NULL detach
+ * (-EBUSY until then); success guarantees the old callback has finished.
+ * Thread context only; -EBUSY means retry after an in-flight callback finishes.
+ * Replacing a live subscriber requires unsubscribe first (-EALREADY otherwise).
+ */
+typedef void (*iqs915x_contact_callback_t)(const struct device *dev,
+    const struct iqs915x_contact_frame *frame, void *user_data);
+enum iqs915x_output_mode { IQS915X_OUTPUT_MOUSE, IQS915X_OUTPUT_CONTACTS };
+int iqs915x_subscribe_contacts(const struct device *dev,
+    iqs915x_contact_callback_t callback, void *user_data);
+/** Asynchronous request, independent of power selection. Default MOUSE.
+ * Closes output immediately, ends the old session in the sensor thread and
+ * restarts only after all fingers lift. CONTACTS requires a subscriber.
+ * Existing delayed mouse work is canceled before the new output starts.
+ * Returns -EBUSY during PM/request contention and -ENODEV on a terminal device.
+ * Does not configure a faster scan period (rate tuning is a separate stage).
+ */
+int iqs915x_set_output_mode(const struct device *dev, enum iqs915x_output_mode mode);
+int iqs915x_get_output_mode(const struct device *dev, enum iqs915x_output_mode *mode);
+/** Cached logical coordinate maxima after initialization; never performs I2C. */
+int iqs915x_get_contact_resolution(const struct device *dev, uint16_t *max_x, uint16_t *max_y);
 
 #define IQS915X_SETTINGS_VERSION_1 1U
 #define IQS915X_SETTINGS_VERSION_2 2U

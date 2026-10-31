@@ -95,6 +95,104 @@ static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
          generation == iqs915x_request_generation(data);
 }
 
+/* Subscription serializes callbacks with detach; never hold an I2C window here. */
+int iqs915x_subscribe_contacts(const struct device *dev,
+    iqs915x_contact_callback_t callback, void *user_data)
+{
+  if (!dev || !device_is_ready(dev)) return -ENODEV;
+  if (k_is_in_isr()) return -EWOULDBLOCK;
+  struct iqs915x_data *data = dev->data;
+  if (k_mutex_lock(&data->contacts_lock, K_NO_WAIT)) return -EBUSY;
+  int ret = 0;
+  if (callback && atomic_get(&data->lifecycle) >= IQS915X_ABSENT) ret = -ENODEV;
+  else if (callback && data->contacts_callback) ret = -EALREADY;
+  else if (!callback && atomic_get(&data->lifecycle) < IQS915X_ABSENT && (atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS ||
+            data->applied_generation != iqs915x_request_generation(data))) ret = -EBUSY;
+  else { data->contacts_callback = callback; data->contacts_user_data = user_data; }
+  k_mutex_unlock(&data->contacts_lock);
+  return ret;
+}
+int iqs915x_set_output_mode(const struct device *dev, enum iqs915x_output_mode mode)
+{
+  if (!dev || !device_is_ready(dev)) return -ENODEV;
+  if (mode != IQS915X_OUTPUT_MOUSE && mode != IQS915X_OUTPUT_CONTACTS) return -EINVAL;
+  if (k_is_in_isr()) return -EWOULDBLOCK;
+  struct iqs915x_data *data = dev->data;
+  if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) return -ENODEV;
+  if (k_mutex_lock(&data->power_lock, K_NO_WAIT)) return -EBUSY;
+  if (k_mutex_lock(&data->contacts_lock, K_NO_WAIT)) {
+    k_mutex_unlock(&data->power_lock); return -EBUSY;
+  }
+  int ret = 0;
+  if (atomic_get(&data->pm_suspended)) ret = -EBUSY;
+  else if (mode == IQS915X_OUTPUT_CONTACTS && !data->contacts_callback) ret = -ENOTCONN;
+  else if (atomic_get(&data->output_mode) != (atomic_val_t)mode) {
+    atomic_clear(&data->output_enabled);
+    data->mouse_wait_clear = true;
+    atomic_set(&data->output_mode, mode);
+    atomic_set(&data->mode_transitioning, 1);
+    /* Reuse the existing request boundary to drain delayed mouse work and
+     * restore the independently selected power mode in the sensor thread. */
+    atomic_inc(&data->request_generation);
+    k_sem_give(&data->rdy_sem);
+  }
+  k_mutex_unlock(&data->contacts_lock);
+  k_mutex_unlock(&data->power_lock);
+  return ret;
+}
+int iqs915x_get_output_mode(const struct device *dev, enum iqs915x_output_mode *mode)
+{
+  if (!dev || !device_is_ready(dev) || !mode) return -ENODEV;
+  *mode = atomic_get(&((struct iqs915x_data *)dev->data)->output_mode);
+  return 0;
+}
+int iqs915x_get_contact_resolution(const struct device *dev, uint16_t *max_x, uint16_t *max_y)
+{
+  if (!dev || !device_is_ready(dev) || !max_x || !max_y) return -ENODEV;
+  struct iqs915x_data *data = dev->data;
+  if (!atomic_get(&data->settings_ready)) return -EAGAIN;
+  *max_x = data->swipe_resolution_x; *max_y = data->swipe_resolution_y;
+  return *max_x && *max_y ? 0 : -ENODATA;
+}
+static void iqs915x_end_contact_session(struct iqs915x_data *data)
+{
+  struct iqs915x_contact_frame frame;
+  k_mutex_lock(&data->contacts_lock, K_FOREVER);
+  iqs915x_contacts_end(&data->contacts, &frame, (uint64_t)k_uptime_get()*1000, 0);
+  if (data->contacts_callback)
+    data->contacts_callback(data->dev, &frame, data->contacts_user_data);
+  k_mutex_unlock(&data->contacts_lock);
+}
+/* Returns true when the fresh sample belongs to the raw-contact path. */
+static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
+    const struct iqs915x_stream_data *stream, uint32_t generation, uint64_t time)
+{
+  bool consumed = true;
+  k_mutex_lock(&data->contacts_lock, K_FOREVER);
+  if (!iqs915x_output_is_enabled(data) || generation != iqs915x_request_generation(data))
+    goto done;
+  uint8_t count = (stream->trackpad_flags & IQS915X_TOO_MANY_FINGERS) ? 5 :
+                  (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK);
+  if (atomic_get(&data->output_mode) == IQS915X_OUTPUT_MOUSE) {
+    if (data->mouse_wait_clear) {
+      if (!count) data->mouse_wait_clear = false;
+    } else consumed = false;
+    goto done;
+  }
+  uint16_t x[4], y[4];
+  for (unsigned i=0;i<4;i++) {
+    x[i]=y[i]=UINT16_MAX;
+    iqs915x_get_finger_coordinates(stream,i,&x[i],&y[i]);
+  }
+  struct iqs915x_contact_frame frame;
+  if (iqs915x_contacts_sample(&data->contacts,count,x,y,
+          (stream->trackpad_flags >> 8) & 15, time, &frame) && data->contacts_callback)
+    data->contacts_callback(data->dev, &frame, data->contacts_user_data);
+ done:
+  k_mutex_unlock(&data->contacts_lock);
+  return consumed;
+}
+
 static uint32_t iqs915x_power_retry_backoff_ms(uint8_t retry)
 {
   static const uint16_t backoff_ms[] = {20, 50, 100};
@@ -2528,6 +2626,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
 static void iqs915x_reset_input_session(struct iqs915x_data *data)
 {
+  iqs915x_end_contact_session(data);
   const struct device *dev = data->dev;
   struct k_work_sync button_sync;
   struct k_work_sync tap_release_sync;
@@ -2746,6 +2845,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     bool window = iqs915x_wait_window(data, false, deadline);
     if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
     struct iqs915x_stream_data stream = {0};
+    uint64_t sample_time_us = 0;
     if (!window)
     {
       if (!data->finger_tracker.count_change_pending ||
@@ -2770,7 +2870,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       {
         ret = iqs915x_read_stream(dev, &stream);
       }
-      if (ret < 0) { iqs915x_comm_failure(data, ret); continue; }
+      if (ret < 0) {
+        /* A missed sensor read can hide a lift/reuse: close the contact epoch
+         * immediately rather than treating the next sample as continuous. */
+        if (atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS)
+          iqs915x_end_contact_session(data);
+        iqs915x_comm_failure(data, ret); continue;
+      }
+      sample_time_us = (uint64_t)data->comm_completed_ms * 1000;
       bool allow_input = iqs915x_runtime_sample(data, &stream);
       if (!allow_input) { continue; }
       last_stream = stream;
@@ -2778,6 +2885,11 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
     if (!data->enabled || !iqs915x_output_is_enabled(data) ||
         frame_generation != iqs915x_request_generation(data)) { continue; }
+
+    /* Only fresh, validated, corrected samples enter the contact API. Cached
+     * debounce frames must never be replayed as new sensor measurements. */
+    if (!window && atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS) continue;
+    if (window && iqs915x_deliver_contacts(data, &stream, frame_generation, sample_time_us)) continue;
 
     // =========================================================
     // ドラッグ解除チェック: has_tp_event に依存せず毎フレーム実行
@@ -3232,6 +3344,9 @@ static int iqs915x_init(const struct device *dev)
 
   k_mutex_init(&data->settings_lock);
   k_mutex_init(&data->power_lock);
+  k_mutex_init(&data->contacts_lock);
+  iqs915x_contacts_init(&data->contacts);
+  atomic_set(&data->output_mode, IQS915X_OUTPUT_MOUSE);
   atomic_clear(&data->settings_ready);
   data->runtime_settings = (struct iqs915x_settings){
       .version = IQS915X_SETTINGS_VERSION_2,

@@ -492,3 +492,68 @@ Tests: `init_header.py`, `init_data.py`, `init_event_mode.py`, `runtime_power.py
 compile the production boot loop, mode state machine and PM/API paths, including
 three-attempt absence latching, busy initialization timeout, Suspend entry/resume,
 and cached access without I2C. A successful build is not hardware power validation.
+
+## Contact-frame output API
+
+`iqs915x_subscribe_contacts()` installs one synchronous subscriber per sensor.
+The default output remains `IQS915X_OUTPUT_MOUSE`. Select
+`IQS915X_OUTPUT_CONTACTS` with `iqs915x_set_output_mode()` to receive validated,
+coordinate-corrected sensor contacts instead of relative mouse/gesture events.
+No Windows/HID protocol code is part of this API. The source is the existing
+44-byte read through finger 4; no extra I2C transaction is introduced per window.
+
+The callback must copy the complete frame into bounded consumer storage and
+return promptly. It must not retain the pointer, block, perform I2C or call
+back into driver APIs. It runs in the sensor thread under a subscription mutex.
+`count` includes final `tip=false` records. `slot` identifies the sensor memory
+slot; `id` remains stable during a contact and changes when that slot is reused.
+IDs of concurrent slots cannot collide. `generation` identifies a contact session,
+independent of power-request generation; `sequence` increments across sessions.
+`sample_time_us` is MCU read-completion time with millisecond resolution, not a
+sensor hardware timestamp or a promise of 125 Hz sampling. Use
+`iqs915x_get_contact_resolution()` for cached coordinate maxima before mapping
+coordinates to another protocol.
+
+The memory slot tracks the same finger between samples according to the Azoteq
+[IQS9150/IQS9151 datasheet](https://www.azoteq.com/images/stories/pdf/IQS9150_IQS9151_datasheet.pdf),
+section 7.2.6. Occupancy comes from finger count and valid XY, not Confidence.
+A Confidence decrease is reported while the finger remains present. Slot holes
+are supported. Invalid XY, count/slot disagreement, more than four contacts or
+the Trackpad Flags Too Many Fingers bit end the current session with releases
+and quarantine tracking until a fresh all-up sample. The bit is in Trackpad
+Flags bit 5 (appendix A.5), despite section 7.3 referring to Info Flags.
+
+Reset, re-ATI, power transitions, output changes and contact-path I2C read
+failures also end the contact session. A frame with `SESSION_END` closes its
+`generation`, including when its contact count is zero; consumers must release
+that generation and reject delayed frames belonging to it. The next generation
+starts only after all fingers lift. Output switching immediately closes the
+input gate, then the sensor thread cancels delayed mouse/tap/inertia work,
+releases buttons and reapplies the independently selected power mode using the
+existing state machine. Mode selection is asynchronous; `get_output_mode()`
+reports the requested selection. Power/request status is separately available
+through `iqs915x_get_status()`.
+
+To detach, request MOUSE and retry the NULL subscription until the transition
+has completed (`-EBUSY` while pending). A successful detach guarantees that the
+old callback has finished and will not run again. A terminal device permits
+detach after its session-end notification. Replacing a subscriber without detach
+returns `-EALREADY`. API requests are thread-context only. A registered subscriber
+may receive session-end notifications during power changes even in mouse mode.
+
+Contact output bypasses mouse finger-count debounce, pointer acceleration,
+tap/drag generation, scroll/inertia and swipe conversion. Driver initialization,
+coordinate validation/correction and power ownership remain unchanged. Switching
+back to mouse waits for all-up once; ordinary mouse power transitions retain
+the existing behavior. Higher layers must handle queue loss, host negotiation
+and mapping; enabling this API alone does not connect sensor contacts to PTP.
+
+Host-side tests (no device writes):
+
+```sh
+python3 tests/contact_frames.py
+python3 tests/contact_api.py
+python3 tests/runtime_power.py
+python3 tests/runtime_session_reset.py
+python3 tests/pm_recovery.py
+```

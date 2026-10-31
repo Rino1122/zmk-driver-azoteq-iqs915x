@@ -29,6 +29,7 @@
 
 #include <iqs915x.h>
 #include "iqs915x_scroll_motion.h"
+#include "iqs915x_contacts_internal.h"
 #include "iqs915x_scroll_inertia.h"
 
 /* ============================================================
@@ -162,6 +163,7 @@
  * ============================================================ */
 // 下位バイト: 指の数と状態
 #define IQS915X_NUM_FINGERS_MASK 0x000F // Bit 0-3: アクティブな指の数(0-7)
+#define IQS915X_TOO_MANY_FINGERS BIT(5) /* Trackpad Flags, datasheet A.5. */
 #define IQS915X_TP_MOVEMENT BIT(4)      // 指の移動を検知
 // 上位バイト: 各指の信頼度フラグ
 #define IQS915X_FINGER1_CONFIDENCE BIT(8)
@@ -479,6 +481,12 @@ struct iqs915x_data
 
     // Runtime pointer/inertia settings and state shared with system workqueue.
     struct k_mutex settings_lock;
+    struct k_mutex contacts_lock;
+    struct iqs915x_contacts_state contacts;
+    iqs915x_contact_callback_t contacts_callback;
+    void *contacts_user_data;
+    atomic_t output_mode;
+    bool mouse_wait_clear;
     struct k_mutex power_lock; /* Serialize runtime requests and Device PM. */
     struct iqs915x_settings runtime_settings;
     atomic_t settings_ready;
