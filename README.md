@@ -557,3 +557,13 @@ python3 tests/runtime_power.py
 python3 tests/runtime_session_reset.py
 python3 tests/pm_recovery.py
 ```
+
+
+When Contacts output resumes in Active Event Mode, the driver requests one fresh
+stream snapshot in its own communication window. This observes an already idle
+surface without waiting for the first touch event, so the first new touch is not
+consumed by the all-up barrier. A finger already present in that snapshot must
+still lift before tracking resumes. Cached data and LP2 status never clear this
+barrier. After that snapshot, normal event waiting resumes; no periodic idle
+polling is introduced. A touch racing activation can still be present in the
+snapshot and therefore require lift.

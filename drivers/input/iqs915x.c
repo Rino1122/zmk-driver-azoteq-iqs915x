@@ -163,6 +163,14 @@ static void iqs915x_end_contact_session(struct iqs915x_data *data)
     data->contacts_callback(data->dev, &frame, data->contacts_user_data);
   k_mutex_unlock(&data->contacts_lock);
 }
+/* Event mode need not emit an idle sample after Active is restored. Read one
+ * fresh snapshot in its own communication window to observe all-up before the
+ * first new touch. Never clear the barrier based on cached or LP2 status. */
+static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
+{
+  return atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS &&
+         iqs915x_output_is_enabled(data) && data->contacts.probe_pending;
+}
 /* Returns true when the fresh sample belongs to the raw-contact path. */
 static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
     const struct iqs915x_stream_data *stream, uint32_t generation, uint64_t time)
@@ -2842,7 +2850,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       deadline = data->finger_tracker.candidate_since_ms +
                  IQS915X_FINGER_COUNT_DEBOUNCE_MS;
     }
-    bool window = iqs915x_wait_window(data, false, deadline);
+    bool window = iqs915x_wait_window(data, iqs915x_contact_probe_required(data), deadline);
     if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
     struct iqs915x_stream_data stream = {0};
     uint64_t sample_time_us = 0;

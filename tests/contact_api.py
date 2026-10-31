@@ -11,7 +11,8 @@ gestures=(root/'drivers/input/iqs915x_gestures.c').read_text()
 functions='\n'.join(block(source,m) for m in (
  'static uint32_t iqs915x_request_generation(', 'static bool iqs915x_output_is_enabled(',
  'int iqs915x_subscribe_contacts(', 'int iqs915x_set_output_mode(', 'int iqs915x_get_output_mode(',
- 'int iqs915x_get_contact_resolution(', 'static void iqs915x_end_contact_session('))
+ 'int iqs915x_get_contact_resolution(', 'static void iqs915x_end_contact_session(',
+ 'static bool iqs915x_contact_probe_required('))
 functions+='\n'+block(gestures,'bool iqs915x_get_finger_coordinates(')
 functions+='\n'+block(source,'static bool iqs915x_deliver_contacts(')
 harness=r'''
@@ -41,12 +42,22 @@ int main(void) {
  .finger3_x=UINT16_MAX,.finger3_y=UINT16_MAX,.finger4_x=UINT16_MAX,.finger4_y=UINT16_MAX};
  assert(iqs915x_deliver_contacts(&d,&s,0,1000) && !frames); /* stale/closed gate */
  iqs915x_end_contact_session(&d);assert(frames==1 && (received.flags&IQS915X_FRAME_SESSION_END));
+ assert(!iqs915x_contact_probe_required(&d)); /* closed transition cannot read */
  d.applied_generation=d.request_generation;d.output_enabled=1;
+ assert(iqs915x_contact_probe_required(&d));
  assert(iqs915x_deliver_contacts(&d,&s,1,2000) && frames==1); /* held during switch */
+ assert(!iqs915x_contact_probe_required(&d)); /* held snapshot is not polled forever */
  s.trackpad_flags=0;assert(iqs915x_deliver_contacts(&d,&s,1,3000) && frames==1);
  s.trackpad_flags=1;assert(iqs915x_deliver_contacts(&d,&s,1,4000) && frames==2);
  assert(received.count==1 && received.contacts[0].tip && !received.contacts[0].confidence);
  assert(received.sample_time_us==4000);
+ /* Simulate reactivation while no fingers are down: forced snapshot consumes
+  * the all-up barrier, so the very next DOWN must be reported. */
+ iqs915x_end_contact_session(&d);assert(iqs915x_contact_probe_required(&d));
+ s.trackpad_flags=0;int before_idle=frames;
+ assert(iqs915x_deliver_contacts(&d,&s,1,4100) && frames==before_idle);
+ assert(!iqs915x_contact_probe_required(&d));
+ s.trackpad_flags=1;assert(iqs915x_deliver_contacts(&d,&s,1,4200) && frames==before_idle+1);
  s.trackpad_flags=IQS915X_TOO_MANY_FINGERS; /* raw count=0 is not all-up here */
  assert(iqs915x_deliver_contacts(&d,&s,1,5000));
  assert(received.flags&IQS915X_FRAME_TRACKING_LOST);assert(!received.contacts[0].tip);
