@@ -12,7 +12,7 @@ functions='\n'.join(block(source,m) for m in (
  'static uint32_t iqs915x_request_generation(', 'static bool iqs915x_output_is_enabled(',
  'int iqs915x_subscribe_contacts(', 'int iqs915x_set_output_mode(', 'int iqs915x_get_output_mode(',
  'int iqs915x_get_contact_resolution(', 'static void iqs915x_end_contact_session(',
- 'static bool iqs915x_contact_probe_required('))
+ 'static bool iqs915x_contact_probe_required(', 'static int64_t iqs915x_contact_refresh_deadline('))
 functions+='\n'+block(gestures,'bool iqs915x_get_finger_coordinates(')
 functions+='\n'+block(source,'static bool iqs915x_deliver_contacts(')
 harness=r'''
@@ -31,6 +31,17 @@ static void copy_frame(const struct device *dev,const struct iqs915x_contact_fra
 int main(void) {
  struct iqs915x_data d={0};struct device dev={.data=&d};d.dev=&dev;
  iqs915x_contacts_init(&d.contacts);d.output_enabled=1;
+ d.active_sampling_period_ms=15;d.comm_completed_ms=100;
+ assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
+ d.output_mode=IQS915X_OUTPUT_CONTACTS;d.contacts.active=1;
+ assert(iqs915x_contact_refresh_deadline(&d)==115);
+ d.contacts.blocked=true;assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
+ d.contacts.blocked=false;d.output_enabled=0;
+ assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
+ d.output_enabled=1;d.output_mode=IQS915X_OUTPUT_MOUSE;
+ assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
+ d.contacts.active=0;
+
  assert(iqs915x_set_output_mode(&dev,IQS915X_OUTPUT_CONTACTS)==-ENOTCONN);
  assert(!iqs915x_subscribe_contacts(&dev,copy_frame,&frames));
  assert(iqs915x_subscribe_contacts(&dev,copy_frame,&frames)==-EALREADY);

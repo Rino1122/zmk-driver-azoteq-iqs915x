@@ -173,6 +173,20 @@ static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
   return iqs915x_output_is_enabled(data) && data->contacts.probe_pending &&
          (atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS || data->mouse_wait_clear);
 }
+/* Event mode suppresses stationary coordinate updates. PTP must continue
+ * measuring held contacts; never fabricate fresh timestamps for cached XY.
+ * No periodic reads for idle, quarantined, gated or legacy Mouse states. */
+static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
+{
+  int64_t deadline = INT64_MAX;
+  k_mutex_lock(&data->contacts_lock, K_FOREVER);
+  if (iqs915x_output_is_enabled(data) &&
+      atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS &&
+      data->contacts.active && !data->contacts.blocked)
+    deadline = data->comm_completed_ms + MAX(1u, data->active_sampling_period_ms);
+  k_mutex_unlock(&data->contacts_lock);
+  return deadline;
+}
 /* Returns true when the fresh sample belongs to the raw-contact path. */
 static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
     const struct iqs915x_stream_data *stream, uint32_t generation, uint64_t time)
@@ -2859,7 +2873,15 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       deadline = data->finger_tracker.candidate_since_ms +
                  IQS915X_FINGER_COUNT_DEBOUNCE_MS;
     }
+    int64_t contact_deadline = iqs915x_contact_refresh_deadline(data);
+    deadline = MIN(deadline, contact_deadline);
     bool window = iqs915x_wait_window(data, iqs915x_contact_probe_required(data), deadline);
+    if (!window && contact_deadline != INT64_MAX && k_uptime_get() >= contact_deadline)
+    {
+      /* Initiate one real transaction at the next safe communication window.
+       * A changed request generation still aborts before touching I2C. */
+      window = iqs915x_wait_window(data, true, INT64_MAX);
+    }
     if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
     struct iqs915x_stream_data stream = {0};
     uint64_t sample_time_us = 0;

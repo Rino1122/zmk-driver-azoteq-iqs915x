@@ -507,6 +507,7 @@ def main():
     b = SOURCE.index('/* ============================================================\n * ボタンリリース遅延処理', a)
     functions.append(block(SOURCE, 'static void iqs915x_end_contact_session('))
     functions.append(block(SOURCE, 'static bool iqs915x_contact_probe_required('))
+    functions.append(block(SOURCE, 'static int64_t iqs915x_contact_refresh_deadline('))
     functions.append(block(SOURCE, 'static bool iqs915x_deliver_contacts('))
     functions.append(SOURCE[a:b])
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))

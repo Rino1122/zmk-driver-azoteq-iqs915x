@@ -583,3 +583,14 @@ The one-shot fresh Active snapshot also covers an explicit Contacts-to-Mouse
 output switch while its all-up gate is pending. Ordinary Mouse power transitions
 do not add this read or a new gate. A finger present at the snapshot still must
 lift; an idle snapshot permits the first new touch without discarding it.
+
+### Stationary contact refresh in raw-contact mode
+
+Raw-contact output refreshes held, accepted contacts with a real sensor read at
+its configured Active sampling period (currently 15 ms). Event-mode RDY updates
+still trigger reads earlier; a deadline initiates a fresh I2C transaction when
+stationary coordinates do not generate an event. Cached coordinates are never
+retimestamped as new measurements. Each read remains one transaction/window.
+Idle/no-contact, quarantined, disabled and legacy Mouse states retain event
+waiting. This addresses a reporting-cadence gap; whether it resolves Windows
+stationary repeated-tap behavior still requires hardware verification.
