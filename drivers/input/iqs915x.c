@@ -160,6 +160,7 @@ static void iqs915x_end_contact_session(struct iqs915x_data *data)
 {
   struct iqs915x_contact_frame frame;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
+  data->contact_confirm_ms = 0;
   iqs915x_contacts_end(&data->contacts, &frame, (uint64_t)k_uptime_get()*1000, 0);
   if (data->contacts_callback)
     data->contacts_callback(data->dev, &frame, data->contacts_user_data);
@@ -185,6 +186,11 @@ static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
       data->contacts.active && !data->contacts.blocked &&
       !atomic_get(&data->contact_event_only))
     deadline = data->comm_completed_ms + MAX(1u, data->active_sampling_period_ms);
+  if (iqs915x_output_is_enabled(data) &&
+      atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS &&
+      atomic_get(&data->contact_event_only) && data->contact_confirm_ms &&
+      !data->contacts.blocked)
+    deadline = MIN(deadline, data->contact_confirm_ms);
   k_mutex_unlock(&data->contacts_lock);
   return deadline;
 }
@@ -211,8 +217,21 @@ static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
     iqs915x_get_finger_coordinates(stream,i,&x[i],&y[i]);
   }
   struct iqs915x_contact_frame frame;
-  if (iqs915x_contacts_sample(&data->contacts,count,x,y,
-          (stream->trackpad_flags >> 8) & 15, time, &frame) && data->contacts_callback)
+  uint8_t previous_mask = data->contacts.active;
+  bool confirmation = data->contact_confirm_ms && (int64_t)(time / 1000) >= data->contact_confirm_ms;
+  bool produced = iqs915x_contacts_sample(&data->contacts,count,x,y,
+          (stream->trackpad_flags >> 8) & 15, time, &frame);
+  if (atomic_get(&data->contact_event_only) && !data->contacts.blocked &&
+      previous_mask != data->contacts.active)
+    data->contact_confirm_ms = time / 1000 + IQS915X_FINGER_COUNT_DEBOUNCE_MS;
+  else if (confirmation || data->contacts.blocked)
+    data->contact_confirm_ms = 0;
+  if (!produced && confirmation && !data->contacts.blocked) {
+    /* One fresh all-up confirmation, never a periodic idle stream. */
+    iqs915x_contacts_header(&data->contacts, &frame, time);
+    produced = true;
+  }
+  if (produced && data->contacts_callback)
     data->contacts_callback(data->dev, &frame, data->contacts_user_data);
  done:
   k_mutex_unlock(&data->contacts_lock);
@@ -824,6 +843,14 @@ static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
   return true;
 }
 
+int iqs915x_get_contact_statistics(const struct device *dev, struct iqs915x_contact_statistics *out)
+{
+  if (!dev || !out) return -EINVAL;
+  struct iqs915x_data *data = dev->data;
+  out->forced_reads = atomic_get(&data->contact_forced_reads);
+  out->event_reads = atomic_get(&data->contact_event_reads);
+  return 0;
+}
 int iqs915x_set_contact_periodic(const struct device *dev, bool periodic)
 {
   if (!dev || !device_is_ready(dev)) return -ENODEV;
@@ -850,6 +877,8 @@ int iqs915x_get_gesture_profile(const struct device *dev, struct iqs915x_gesture
     .scroll_divisor=c->scroll_divisor, .trigger_ms=c->scroll_inertia.trigger_ms,
     .interval_ms=c->scroll_inertia.interval_ms, .stop_threshold=c->scroll_inertia.threshold_stop,
     .swipe_numerator=c->swipe_threshold_numerator, .swipe_denominator=c->swipe_threshold_denominator,
+    .swipe_settle=c->swipe_direction_settle_frames, .lock_numerator=c->swipe_direction_lock_numerator,
+    .lock_denominator=c->swipe_direction_lock_denominator,
     .one_tap=c->one_finger_tap, .two_tap=c->two_finger_tap, .drag=c->tap_and_hold,
     .swipe3=c->three_finger_swipe, .swipe4=c->four_finger_swipe};
   return x && y ? 0 : -EINVAL;
@@ -2907,11 +2936,13 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     }
     int64_t contact_deadline = iqs915x_contact_refresh_deadline(data);
     deadline = MIN(deadline, contact_deadline);
-    bool window = iqs915x_wait_window(data, iqs915x_contact_probe_required(data), deadline);
+    bool forced_contact = iqs915x_contact_probe_required(data);
+    bool window = iqs915x_wait_window(data, forced_contact, deadline);
     if (!window && contact_deadline != INT64_MAX && k_uptime_get() >= contact_deadline)
     {
       /* Initiate one real transaction at the next safe communication window.
        * A changed request generation still aborts before touching I2C. */
+      forced_contact = true;
       window = iqs915x_wait_window(data, true, INT64_MAX);
     }
     if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
@@ -2960,6 +2991,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     /* Only fresh, validated, corrected samples enter the contact API. Cached
      * debounce frames must never be replayed as new sensor measurements. */
     if (!window && atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS) continue;
+    if (window && atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS) {
+      if (forced_contact) atomic_inc(&data->contact_forced_reads);
+      else atomic_inc(&data->contact_event_reads);
+    }
     if (window && iqs915x_deliver_contacts(data, &stream, frame_generation, sample_time_us)) continue;
 
     // =========================================================

@@ -44,11 +44,13 @@ int iqs915x_get_contact_resolution(const struct device *dev, uint16_t *max_x, ui
 
 /** Raw-contact refresh policy; true is the backward-compatible default.
  * false retains event waiting, including while stationary. No I2C performed. */
+struct iqs915x_contact_statistics { uint32_t forced_reads, event_reads; };
+int iqs915x_get_contact_statistics(const struct device *dev, struct iqs915x_contact_statistics *out);
 int iqs915x_set_contact_periodic(const struct device *dev, bool periodic);
 struct iqs915x_gesture_profile {
   uint16_t touch_ms, air_ms, distance, max_x, max_y, drag_release_ms;
   uint16_t scroll_divisor, trigger_ms, interval_ms, stop_threshold;
-  uint16_t swipe_numerator, swipe_denominator;
+  uint16_t swipe_numerator, swipe_denominator, swipe_settle, lock_numerator, lock_denominator;
   bool one_tap, two_tap, drag, swipe3, swipe4;
 };
 /** Immutable DTS/init-data policy, available even when sensor is absent. */

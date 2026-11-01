@@ -487,7 +487,8 @@ struct iqs915x_data
     void *contacts_user_data;
     atomic_t output_mode;
     bool mouse_wait_clear;
-  atomic_t contact_event_only;
+  atomic_t contact_event_only, contact_forced_reads, contact_event_reads;
+  int64_t contact_confirm_ms;
     atomic_t contact_restart_requested; /* API request; tracking is sensor-thread owned. */
     struct k_mutex power_lock; /* Serialize runtime requests and Device PM. */
     struct iqs915x_settings runtime_settings;
