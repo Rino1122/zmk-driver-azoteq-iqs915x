@@ -526,8 +526,9 @@ Flags bit 5 (appendix A.5), despite section 7.3 referring to Info Flags.
 Reset, re-ATI, power transitions, output changes and contact-path I2C read
 failures also end the contact session. A frame with `SESSION_END` closes its
 `generation`, including when its contact count is zero; consumers must release
-that generation and reject delayed frames belonging to it. The next generation
-starts only after all fingers lift. Output switching immediately closes the
+that generation and reject delayed frames belonging to it. Strict restarts wait
+for all fingers to lift; ordinary power transitions follow the policy below.
+Output switching immediately closes the
 input gate, then the sensor thread cancels delayed mouse/tap/inertia work,
 releases buttons and reapplies the independently selected power mode using the
 existing state machine. Mode selection is asynchronous; `get_output_mode()`
@@ -562,8 +563,18 @@ python3 tests/pm_recovery.py
 When Contacts output resumes in Active Event Mode, the driver requests one fresh
 stream snapshot in its own communication window. This observes an already idle
 surface without waiting for the first touch event, so the first new touch is not
-consumed by the all-up barrier. A finger already present in that snapshot must
-still lift before tracking resumes. Cached data and LP2 status never clear this
-barrier. After that snapshot, normal event waiting resumes; no periodic idle
-polling is introduced. A touch racing activation can still be present in the
-snapshot and therefore require lift.
+consumed by an unresolved all-up barrier. When such a strict barrier exists, a
+finger present in that snapshot must still lift; ordinary power resume reports
+it immediately. Cached data and LP2 status never clear a strict barrier. After
+that snapshot, normal event waiting resumes; no periodic idle polling is introduced.
+
+
+PTP/contact power policy: ordinary Active/LP2/Suspend requests close the old
+contact session and resume from the first valid fresh sample, including fingers
+already on the surface. They do not create an all-up barrier. An existing barrier
+from tracking loss, reset, re-ATI, I2C failure, or an explicit output-mode request
+survives power changes. Re-requesting CONTACTS explicitly renews its session and
+requires all-up, even when CONTACTS is already selected. Use a power request for
+ordinary activation, and an output request for transport/session recovery. Mouse
+output and its existing state machine are unchanged. Active sampling remains
+15 ms; this policy does not change report rates.

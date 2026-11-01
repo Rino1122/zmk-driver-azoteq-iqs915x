@@ -148,6 +148,7 @@ static int i2c_write_read_dt(const struct i2c_dt_spec *i,const uint8_t *address,
   return 0;
 }
 static void iqs915x_reset_input_session(struct iqs915x_data *d) {
+  d->contacts.blocked=true; d->contacts.probe_pending=true;
   input_resets++; d->buttons_pressed=0; d->active_tap_hold=false;
   d->finger_tracker.count_change_pending=false;
 }
@@ -199,6 +200,22 @@ static void until_idle(void) {
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 int main(void) {
+  /* A normal power cycle must not require all-up; an unresolved mode/fault
+   * barrier must survive exactly the same sequence of power requests. */
+  for (int strict=0;strict<2;strict++) {
+    setup(true);d.output_mode=IQS915X_OUTPUT_CONTACTS;
+    d.contacts.blocked=false;d.contact_restart_requested=strict;
+    d.requested_enabled=0;d.requested_mode=IQS915X_POWER_LP2;d.request_generation++;
+    iqs915x_apply_pending_power_request(&d);until_idle();
+    assert(d.contacts.blocked==(bool)strict);
+    d.requested_enabled=1;d.requested_mode=IQS915X_POWER_ACTIVE;d.request_generation++;
+    iqs915x_apply_pending_power_request(&d);until_idle();
+    assert(d.contacts.blocked==(bool)strict && iqs915x_contact_probe_required(&d));
+    fingers=1;coords[0]=100;coords[1]=200;
+    run(&d,1); /* Forced fresh snapshot with a finger already on the surface. */
+    assert(d.contacts.active==(strict?0:1));
+    assert(!iqs915x_contact_probe_required(&d));
+  }
   setup(false); d.initialized=false; d.init_step=INIT_CHECK_SHOW_RESET;
   d.init_deadline=10000; boot_calls=parked=0; boot_result=-ENODEV;
   boot_run(&d,10);

@@ -34,6 +34,9 @@ int iqs915x_subscribe_contacts(const struct device *dev,
  * Returns -EBUSY during PM/request contention and -ENODEV on a terminal device.
  * Does not configure a faster scan period (rate tuning is a separate stage).
  */
+/* Re-requesting CONTACTS explicitly starts a fresh tracking session and waits
+ * for all-up. Ordinary power-mode changes preserve an existing barrier but do
+ * not add one; resuming CONTACTS can report fingers already on the surface. */
 int iqs915x_set_output_mode(const struct device *dev, enum iqs915x_output_mode mode);
 int iqs915x_get_output_mode(const struct device *dev, enum iqs915x_output_mode *mode);
 /** Cached logical coordinate maxima after initialization; never performs I2C. */

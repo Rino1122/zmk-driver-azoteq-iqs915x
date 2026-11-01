@@ -58,6 +58,8 @@ struct k_sem { int count; };
 struct iqs915x_data;
 struct device { struct iqs915x_data *data; };
 struct iqs915x_data {
+ int contact_restart_requested;
+ struct { bool blocked; } contacts;
  const struct device *dev;
  struct k_work_delayable tap_and_hold_release_work, single_tap_work, tap_and_hold_start_work, button_release_work, scroll_inertia_work;
  struct k_mutex settings_lock;

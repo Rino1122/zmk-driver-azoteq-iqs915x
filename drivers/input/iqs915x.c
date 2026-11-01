@@ -126,9 +126,11 @@ int iqs915x_set_output_mode(const struct device *dev, enum iqs915x_output_mode m
   int ret = 0;
   if (atomic_get(&data->pm_suspended)) ret = -EBUSY;
   else if (mode == IQS915X_OUTPUT_CONTACTS && !data->contacts_callback) ret = -ENOTCONN;
-  else if (atomic_get(&data->output_mode) != (atomic_val_t)mode) {
+  else if (atomic_get(&data->output_mode) != (atomic_val_t)mode ||
+           mode == IQS915X_OUTPUT_CONTACTS) {
     atomic_clear(&data->output_enabled);
     data->mouse_wait_clear = true;
+    atomic_set(&data->contact_restart_requested, 1);
     atomic_set(&data->output_mode, mode);
     atomic_set(&data->mode_transitioning, 1);
     /* Reuse the existing request boundary to drain delayed mouse work and
@@ -2694,7 +2696,13 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
                     data->work_state == WORK_READ_DATA;
   atomic_clear(&data->output_enabled);
   data->enabled = false;
+  /* Power/layer boundaries close reported contacts but do not create a new
+   * all-up requirement. Preserve any earlier mode/fault barrier until a fresh
+   * all-up sample actually clears it. Only this sensor thread mutates tracking. */
+  bool restart = atomic_cas(&data->contact_restart_requested, 1, 0);
+  bool wait_clear = data->contacts.blocked || restart;
   iqs915x_reset_input_session(data);
+  data->contacts.blocked = wait_clear;
   data->applied_generation = generation;
   data->transition_generation = generation;
   data->active_pending = false;
