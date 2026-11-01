@@ -170,8 +170,8 @@ static void iqs915x_end_contact_session(struct iqs915x_data *data)
  * first new touch. Never clear the barrier based on cached or LP2 status. */
 static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
 {
-  return atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS &&
-         iqs915x_output_is_enabled(data) && data->contacts.probe_pending;
+  return iqs915x_output_is_enabled(data) && data->contacts.probe_pending &&
+         (atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS || data->mouse_wait_clear);
 }
 /* Returns true when the fresh sample belongs to the raw-contact path. */
 static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
@@ -184,6 +184,7 @@ static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
   uint8_t count = (stream->trackpad_flags & IQS915X_TOO_MANY_FINGERS) ? 5 :
                   (stream->trackpad_flags & IQS915X_NUM_FINGERS_MASK);
   if (atomic_get(&data->output_mode) == IQS915X_OUTPUT_MOUSE) {
+    data->contacts.probe_pending = false; /* One fresh mode-boundary snapshot, not idle polling. */
     if (data->mouse_wait_clear) {
       if (!count) data->mouse_wait_clear = false;
     } else consumed = false;

@@ -578,3 +578,8 @@ requires all-up, even when CONTACTS is already selected. Use a power request for
 ordinary activation, and an output request for transport/session recovery. Mouse
 output and its existing state machine are unchanged. Active sampling remains
 15 ms; this policy does not change report rates.
+
+The one-shot fresh Active snapshot also covers an explicit Contacts-to-Mouse
+output switch while its all-up gate is pending. Ordinary Mouse power transitions
+do not add this read or a new gate. A finger present at the snapshot still must
+lift; an idle snapshot permits the first new touch without discarding it.

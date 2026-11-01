@@ -65,9 +65,18 @@ int main(void) {
  assert(!iqs915x_set_output_mode(&dev,IQS915X_OUTPUT_MOUSE));assert(!d.output_enabled);
  assert(iqs915x_subscribe_contacts(&dev,NULL,NULL)==-EBUSY);
  iqs915x_end_contact_session(&d);d.applied_generation=d.request_generation;d.output_enabled=1;
+ assert(iqs915x_contact_probe_required(&d));
  assert(iqs915x_deliver_contacts(&d,&s,2,7000)); /* mouse also waits for all-up */
+ assert(!iqs915x_contact_probe_required(&d)); /* Held finger is not polled repeatedly. */
  s.trackpad_flags=0;assert(iqs915x_deliver_contacts(&d,&s,2,8000));
  s.trackpad_flags=1;assert(!iqs915x_deliver_contacts(&d,&s,2,9000));
+ /* A fresh all-up snapshot on the Mouse boundary permits the first new touch. */
+ d.mouse_wait_clear=true;iqs915x_end_contact_session(&d);
+ assert(iqs915x_contact_probe_required(&d));
+ s.trackpad_flags=0;assert(iqs915x_deliver_contacts(&d,&s,2,9100));
+ assert(!d.mouse_wait_clear && !iqs915x_contact_probe_required(&d));
+ s.trackpad_flags=1;assert(!iqs915x_deliver_contacts(&d,&s,2,9200));
+ iqs915x_end_contact_session(&d);assert(!iqs915x_contact_probe_required(&d)); /* Ordinary Mouse power boundary. */
  assert(!iqs915x_subscribe_contacts(&dev,NULL,NULL));before=frames;
  iqs915x_end_contact_session(&d);assert(frames==before);
  d.pm_suspended=1;assert(iqs915x_set_output_mode(&dev,IQS915X_OUTPUT_MOUSE)==-EBUSY);
