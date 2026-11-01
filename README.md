@@ -594,3 +594,11 @@ retimestamped as new measurements. Each read remains one transaction/window.
 Idle/no-contact, quarantined, disabled and legacy Mouse states retain event
 waiting. This addresses a reporting-cadence gap; whether it resolves Windows
 stationary repeated-tap behavior still requires hardware verification.
+
+Raw contact consumers may call `iqs915x_set_contact_periodic(dev, false)` to
+retain event-only acquisition while stationary. The default remains periodic
+held-contact acquisition for existing PTP clients. Power gates still dominate
+both policies. `iqs915x_get_gesture_profile()` exports the immutable DTS/init-data
+thresholds and geometry without sensor I/O (also usable with an absent local IC).
+The pure motion-history helper is exported as `iqs915x_motion.h` for consumers;
+this does not run or enable the driver's legacy gesture state machine.

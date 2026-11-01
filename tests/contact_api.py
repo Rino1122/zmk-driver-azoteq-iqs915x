@@ -35,6 +35,8 @@ int main(void) {
  assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
  d.output_mode=IQS915X_OUTPUT_CONTACTS;d.contacts.active=1;
  assert(iqs915x_contact_refresh_deadline(&d)==115);
+ d.contact_event_only=1;assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
+ d.contact_event_only=0;
  d.contacts.blocked=true;assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);
  d.contacts.blocked=false;d.output_enabled=0;
  assert(iqs915x_contact_refresh_deadline(&d)==INT64_MAX);

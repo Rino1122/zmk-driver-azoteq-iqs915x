@@ -182,7 +182,8 @@ static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
   if (iqs915x_output_is_enabled(data) &&
       atomic_get(&data->output_mode) == IQS915X_OUTPUT_CONTACTS &&
-      data->contacts.active && !data->contacts.blocked)
+      data->contacts.active && !data->contacts.blocked &&
+      !atomic_get(&data->contact_event_only))
     deadline = data->comm_completed_ms + MAX(1u, data->active_sampling_period_ms);
   k_mutex_unlock(&data->contacts_lock);
   return deadline;
@@ -821,6 +822,37 @@ static bool iqs915x_get_init_data_reg16(const struct iqs915x_config *config,
   *val = ((uint16_t)config->init_data[offset + 1] << 8) |
          (uint16_t)config->init_data[offset];
   return true;
+}
+
+int iqs915x_set_contact_periodic(const struct device *dev, bool periodic)
+{
+  if (!dev || !device_is_ready(dev)) return -ENODEV;
+  struct iqs915x_data *data = dev->data;
+  atomic_set(&data->contact_event_only, !periodic);
+  k_sem_give(&data->rdy_sem);
+  return 0;
+}
+int iqs915x_get_gesture_profile(const struct device *dev, struct iqs915x_gesture_profile *out)
+{
+  if (!dev || !out) return -EINVAL;
+  const struct iqs915x_config *c = dev->config;
+  uint16_t touch=0, air=0, distance=0, x=0, y=0;
+  iqs915x_get_init_data_reg16(c, IQS915X_TAP_TOUCH_TIME, &touch);
+  iqs915x_get_init_data_reg16(c, IQS915X_TAP_WAIT_TIME, &air);
+  iqs915x_get_init_data_reg16(c, IQS915X_TAP_DISTANCE, &distance);
+  iqs915x_get_init_data_reg16(c, IQS915X_X_RESOLUTION, &x);
+  iqs915x_get_init_data_reg16(c, IQS915X_Y_RESOLUTION, &y);
+  *out = (struct iqs915x_gesture_profile){
+    .touch_ms=touch ? touch : IQS915X_TAP_TOUCH_TIME_FALLBACK_MS,
+    .air_ms=air ? air : IQS915X_TAP_AIR_TIME_FALLBACK_MS,
+    .distance=distance ? distance : IQS915X_TAP_DISTANCE_FALLBACK,
+    .max_x=x, .max_y=y, .drag_release_ms=c->tap_and_hold_release_timeout_ms,
+    .scroll_divisor=c->scroll_divisor, .trigger_ms=c->scroll_inertia.trigger_ms,
+    .interval_ms=c->scroll_inertia.interval_ms, .stop_threshold=c->scroll_inertia.threshold_stop,
+    .swipe_numerator=c->swipe_threshold_numerator, .swipe_denominator=c->swipe_threshold_denominator,
+    .one_tap=c->one_finger_tap, .two_tap=c->two_finger_tap, .drag=c->tap_and_hold,
+    .swipe3=c->three_finger_swipe, .swipe4=c->four_finger_swipe};
+  return x && y ? 0 : -EINVAL;
 }
 
 static void iqs915x_configure_tap_profile(const struct iqs915x_config *config,

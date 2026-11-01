@@ -42,6 +42,18 @@ int iqs915x_get_output_mode(const struct device *dev, enum iqs915x_output_mode *
 /** Cached logical coordinate maxima after initialization; never performs I2C. */
 int iqs915x_get_contact_resolution(const struct device *dev, uint16_t *max_x, uint16_t *max_y);
 
+/** Raw-contact refresh policy; true is the backward-compatible default.
+ * false retains event waiting, including while stationary. No I2C performed. */
+int iqs915x_set_contact_periodic(const struct device *dev, bool periodic);
+struct iqs915x_gesture_profile {
+  uint16_t touch_ms, air_ms, distance, max_x, max_y, drag_release_ms;
+  uint16_t scroll_divisor, trigger_ms, interval_ms, stop_threshold;
+  uint16_t swipe_numerator, swipe_denominator;
+  bool one_tap, two_tap, drag, swipe3, swipe4;
+};
+/** Immutable DTS/init-data policy, available even when sensor is absent. */
+int iqs915x_get_gesture_profile(const struct device *dev, struct iqs915x_gesture_profile *out);
+
 #define IQS915X_SETTINGS_VERSION_1 1U
 #define IQS915X_SETTINGS_VERSION_2 2U
 
