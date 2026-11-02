@@ -190,7 +190,10 @@ properties:
     type: boolean
     description: |
       Enable driver-side absolute coordinate correction using per-axis block-local
-      LUTs. If unset, the driver uses raw IQS9150 absolute coordinates.
+      LUTs with g(u) = u + 0.5*u*(1-u), where u is normalized distance from a
+      key center to a gap. Uses 6 X blocks and 4 Y blocks, scaled to the X/Y
+      resolutions in init-data. Centers and boundaries stay fixed; intermediate
+      positions move toward gaps. If unset, raw IQS9150 coordinates are used.
 
   disabled-by-default:
     type: boolean

@@ -15,13 +15,19 @@
 
 #define IQS915X_COORD_X_BLOCKS 6U
 #define IQS915X_COORD_Y_BLOCKS 4U
+/* Q15 samples at u = i/16 of g(u) = u + 0.5*u*(1-u), where u is
+ * distance from a key center divided by the half-block width. Mirror the
+ * curve on each side of every key: centers and gaps stay fixed, while
+ * intermediate coordinates move toward the gaps. Both axes use a = 0.5;
+ * block widths come from their respective init-data resolutions.
+ */
 static const uint16_t iqs915x_coord_lut_x[] = {
-    0, 3596, 4314, 6980, 9152, 11723, 14282, 15850, 17002,
-    19860, 21795, 23755, 25945, 27475, 29719, 30583, 32768,
+    0, 3008, 5888, 8640, 11264, 13760, 16128, 18368, 20480,
+    22464, 24320, 26048, 27648, 29120, 30464, 31680, 32768,
 };
 static const uint16_t iqs915x_coord_lut_y[] = {
-    0, 3901, 3933, 6509, 9466, 10858, 13425, 14987, 17489,
-    19561, 21659, 23583, 25359, 27318, 29356, 31054, 32768,
+    0, 3008, 5888, 8640, 11264, 13760, 16128, 18368, 20480,
+    22464, 24320, 26048, 27648, 29120, 30464, 31680, 32768,
 };
 
 #endif

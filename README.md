@@ -86,7 +86,7 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 The driver uses IQS9150 finger coordinates from registers `0x1024` and
 `0x1026` as the internal pointer source. If `coordinate-correction` is set, raw
-coordinates are calibrated with per-axis LUTs generated from `docs/logs/*.txt`.
+coordinates are corrected with per-axis block-local LUTs.
 If the property is omitted, raw IQS9150 absolute coordinates are used directly.
 The driver converts consecutive-sample deltas to `INPUT_REL_X`/`INPUT_REL_Y` for
 the host. The first sample after touch-down is used as a baseline (no cursor
@@ -104,13 +104,21 @@ using the driver-owned Active sampling period (15 ms). When `pointer-accel` is o
 `pointer-sensitivity-percent` is left at `100`, pointer output is unchanged from
 the raw absolute-coordinate delta path.
 
-Coordinate calibration assumes 6 X blocks and 4 Y blocks. Each block boundary
+Coordinate correction uses 6 X blocks and 4 Y blocks. Block widths are derived
+from `X_RESOLUTION` (`0x11E6`) and `Y_RESOLUTION` (`0x11E8`) in the compiled
+init-data, independently of whether swipe gestures are enabled; no fixed
+6000/4000 resolution is assumed. Each block boundary
 and block center is treated as a fixed point, and the same axis-specific
 half-block LUT is mirrored across every block half, including corner blocks.
-The LUT generator learns the curve from fully covered inner blocks, then applies
-that one block-local curve to all blocks. To regenerate the LUTs, collect three
-X-only and three Y-only raw coordinate logs under `docs/logs/` and run
-`python3 scripts/generate_coord_lut.py`.
+Both axes use 17 Q15 samples of `g(u) = u + 0.5*u*(1-u)` (`a = 0.5`), where
+`u` is the distance from the key center divided by the half-block width.
+Linear interpolation between samples moves intermediate positions toward the
+gaps without snapping, while keeping the mapping monotonic. For a block spanning
+0..1000, 250 maps to about 188 and 750 to about 813; 0, 500 and 1000 stay fixed.
+The LUTs are defined in `iqs915x_sensor_config.h`. The log-fitting utility
+`scripts/generate_coord_lut.py` is retained for experiments; it does not generate
+the current fixed-strength curve. Correction applies to all four finger slots
+before pointer and gesture processing, including scroll and swipe.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
 The driver emits raw touched stream samples before calibration as INFO logs in

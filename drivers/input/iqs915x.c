@@ -544,6 +544,7 @@ static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *conf
                                                const struct iqs915x_data *driver_data,
                                                struct iqs915x_stream_data *data)
 {
+  /* Loaded from X/Y_RESOLUTION in init-data, independently of swipe enable. */
   uint16_t res_x = driver_data->swipe_resolution_x;
   uint16_t res_y = driver_data->swipe_resolution_y;
 
