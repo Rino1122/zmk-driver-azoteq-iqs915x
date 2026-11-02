@@ -1,4 +1,13 @@
 properties:
+  channel-profile:
+    type: string
+    default: "export"
+    enum: ["export", "bretagne-right", "bretagne-left"]
+    description: |
+      Driver-owned channel-disable profile. export preserves the Azoteq header.
+      Bretagne profiles require 18 Rx by 12 Tx. Right disables Rx0..5 in Tx9..11;
+      left disables Rx12..17 in Tx9..11. This is independent of XY orientation.
+
   rdy-gpios:
     type: phandle-array
     required: true

@@ -165,6 +165,8 @@ RESET_GPIO
   return 0;
 }
 POLICY
+static int mask_check_result,mask_checks;
+static int iqs915x_check_channel_profile(const struct device *dev) {(void)dev;mask_checks++;return mask_check_result;}
 static void iqs915x_get_init_data_reg16(const void *config, int reg, uint16_t *out) { (void)config; (void)reg; *out=6000; }
 static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error) { (void)absent; (void)error; data->init_step=INIT_FAILED; }
 static int iqs915x_init_step_handler(const struct device *dev) {
@@ -275,6 +277,13 @@ int main(void) {
     assert(data.output_enabled==enabled && data.lp2_pending==!enabled);
     assert(ic_cfg & IQS915X_EVENT_MODE);
   }
+  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;ic_info=IQS915X_MODE_LP2;
+  mask_check_result=1;
+  run(&dev,1);assert(data.init_step==INIT_SOFTWARE_RESET && !reati_requests);
+  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;ic_info=IQS915X_MODE_LP2;
+  mask_check_result=-EIO;
+  assert(iqs915x_init_step_handler(&dev)==-EIO && data.init_step==INIT_CHECK_SHOW_RESET);
+  mask_check_result=0;
   /* Real SHOW_RESET retains the full init-data transfer path. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET;
   data.init_data_offset=123; data.init_chunk_retry_count=2;

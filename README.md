@@ -610,3 +610,18 @@ both policies. `iqs915x_get_gesture_profile()` exports the immutable DTS/init-da
 thresholds and geometry without sensor I/O (also usable with an absent local IC).
 The pure motion-history helper is exported as `iqs915x_motion.h` for consumers;
 this does not run or enable the driver's legacy gesture state machine.
+
+### Per-device channel-disable profiles
+
+`channel-profile` defaults to `export`, preserving all Azoteq export mask bytes.
+`bretagne-right` and `bretagne-left` require the exported 18 Rx x 12 Tx geometry.
+Right disables Rx0..5 in Tx9..11; left disables Rx12..17 in Tx9..11. Each profile
+contains exactly 18 disabled channels. Profile bytes are owned by
+`iqs915x_sensor_config.h`, applied by the same init-chunk preparation function
+for writing and verification. XY flips/correction do not alter this mask.
+
+Warm startup verifies all 88 retained mask bytes with bounded reads before
+Re-ATI. A mismatch requests software reset and the full verified init transfer;
+I2C errors return through the existing init retry path. This prevents an older
+right-side mask surviving a firmware update on the left IC. No runtime polling
+or per-contact processing is added by channel profiles.

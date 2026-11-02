@@ -405,6 +405,7 @@ struct iqs915x_two_finger_session
 // デバイス設定（DTS + ドライバ内固定値）
 struct iqs915x_config
 {
+    uint8_t channel_profile;
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec rdy_gpio;
     struct gpio_dt_spec reset_gpio;

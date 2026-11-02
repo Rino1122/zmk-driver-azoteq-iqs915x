@@ -13,6 +13,27 @@
 #define IQS915X_SENSOR_FLIP_Y false
 #define IQS915X_SENSOR_SWITCH_XY false
 
+/* Profile indices match channel-profile in the common DTS binding.
+ * Bit positions are logical Rx columns, rows are logical Tx (not XY-flipped).
+ * Bretagne has 18 Rx columns x 12 Tx rows; its missing corner is 6 x 3. */
+#define IQS915X_CHANNEL_PROFILE_EXPORT 0U
+#define IQS915X_CHANNEL_PROFILE_BRETAGNE_RIGHT 1U
+#define IQS915X_CHANNEL_PROFILE_BRETAGNE_LEFT 2U
+#define IQS915X_CHANNEL_DISABLE_BASE 0x1246U
+#define IQS915X_CHANNEL_DISABLE_BYTES 88U
+#define IQS915X_PROFILE_TOTAL_RXS 0x11E3U
+#define IQS915X_PROFILE_TOTAL_TXS 0x11E4U
+static inline uint8_t iqs915x_channel_disable_byte(uint8_t profile, unsigned index,
+                                                 uint8_t original)
+{
+    if (profile == IQS915X_CHANNEL_PROFILE_EXPORT) return original;
+    unsigned row=index/4, byte=index%4;
+    uint32_t mask=0;
+    if (row>=9 && row<12)
+        mask=profile==IQS915X_CHANNEL_PROFILE_BRETAGNE_LEFT ? 0x0003F000U:0x0000003FU;
+    return (uint8_t)(mask>>(8*byte));
+}
+
 #define IQS915X_COORD_X_BLOCKS 6U
 #define IQS915X_COORD_Y_BLOCKS 4U
 /* Q15 samples at u = i/16 of g(u) = u + 0.5*u*(1-u), where u is

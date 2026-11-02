@@ -496,7 +496,7 @@ def main():
              'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
              'iqs915x_config_settings_without_event_mode',
              'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
-             'iqs915x_read_stream', 'iqs915x_prepare_init_chunk']
+             'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
     functions = []
     for name in names:
         m = re.search(r'^static [^\n]*\b'+name+r'\(', SOURCE, re.M)

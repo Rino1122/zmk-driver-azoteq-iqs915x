@@ -2062,6 +2062,44 @@ int iqs915x_apply_settings(const struct device *dev,
   return ret;
 }
 
+static bool iqs915x_channel_profile_valid(const struct iqs915x_config *config)
+{
+  if (config->channel_profile == IQS915X_CHANNEL_PROFILE_EXPORT) return true;
+  unsigned rx=IQS915X_PROFILE_TOTAL_RXS-IQS915X_INIT_DATA_BASE_ADDR;
+  unsigned tx=IQS915X_PROFILE_TOTAL_TXS-IQS915X_INIT_DATA_BASE_ADDR;
+  return config->channel_profile <= IQS915X_CHANNEL_PROFILE_BRETAGNE_LEFT &&
+         config->init_data && config->init_data_len > tx &&
+         config->init_data[rx]==18 && config->init_data[tx]==12;
+}
+/* Boot-time only. Each read is one separate I2C transaction/window; STOP and
+ * the existing Force Comms clock-stretch contract separate successive reads.
+ * 0 = retained mask matches, 1 = needs full reinitialization, negative = I/O. */
+static int iqs915x_check_channel_profile(const struct device *dev)
+{
+  const struct iqs915x_config *config=dev->config;
+  if (!iqs915x_channel_profile_valid(config)) return -EINVAL;
+  unsigned offset=IQS915X_CHANNEL_DISABLE_BASE-IQS915X_INIT_DATA_BASE_ADDR;
+  if (!config->init_data || config->init_data_len<offset+IQS915X_CHANNEL_DISABLE_BYTES)
+    return -EINVAL;
+  for(unsigned i=0;i<IQS915X_CHANNEL_DISABLE_BYTES;) {
+    uint8_t actual[IQS915X_INIT_WRITE_CHUNK_SIZE];
+    unsigned n=MIN(IQS915X_INIT_WRITE_CHUNK_SIZE,IQS915X_CHANNEL_DISABLE_BYTES-i);
+    int err=iqs915x_read_block(dev,IQS915X_CHANNEL_DISABLE_BASE+i,actual,n);
+    if(err<0)return err;
+    for(unsigned j=0;j<n;j++) {
+      uint8_t expected=iqs915x_channel_disable_byte(config->channel_profile,i+j,
+                                                  config->init_data[offset+i+j]);
+      if(actual[j]!=expected) {
+        LOG_INF("Init: retained channel mask differs at 0x%04x; reinitializing",
+                IQS915X_CHANNEL_DISABLE_BASE+i+j);
+        return 1;
+      }
+    }
+    i+=n;
+  }
+  return 0;
+}
+
 static int iqs915x_prepare_init_chunk(const struct device *dev,
                                       uint16_t offset, uint16_t *addr,
                                       uint16_t *chunk, uint8_t *buffer,
@@ -2069,7 +2107,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
 {
   const struct iqs915x_config *config = dev->config;
 
-  if (!config->init_data || config->init_data_len == 0 ||
+  if (!iqs915x_channel_profile_valid(config) || !config->init_data || config->init_data_len == 0 ||
       offset >= config->init_data_len)
   {
     return -EINVAL;
@@ -2088,7 +2126,13 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       uint8_t original = buffer[i];
 
       // === 強制パッチ: ドライバの固定設定と必須ビット修正 ===
-      if (current_addr == IQS915X_SYSTEM_CONTROL)
+      if (current_addr >= IQS915X_CHANNEL_DISABLE_BASE &&
+          current_addr < IQS915X_CHANNEL_DISABLE_BASE+IQS915X_CHANNEL_DISABLE_BYTES)
+      {
+        buffer[i]=iqs915x_channel_disable_byte(config->channel_profile,
+                     current_addr-IQS915X_CHANNEL_DISABLE_BASE,original);
+      }
+      else if (current_addr == IQS915X_SYSTEM_CONTROL)
       {
         // ACK/ATI/reseedをinit-data転送中に実行しない。
         buffer[i] &= ~0xF8;
@@ -2269,6 +2313,9 @@ static int iqs915x_init_step_handler(const struct device *dev)
         data->init_step = INIT_SOFTWARE_RESET;
         break;
       }
+      ret = iqs915x_check_channel_profile(dev);
+      if (ret < 0) return ret;
+      if (ret > 0) { data->init_step = INIT_SOFTWARE_RESET; break; }
       // ICが設定を保持しているwarm bootではinit-dataを再転送しない。
       // Event ModeのLP2が保持されていても、ActiveでTP Re-ATIを要求する。
       LOG_INF("Init: SHOW_RESET is not set (0x%04x). Retaining init-data; requesting Re-ATI.",
@@ -3622,6 +3669,7 @@ BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PE
       .rdy_gpio = GPIO_DT_SPEC_INST_GET(n, rdy_gpios),                                                                                                                                             \
       .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                                                                                                                                 \
       .init_data = iqs915x_init_data,                                                                                                                                                           \
+      .channel_profile = DT_INST_ENUM_IDX(n, channel_profile), \
       .init_data_len = ARRAY_SIZE(iqs915x_init_data),                                                                                                                                          \
       .coord_lut_x_q15 = iqs915x_coord_lut_x,                                                                                                                                                  \
       .coord_lut_x_len = ARRAY_SIZE(iqs915x_coord_lut_x),                                                                                                                                      \

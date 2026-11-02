@@ -12,7 +12,7 @@ registers = (ROOT / "drivers/input/iqs915x_regs.h").read_text()
 definitions = "\n".join(re.findall(r"^#define IQS915X_.*$", registers, re.M))
 policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy")
 policy += "\n" + block(source, "static uint16_t iqs915x_config_settings_without_event_mode")
-prepare = block(source, "static int iqs915x_prepare_init_chunk")
+prepare = block(source, "static bool iqs915x_channel_profile_valid") + "\n" + block(source, "static int iqs915x_prepare_init_chunk")
 harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -23,17 +23,30 @@ harness = r'''
 #define BIT(n) (1U << (n))
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define LOG_WRN(...) ((void)0)
+#define LOG_INF(...) ((void)0)
 DEFINITIONS
 #include "iqs915x_init_array.h"
 #include "iqs915x_sensor_config.h"
 struct iqs915x_config {
+  uint8_t channel_profile;
   const uint8_t *init_data;
   uint16_t init_data_len, report_rate_ms;
   bool flip_x, flip_y, switch_xy;
 };
 struct device { const struct iqs915x_config *config; };
+static uint8_t retained[88];
+static unsigned mask_reads;
+static int mask_read_error;
+static int iqs915x_read_block(const struct device *dev,uint16_t address,uint8_t *out,uint16_t n) {
+ (void)dev;mask_reads++;
+ assert(address>=IQS915X_CHANNEL_DISABLE_BASE && address+n<=IQS915X_CHANNEL_DISABLE_BASE+88);
+ assert(n>0 && n<=IQS915X_INIT_WRITE_CHUNK_SIZE);
+ if(mask_read_error)return mask_read_error;
+ memcpy(out,retained+address-IQS915X_CHANNEL_DISABLE_BASE,n);return 0;
+}
 POLICY
 PREPARE
+CHECK_MASK
 static uint16_t read16(const uint8_t *bytes, int address) {
   int offset = address - 0x115C;
   return bytes[offset] | ((uint16_t)bytes[offset + 1] << 8);
@@ -100,10 +113,45 @@ int main(void) {
   assert(!(written[IQS915X_TWO_FINGER_GESTURES_ENABLE - 0x115C] & (IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL)));
   assert(sizeof(iqs915x_coord_lut_x) / sizeof(uint16_t) == 17);
   assert(sizeof(iqs915x_coord_lut_y) / sizeof(uint16_t) == 17);
+  uint8_t baseline[1174];memcpy(baseline,written,sizeof(baseline));
+  unsigned mask_offset=IQS915X_CHANNEL_DISABLE_BASE-IQS915X_INIT_DATA_BASE_ADDR;
+  for(unsigned selected=0;selected<=2;selected++) {
+    config.channel_profile=selected;
+    for(unsigned offset=0;offset<1174;offset+=chunk) {
+      assert(!iqs915x_prepare_init_chunk(&dev,offset,&addr,&chunk,written+offset,false));
+      assert(!iqs915x_prepare_init_chunk(&dev,offset,&addr,&chunk,verified+offset,false));
+    }
+    assert(!memcmp(written,verified,sizeof(written)));
+    unsigned disabled=0;
+    for(unsigned i=0;i<88;i++)for(unsigned bit=0;bit<8;bit++)
+      if(written[mask_offset+i]&(1u<<bit)) {
+        unsigned row=i/4,col=(i%4)*8+bit;disabled++;
+        assert(row>=9 && row<12);
+        assert(selected==2 ? col>=12 && col<18 : col<6);
+      }
+    assert(disabled==18);
+    for(unsigned i=0;i<1174;i++)if(i<mask_offset || i>=mask_offset+88)
+      assert(written[i]==baseline[i]);
+    if(selected!=2)assert(!memcmp(written,baseline,sizeof(written)));
+    memcpy(retained,written+mask_offset,88);mask_reads=0;
+    assert(iqs915x_check_channel_profile(&dev)==0);
+    assert(mask_reads==(88+IQS915X_INIT_WRITE_CHUNK_SIZE-1)/IQS915X_INIT_WRITE_CHUNK_SIZE);
+    retained[87]^=1;assert(iqs915x_check_channel_profile(&dev)==1);
+    retained[87]^=1;mask_read_error=-EIO;assert(iqs915x_check_channel_profile(&dev)==-EIO);
+    mask_read_error=0;
+  }
+  /* A warm left profile must reject retained right-side bytes with same X resolution. */
+  memcpy(retained,baseline+mask_offset,88);config.channel_profile=2;
+  assert(iqs915x_check_channel_profile(&dev)==1);
+  uint8_t wrong_geometry[1174];memcpy(wrong_geometry,iqs915x_init_data,sizeof(wrong_geometry));
+  wrong_geometry[IQS915X_PROFILE_TOTAL_RXS-IQS915X_INIT_DATA_BASE_ADDR]=17;
+  config.init_data=wrong_geometry;
+  assert(iqs915x_prepare_init_chunk(&dev,0,&addr,&chunk,written,false)==-EINVAL);
+  puts("Channel profiles: 18x12 bottom3 x left/right6, write/readback, retained mask and I/O errors: PASS");
   puts("IQS915x init-data: 1174 export bytes, driver overrides and read-back preparation verified");
 }
 '''
-for marker, code in (("DEFINITIONS", definitions), ("POLICY", policy), ("PREPARE", prepare)):
+for marker, code in (("DEFINITIONS", definitions), ("POLICY", policy), ("PREPARE", prepare), ("CHECK_MASK", block(source,"static int iqs915x_check_channel_profile"))):
     harness = harness.replace(marker, code)
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
