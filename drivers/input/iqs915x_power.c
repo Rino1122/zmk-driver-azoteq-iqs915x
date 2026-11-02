@@ -174,6 +174,7 @@ int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status)
     .lifecycle = atomic_get(&data->lifecycle),
     .requested_mode = atomic_get(&data->requested_mode),
     .actual_mode = atomic_get(&data->actual_mode),
+    .ati_sequence = atomic_get(&data->ati_sequence),
     .ati_error = atomic_get(&data->ati_error),
     .transitioning = atomic_get(&data->mode_transitioning),
     .last_error = atomic_get(&data->last_error),

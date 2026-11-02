@@ -502,6 +502,9 @@ struct iqs915x_data
     int64_t init_deadline;
     int64_t ati_deadline;
     atomic_t ati_error;
+    atomic_t ati_sequence;
+    uint8_t diagnostic_low_confidence;
+    int64_t diagnostic_confidence_ms;
     uint8_t probe_failures;
     uint8_t pm_saved_mode;
     bool ic_suspended;

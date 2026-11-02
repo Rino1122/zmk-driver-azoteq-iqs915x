@@ -25,7 +25,7 @@ typedef int atomic_val_t;
 struct k_mutex { bool locked; };
 struct k_sem { int count; };
 struct iqs915x_data {
-  int ati_error;
+  int ati_error, ati_sequence;
     struct k_mutex settings_lock, power_lock;
     struct k_sem transition_sem, rdy_sem;
     int pm_suspended, requested_enabled, output_enabled, request_generation, transition_result;

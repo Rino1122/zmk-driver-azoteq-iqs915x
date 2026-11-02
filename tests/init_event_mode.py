@@ -86,7 +86,7 @@ struct iqs915x_data {
   uint16_t init_pending_cfg, confirmed_config_settings;
   uint32_t applied_generation, transition_generation;
   int requested_enabled, output_enabled, rdy_sem;
-  int actual_mode, probe_failures, lifecycle, ati_error;
+  int actual_mode, probe_failures, lifecycle, ati_error, ati_sequence;
   int64_t ati_deadline;
   bool is_touching, streaming_expected, ati_error_seen, comm_fallback_active;
   uint16_t confirmed_mode, init_data_offset;
@@ -105,6 +105,7 @@ static uint16_t last_write_reg, last_write_value;
 struct iqs915x_stream_data { uint16_t info_flags; };
 static int atomic_get(const int *value) { return *value; }
 static void atomic_set(int *value, int next) { *value = next; }
+static void atomic_inc(int *value) { (*value)++; }
 static void atomic_clear(int *value) { *value = 0; }
 static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
   (void)data; return 0;

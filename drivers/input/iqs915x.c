@@ -218,6 +218,18 @@ static bool iqs915x_deliver_contacts(struct iqs915x_data *data,
     x[i]=y[i]=UINT16_MAX;
     iqs915x_get_finger_coordinates(stream,i,&x[i],&y[i]);
   }
+  uint8_t valid=0;
+  for(unsigned i=0;i<4;i++)if(x[i]!=UINT16_MAX && y[i]!=UINT16_MAX)valid|=BIT(i);
+  uint8_t low = count ? valid & ~((stream->trackpad_flags >> 8)&15) : 0;
+  if(low!=data->diagnostic_low_confidence &&
+     (!data->diagnostic_confidence_ms || k_uptime_get()-data->diagnostic_confidence_ms>=1000)) {
+    data->diagnostic_confidence_ms=k_uptime_get();
+    LOG_WRN("contact health profile=%u fingers=%u valid=0x%02x low_confidence=0x%02x flags=0x%04x",
+            ((const struct iqs915x_config *)data->dev->config)->channel_profile,count,valid,low,stream->trackpad_flags);
+    for(unsigned i=0;i<4;i++)if(low&BIT(i))
+      LOG_WRN("contact health slot=%u x=%u y=%u (channel cause unknown)",i,x[i],y[i]);
+  }
+  data->diagnostic_low_confidence=low;
   struct iqs915x_contact_frame frame;
   uint8_t previous_mask = data->contacts.active;
   bool confirmation = data->contact_confirm_ms && (int64_t)(time / 1000) >= data->contact_confirm_ms;
@@ -1071,6 +1083,7 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
     data->pointer_resume_guard_frames = IQS915X_POINTER_RESUME_GUARD_FRAMES;
   }
   if (reati) {
+    atomic_inc(&data->ati_sequence);
     LOG_INF("reati occurred flags=0x%04x mode=%u enabled=%u t=%lld", info,
             info & IQS915X_CHARGING_MODE_MASK,
             (unsigned int)atomic_get(&data->requested_enabled),
@@ -2731,6 +2744,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     data->ati_error_seen = !!(stream.info_flags & IQS915X_ATI_ERROR);
     if (stream.info_flags & IQS915X_REATI_OCCURRED)
     {
+      atomic_inc(&data->ati_sequence);
       LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
       // Re-ATI完了後にEvent Modeを明示writeする

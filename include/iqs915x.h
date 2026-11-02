@@ -68,6 +68,7 @@ struct iqs915x_status {
   enum iqs915x_mode requested_mode;
   enum iqs915x_mode actual_mode;
   bool transitioning;
+  uint32_t ati_sequence; /* Incremented once per fresh TP Re-ATI notification. */
   bool ati_error; /* Cached TP calibration health; independent of power/lifecycle. */
   int last_error;
   uint32_t generation;
