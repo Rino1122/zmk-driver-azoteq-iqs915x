@@ -218,4 +218,14 @@ struct iqs915x_fault_snapshot {
 };
 int iqs915x_fault_get(const struct device *dev, struct iqs915x_fault_snapshot *out);
 
+/* First CONFIG_SETTINGS mismatch per MCU boot, retained across IC retries and
+ * terminal failure. raw[] is one 16-byte read from 0x11BC, not live registers. */
+struct iqs915x_mismatch_snapshot {
+  struct iqs915x_fault_snapshot evidence;
+  uint16_t expected, observed;
+  int raw_status;
+  uint8_t raw[16];
+};
+int iqs915x_mismatch_get(const struct device *dev, struct iqs915x_mismatch_snapshot *out);
+
 #endif /* ZMK_DRIVER_IQS915X_H_ */

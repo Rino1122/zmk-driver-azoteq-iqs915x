@@ -2721,6 +2721,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       break;
     }
 
+    iqs915x_mismatch_capture(data,data->init_pending_cfg,cfg);
     if (data->wait_count > IQS915X_INIT_EVENT_MODE_MAX_RETRIES)
     {
       LOG_ERR("Init: Event Mode + Manual Control did not stick "

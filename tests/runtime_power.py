@@ -139,7 +139,10 @@ static int i2c_write_read_dt(const struct i2c_dt_spec *i,const uint8_t *address,
   if (io_errors) { io_errors--; return -EIO; }
   uint16_t info=ic_mode|info_extra|(touch?IQS915X_GLOBAL_TP_TOUCH:0);
   if (reg==IQS915X_CONFIG_SETTINGS) { assert(len==2); put16(b,ic_cfg); }
-  else if (reg==IQS915X_SYSTEM_CONTROL) {assert(len==2);put16(b,ic_mode);}
+  else if (reg==IQS915X_SYSTEM_CONTROL) {
+    assert(len==2 || len==16);memset(b,0x5A,len);put16(b,ic_mode);
+    if(len==16)put16(b+2,ic_cfg);
+  }
   else if (reg==IQS915X_INFO_FLAGS) { assert(len==2); put16(b,info); info_extra = info == 0xEEEE ? 0 : info_extra & IQS915X_ATI_ERROR; }
   else {
     assert(reg==IQS915X_REL_X && len==44); memset(b,0,len);
@@ -203,6 +206,25 @@ static void until_idle(void) {
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
+  /* First mismatch survives subsequent writes, IC retry and terminal evidence. */
+  setup(true);d.lifecycle=IQS915X_INITIALIZING;d.init_step=INIT_CONFIRM_EVENT_MODE;d.wait_count=1;
+  ic_cfg=0x061e;iqs915x_mismatch_capture(&d,0x0d86,0x061e);
+  struct iqs915x_mismatch_snapshot mismatch;int first_txns=txns;
+  assert(!iqs915x_mismatch_get(&dev,&mismatch) && txns==first_txns && reads==2 && !writes);
+  assert(mismatch.expected==0x0d86 && mismatch.observed==0x061e && !mismatch.raw_status);
+  assert(mismatch.raw[2]==0x1e && mismatch.raw[3]==0x06 && mismatch.raw[4]==0x5A);
+  assert(mismatch.evidence.config==0x061e && mismatch.evidence.valid_mask==7);
+  ic_cfg=0x0d86;iqs915x_mismatch_capture(&d,0x0d86,0x0000);
+  assert(txns==first_txns); /* no recapture on retries */
+  info_extra=0xEEEE;iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(d.fault_snapshot.busy && d.fault_snapshot.error==-ETIMEDOUT);
+  assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.observed==0x061e && mismatch.evidence.restart_count==0);
+  setup(true);io_errors=1;iqs915x_mismatch_capture(&d,0x0d86,0x061e);
+  assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.raw_status==-EIO && mismatch.evidence.valid_mask==1);
+  setup(true);ic_cfg=0xEEEE;iqs915x_mismatch_capture(&d,0x0d86,0x061e);
+  assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.evidence.busy && !(mismatch.evidence.valid_mask&2));
+  setup(true);assert(iqs915x_mismatch_get(&dev,&mismatch)==-ENODATA);
+
   /* Explicit diagnostics must break a quiet Event-mode wait without a finger
    * or power-generation change, including an API wake inside the wait loop. */
   setup(true);atomic_set(&d.channel_pending,1);

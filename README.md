@@ -679,3 +679,15 @@ Probe read statuses, the original cause, init phase/retries and Suspend status a
 separate. There are at most three probe reads, no retry loops; normal I2C transaction
 timeouts still apply in addition to the init/recovery deadline. This is not a
 channel-reference capture and does not declare a faulty channel.
+
+### First initialization configuration mismatch
+
+The first non-busy CONFIG_SETTINGS mismatch is saved before rewriting or resetting
+the IC. `iqs915x_mismatch_get()` reads this independent MCU cache without I2C,
+including after the retry succeeds or terminal failure occurs. A 16-byte read from
+0x11BC saves Control/Config/Other/ALP bytes in one window, then a separate Info Flags
+read is attempted. No retries are added; later mismatches do not recapture.
+Expected/observed values are the original failed comparison, not later probes.
+Per-read results and valid masks separate unavailable/busy responses from values.
+Config/Control evidence is derived from the raw block, with the block's I/O status.
+The terminal evidence remains separate and is never overwritten by this getter.

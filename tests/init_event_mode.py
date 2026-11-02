@@ -114,6 +114,7 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
+static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
 static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data) { (void)data; }
 static void iqs915x_restart_initialization(const struct device *dev, const char *reason) {
   (void)reason; dev->data->init_step = INIT_FAILED;

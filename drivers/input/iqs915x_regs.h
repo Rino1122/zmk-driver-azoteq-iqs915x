@@ -509,6 +509,8 @@ struct iqs915x_data
     struct iqs915x_channel_snapshot channel_snapshot, channel_staging;
     struct iqs915x_fault_snapshot fault_snapshot;
     bool fault_snapshot_valid;
+    struct iqs915x_mismatch_snapshot mismatch_snapshot;
+    bool mismatch_snapshot_valid;
     uint8_t diagnostic_low_confidence;
     int64_t diagnostic_confidence_ms;
     uint8_t probe_failures;
