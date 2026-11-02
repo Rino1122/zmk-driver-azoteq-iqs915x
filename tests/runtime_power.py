@@ -139,6 +139,7 @@ static int i2c_write_read_dt(const struct i2c_dt_spec *i,const uint8_t *address,
   if (io_errors) { io_errors--; return -EIO; }
   uint16_t info=ic_mode|info_extra|(touch?IQS915X_GLOBAL_TP_TOUCH:0);
   if (reg==IQS915X_CONFIG_SETTINGS) { assert(len==2); put16(b,ic_cfg); }
+  else if (reg==IQS915X_SYSTEM_CONTROL) {assert(len==2);put16(b,ic_mode);}
   else if (reg==IQS915X_INFO_FLAGS) { assert(len==2); put16(b,info); info_extra = info == 0xEEEE ? 0 : info_extra & IQS915X_ATI_ERROR; }
   else {
     assert(reg==IQS915X_REL_X && len==44); memset(b,0,len);
@@ -222,7 +223,25 @@ int main(void) {
   assert(d.init_step==INIT_FAILED && d.init_restart_count==1);
   setup(true);iqs915x_terminal(&d,false,-ETIMEDOUT);
   assert(d.lifecycle==IQS915X_FAULT && d.actual_mode==IQS915X_POWER_SUSPEND);
-  assert(writes==1 && !reads); /* best effort stop, no polling/retry */
+  assert(writes==1 && reads==3); /* bounded evidence, then one Suspend */
+  assert(d.last_error==-ETIMEDOUT);
+  struct iqs915x_fault_snapshot fault;int evidence_txns=txns;
+  assert(!iqs915x_fault_get(&dev,&fault) && txns==evidence_txns);
+  assert(fault.error==-ETIMEDOUT && fault.stop_status==0 && fault.valid_mask==7);
+  assert(!fault.busy && fault.lifecycle==IQS915X_FAULT);
+  assert(!iqs915x_write_reg16(&dev,IQS915X_SYSTEM_CONTROL,IQS915X_SUSPEND));
+  assert(d.last_error==-ETIMEDOUT); /* later successful I/O cannot erase cause */
+  io_errors=1;assert(iqs915x_write_reg16(&dev,IQS915X_SYSTEM_CONTROL,IQS915X_SUSPEND)==-EIO);
+  assert(d.last_error==-ETIMEDOUT);
+  setup(true);info_extra=0xEEEE;iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(d.last_error==-ETIMEDOUT && reads==1 && writes==1);
+  assert(!iqs915x_fault_get(&dev,&fault) && fault.busy && !fault.valid_mask && fault.info==0xEEEE);
+  assert(fault.read_status[1]==-ENODATA);
+  setup(true);io_errors=2;iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(!iqs915x_fault_get(&dev,&fault) && fault.stop_status==-EIO && d.last_error==-ETIMEDOUT);
+  setup(true);io_errors=1;iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(!iqs915x_fault_get(&dev,&fault) && fault.read_status[0]==-EIO && !fault.valid_mask);
+
 
   /* A normal power cycle must not require all-up; an unresolved mode/fault
    * barrier must survive exactly the same sequence of power requests. */
@@ -547,6 +566,7 @@ def main():
     functions.append(block(SOURCE, 'static bool iqs915x_contact_probe_required('))
     functions.append(block(SOURCE, 'static int64_t iqs915x_contact_refresh_deadline('))
     functions.append(block(SOURCE, 'static bool iqs915x_deliver_contacts('))
+    functions.append((ROOT/'drivers/input/iqs915x_fault_diagnostics.inc').read_text())
     functions.append(SOURCE[a:b])
     functions.append((ROOT/'drivers/input/iqs915x_channel_diagnostics.inc').read_text())
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))

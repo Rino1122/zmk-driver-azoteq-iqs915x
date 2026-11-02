@@ -666,3 +666,16 @@ with zero-based 6x4 key positions computed from each 3x3 group. Disabled channel
 are excluded. ATI Error or low Confidence alone does not identify a faulty channel.
 Source: IQS9150/IQS9151 Datasheet v1.1, sections 7.1.4 and A.27 (87-88),
 https://www.azoteq.com/images/stories/pdf/IQS9150_IQS9151_datasheet.pdf .
+
+### Terminal-failure evidence
+
+Terminal lifecycle retains the original `last_error`; successful or failed cleanup
+I2C cannot erase it. Before best-effort Suspend, a one-time read-only probe captures
+Info Flags and, only when meaningful, Config Settings and System Control. Busy
+0xEEEE responses are raw evidence, never ordinary flags or configuration; the
+valid mask marks interpretable values. Absent devices are not probed.
+`iqs915x_fault_get()` returns this cached evidence without waking/retrying the IC.
+Probe read statuses, the original cause, init phase/retries and Suspend status are
+separate. There are at most three probe reads, no retry loops; normal I2C transaction
+timeouts still apply in addition to the init/recovery deadline. This is not a
+channel-reference capture and does not declare a faulty channel.

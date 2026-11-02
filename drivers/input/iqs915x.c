@@ -361,7 +361,8 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
   struct iqs915x_data *data = dev->data;
   k_sem_reset(&data->rdy_sem);
   int ret = i2c_write_dt(&config->i2c, buf, sizeof(buf));
-  atomic_set(&data->last_error, ret < 0 ? ret : 0);
+  if(atomic_get(&data->lifecycle)<IQS915X_ABSENT)
+    atomic_set(&data->last_error, ret < 0 ? ret : 0);
   data->comm_completed_ms = k_uptime_get();
   return ret;
 }
@@ -375,7 +376,9 @@ static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
   uint8_t buf[2];
   k_sem_reset(&((struct iqs915x_data *)dev->data)->rdy_sem);
   int ret = i2c_write_read_dt(&config->i2c, reg_addr, 2, buf, sizeof(buf));
-  atomic_set(&((struct iqs915x_data *)dev->data)->last_error, ret < 0 ? ret : 0);
+  struct iqs915x_data *data=dev->data;
+  if(atomic_get(&data->lifecycle)<IQS915X_ABSENT)
+    atomic_set(&data->last_error, ret < 0 ? ret : 0);
   ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
   if (ret < 0)
   {
@@ -994,6 +997,8 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * 有効化・無効化とも全ての制御段階をForce Commsで進める。
  * ============================================================ */
 
+#include "iqs915x_fault_diagnostics.inc"
+
 static void iqs915x_channels_cancel_pending(struct iqs915x_data *d) {
   if(atomic_cas(&d->channel_pending,1,0)) {
     k_mutex_lock(&d->channel_lock,K_FOREVER);
@@ -1013,13 +1018,22 @@ static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
   atomic_clear(&data->mode_transitioning);
   atomic_set(&data->lifecycle, absent ? IQS915X_ABSENT : IQS915X_FAULT);
   const struct iqs915x_config *cfg = data->dev->config;
+  iqs915x_fault_capture(data,error,absent);
+  int stop_status=-ENODATA;
   if (!absent) {
     int rc = iqs915x_write_reg16(data->dev, IQS915X_SYSTEM_CONTROL, IQS915X_SUSPEND);
+    stop_status=rc;
     if (rc == 0) {
       data->ic_suspended = true;
       atomic_set(&data->actual_mode, IQS915X_POWER_SUSPEND);
     } else LOG_WRN("terminal Suspend failed: %d", rc);
   }
+  k_mutex_lock(&data->channel_lock,K_FOREVER);
+  data->fault_snapshot.stop_status=stop_status;
+  k_mutex_unlock(&data->channel_lock);
+  LOG_ERR("terminal lifecycle=%u cause=%d init_step=%u reads=%u restarts=%u stop_status=%d",
+          (unsigned)atomic_get(&data->lifecycle),error,data->init_step,
+          data->wait_count,data->init_restart_count,stop_status);
   gpio_pin_interrupt_configure_dt(&cfg->rdy_gpio, GPIO_INT_DISABLE);
   iqs915x_complete_transition(data, error);
 }

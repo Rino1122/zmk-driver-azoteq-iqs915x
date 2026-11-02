@@ -507,6 +507,8 @@ struct iqs915x_data
     uint32_t channel_requested_generation;
     struct k_mutex channel_lock;
     struct iqs915x_channel_snapshot channel_snapshot, channel_staging;
+    struct iqs915x_fault_snapshot fault_snapshot;
+    bool fault_snapshot_valid;
     uint8_t diagnostic_low_confidence;
     int64_t diagnostic_confidence_ms;
     uint8_t probe_failures;

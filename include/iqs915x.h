@@ -205,4 +205,17 @@ int iqs915x_channels_start(const struct device *dev, uint32_t *id);
 int iqs915x_channels_page(const struct device *dev, uint32_t id, unsigned offset,
                            struct iqs915x_channel_page *out);
 
+/* Cached terminal-failure evidence, captured once before best-effort Suspend.
+ * valid_mask bits 0/1/2 mark meaningful Info/Config/Control values; busy 0xEEEE
+ * is retained in info but must never be interpreted as ordinary flags. */
+struct iqs915x_fault_snapshot {
+  int error, stop_status;
+  uint32_t captured_ms, wait_count;
+  uint16_t info, config, control;
+  int read_status[3];
+  uint8_t valid_mask, init_step, restart_count, lifecycle;
+  bool busy, rdy_active;
+};
+int iqs915x_fault_get(const struct device *dev, struct iqs915x_fault_snapshot *out);
+
 #endif /* ZMK_DRIVER_IQS915X_H_ */
