@@ -189,3 +189,19 @@ int iqs915x_apply_settings(const struct device *dev,
                            const struct iqs915x_settings *settings);
 
 #endif /* ZMK_DRIVER_IQS915X_H_ */
+
+#include <iqs915x_channel_capture.h>
+/* Explicit, nonblocking capture request. Requires READY, requested/actual Active.
+ * The sensor thread closes input while capturing; layer/power changes cancel it.
+ * No automatic/periodic capture is performed. IDs fence stale paged reads. */
+struct iqs915x_channel_page {
+  uint32_t id, started_ms, ended_ms;
+  int status;
+  uint16_t info_before, info_after, config_before;
+  uint16_t offset, count, values[IQS915X_CHANNEL_PAGE];
+  uint8_t disabled_mask;
+  bool mapping_valid;
+};
+int iqs915x_channels_start(const struct device *dev, uint32_t *id);
+int iqs915x_channels_page(const struct device *dev, uint32_t id, unsigned offset,
+                           struct iqs915x_channel_page *out);

@@ -55,6 +55,7 @@ static void atomic_set(atomic_t *p,int n) { *p=n; }
 static void atomic_clear(atomic_t *p) { *p=0; }
 static int k_mutex_lock(struct k_mutex *m, int64_t timeout) { (void)m; (void)timeout; return 0; }
 static void k_mutex_unlock(struct k_mutex *m) { (void)m; }
+static bool k_is_in_isr(void) { return false; }
 static bool device_is_ready(const struct device *dev) { return dev != NULL; }
 static void atomic_inc(atomic_t *v) { (*v)++; }
 static bool atomic_cas(atomic_t *v,int old,int next) { if (*v!=old) return false; *v=next; return true; }
@@ -200,6 +201,21 @@ static void until_idle(void) {
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 int main(void) {
+  setup(true);d.lifecycle=IQS915X_READY;
+  uint32_t capture_id=0,other_id=0;struct iqs915x_channel_page page;
+  assert(!iqs915x_channels_start(&dev,&capture_id) && capture_id);
+  assert(iqs915x_channels_start(&dev,&other_id)==-EBUSY);
+  assert(!iqs915x_channels_page(&dev,capture_id,0,&page) && page.status==-EINPROGRESS && !page.count);
+  assert(iqs915x_channels_page(&dev,capture_id+1,0,&page)==-ESTALE);
+  assert(iqs915x_channels_page(&dev,capture_id,216,&page)==-EINVAL);
+  d.request_generation++; /* Power/layer changes before service must cancel. */
+  atomic_clear(&d.channel_pending);iqs915x_channels_capture_pending(&d);
+  assert(!txns && !d.channel_running);
+  assert(!iqs915x_channels_page(&dev,capture_id,0,&page) && page.status==-ECANCELED);
+  assert(!iqs915x_channels_start(&dev,&capture_id));
+  iqs915x_terminal(&d,true,-ENODEV);
+  assert(!d.channel_pending && !iqs915x_channels_page(&dev,capture_id,0,&page) && page.status==-ECANCELED);
+
   setup(false);iqs915x_restart_initialization(&dev,"test missing notification");
   assert(d.init_step==INIT_SOFTWARE_RESET && d.init_restart_count==1);
   iqs915x_restart_initialization(&dev,"second missing notification");
@@ -512,11 +528,11 @@ int main(void) {
 
 def main():
     defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_TOTAL_TIMEOUT_MS|INIT_MAX_RESTARTS|INIT_REATI_MAX_WAIT|INIT_BUSY|INIT_BUSY_RETRY_MS|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
-    names = ['iqs915x_restart_initialization', 'iqs915x_request_generation', 'iqs915x_output_is_enabled',
+    names = ['iqs915x_channels_cancel_pending', 'iqs915x_restart_initialization', 'iqs915x_request_generation', 'iqs915x_output_is_enabled',
              'iqs915x_power_retry_backoff_ms', 'iqs915x_complete_transition',
              'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
              'iqs915x_config_settings_without_event_mode',
-             'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
+             'iqs915x_read_block', 'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
              'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
     functions = []
     for name in names:
@@ -532,6 +548,7 @@ def main():
     functions.append(block(SOURCE, 'static int64_t iqs915x_contact_refresh_deadline('))
     functions.append(block(SOURCE, 'static bool iqs915x_deliver_contacts('))
     functions.append(SOURCE[a:b])
+    functions.append((ROOT/'drivers/input/iqs915x_channel_diagnostics.inc').read_text())
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))
     power = (ROOT / 'drivers/input/iqs915x_power.c').read_text()
     for marker in ['static void iqs915x_set_pm_suspended(', 'static int iqs915x_request_enabled(',

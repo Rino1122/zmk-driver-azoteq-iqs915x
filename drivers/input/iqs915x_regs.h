@@ -503,6 +503,10 @@ struct iqs915x_data
     int64_t ati_deadline;
     atomic_t ati_error;
     atomic_t ati_sequence;
+    atomic_t channel_pending, channel_running;
+    uint32_t channel_requested_generation;
+    struct k_mutex channel_lock;
+    struct iqs915x_channel_snapshot channel_snapshot, channel_staging;
     uint8_t diagnostic_low_confidence;
     int64_t diagnostic_confidence_ms;
     uint8_t probe_failures;

@@ -87,7 +87,8 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data)
 
 static bool iqs915x_output_is_enabled(const struct iqs915x_data *data)
 {
-  return atomic_get(&data->output_enabled) != 0 && !atomic_get(&data->ati_error);
+  return atomic_get(&data->output_enabled) != 0 && !atomic_get(&data->ati_error) &&
+         !atomic_get(&data->channel_running);
 }
 
 static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
@@ -993,8 +994,17 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
  * 有効化・無効化とも全ての制御段階をForce Commsで進める。
  * ============================================================ */
 
+static void iqs915x_channels_cancel_pending(struct iqs915x_data *d) {
+  if(atomic_cas(&d->channel_pending,1,0)) {
+    k_mutex_lock(&d->channel_lock,K_FOREVER);
+    d->channel_snapshot.status=-ECANCELED;
+    k_mutex_unlock(&d->channel_lock);
+  }
+}
+
 static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
 {
+  iqs915x_channels_cancel_pending(data);
   atomic_clear(&data->output_enabled);
   data->enabled = false;
   iqs915x_reset_input_session(data);
@@ -1016,6 +1026,7 @@ static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
 
 static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
 {
+  iqs915x_channels_cancel_pending(data);
   atomic_set(&data->lifecycle, IQS915X_RECOVERING);
   data->init_deadline = k_uptime_get() + IQS915X_INIT_TOTAL_TIMEOUT_MS;
   data->probe_failures = 0;
@@ -2884,6 +2895,8 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
           generation, output, (unsigned int)atomic_get(&data->pm_suspended), data->power_force_comms);
 }
 
+#include "iqs915x_channel_diagnostics.inc"
+
 /* ============================================================
  * メインスレッド
  *
@@ -2971,6 +2984,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
+    if (atomic_cas(&data->channel_pending, 1, 0)) {
+      iqs915x_channels_capture_pending(data);
+      continue;
+    }
     iqs915x_apply_pending_power_request(data);
 
     if (data->ic_suspended) {
@@ -3552,6 +3569,9 @@ static int iqs915x_init(const struct device *dev)
       },
   };
   data->dev = dev;
+  k_mutex_init(&data->channel_lock);
+  data->channel_snapshot.id=k_cycle_get_32();
+  data->channel_snapshot.status=-ENODATA;
   data->init_deadline = k_uptime_get() + IQS915X_INIT_TOTAL_TIMEOUT_MS;
   atomic_set(&data->lifecycle, IQS915X_PROBING);
   atomic_set(&data->mode_transitioning, 1);

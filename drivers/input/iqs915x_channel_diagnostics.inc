@@ -1,0 +1,99 @@
+/* SPDX-License-Identifier: MIT */
+int iqs915x_channels_start(const struct device *dev, uint32_t *id) {
+  if(!dev || !device_is_ready(dev) || !id)return -EINVAL;
+  if(k_is_in_isr())return -EWOULDBLOCK;
+  struct iqs915x_data *d=dev->data;
+  if(atomic_get(&d->lifecycle)!=IQS915X_READY)return -ENODEV;
+  if(atomic_get(&d->requested_mode)!=IQS915X_POWER_ACTIVE ||
+     atomic_get(&d->actual_mode)!=IQS915X_POWER_ACTIVE ||
+     atomic_get(&d->mode_transitioning) || atomic_get(&d->pm_suspended))return -EACCES;
+  if(k_mutex_lock(&d->channel_lock,K_NO_WAIT))return -EBUSY;
+  int ret=0;
+  if(d->channel_snapshot.status==-EINPROGRESS)ret=-EBUSY;
+  else {
+    uint32_t next=d->channel_snapshot.id+1;if(!next)next=1;
+    d->channel_snapshot=(struct iqs915x_channel_snapshot){.id=next,.status=-EINPROGRESS};
+    *id=next;d->channel_requested_generation=iqs915x_request_generation(d);
+    atomic_set(&d->channel_pending,1);k_sem_give(&d->rdy_sem);
+  }
+  k_mutex_unlock(&d->channel_lock);return ret;
+}
+int iqs915x_channels_page(const struct device *dev,uint32_t id,unsigned offset,
+                          struct iqs915x_channel_page *out) {
+  if(!dev || !device_is_ready(dev) || !out || offset>=IQS915X_CHANNEL_COUNT)return -EINVAL;
+  struct iqs915x_data *d=dev->data;
+  if(k_mutex_lock(&d->channel_lock,K_NO_WAIT))return -EBUSY;
+  const struct iqs915x_channel_snapshot *s=&d->channel_snapshot;
+  int ret=!s->id ? -ENODATA : id && s->id!=id ? -ESTALE : 0;
+  if(!ret) {
+    *out=(struct iqs915x_channel_page){.id=s->id,.status=s->status,.offset=offset};
+    if(s->status!=-EINPROGRESS) {
+      out->started_ms=s->started_ms;out->ended_ms=s->ended_ms;
+      out->info_before=s->info_before;out->info_after=s->info_after;
+      out->config_before=s->config_before;out->mapping_valid=s->mapping_valid;
+      if(s->status==0) {
+        out->count=MIN(IQS915X_CHANNEL_PAGE,IQS915X_CHANNEL_COUNT-offset);
+        for(unsigned i=0;i<out->count;i++) {
+          out->values[i]=s->reference[offset+i];
+          if(iqs915x_channel_disabled(s,offset+i))out->disabled_mask|=BIT(i);
+        }
+      }
+    }
+  }
+  k_mutex_unlock(&d->channel_lock);return ret;
+}
+struct iqs_channel_context {struct iqs915x_data *data;uint32_t generation;};
+static int channel_read(void *ctx,uint16_t reg,uint8_t *buf,unsigned n) {
+  struct iqs_channel_context *c=ctx;return iqs915x_read_block(c->data->dev,reg,buf,n);
+}
+static int channel_write(void *ctx,uint16_t reg,uint16_t v) {
+  struct iqs_channel_context *c=ctx;return iqs915x_write_reg16(c->data->dev,reg,v);
+}
+static uint32_t channel_now(void *ctx) {(void)ctx;return (uint32_t)k_uptime_get();}
+static bool channel_valid(void *ctx) {
+  struct iqs_channel_context *c=ctx;struct iqs915x_data *d=c->data;
+  return c->generation==iqs915x_request_generation(d) &&
+    atomic_get(&d->lifecycle)==IQS915X_READY && !atomic_get(&d->pm_suspended) &&
+    atomic_get(&d->requested_mode)==IQS915X_POWER_ACTIVE;
+}
+static void iqs915x_channels_capture_pending(struct iqs915x_data *d) {
+  struct iqs_channel_context ctx={d,d->channel_requested_generation};
+  atomic_set(&d->channel_running,1);
+  iqs915x_reset_input_session(d);
+  struct iqs915x_channel_snapshot *s=&d->channel_staging;
+  memset(s,0,sizeof(*s));
+  k_mutex_lock(&d->channel_lock,K_FOREVER);s->id=d->channel_snapshot.id;
+  k_mutex_unlock(&d->channel_lock);
+  struct iqs915x_channel_io io={&ctx,channel_read,channel_write,channel_valid,channel_now};
+  iqs915x_channel_capture(&io,s);
+  if(!s->status) {
+    const struct iqs915x_config *cfg=d->dev->config;
+    unsigned at=0x1218-IQS915X_INIT_DATA_BASE_ADDR;
+    s->mapping_valid=cfg->init_data_len>=at+30 &&
+      !memcmp(s->mapping,cfg->init_data+at,30);
+    if(!s->mapping_valid)s->status=-ENOTSUP;
+  }
+  if(!s->status) {
+    iqs915x_runtime_info(d,s->info_after);
+    unsigned zeros=0,disabled=0;
+    for(unsigned i=0;i<IQS915X_CHANNEL_COUNT;i++) {
+      if(iqs915x_channel_disabled(s,i)){disabled++;continue;}
+      if(!s->reference[i]) {
+        zeros++;
+        LOG_WRN("channel diagnostic profile=%u capture=%u row=%u col=%u key_row=%u key_col=%u reference=0 (check candidate)",
+                ((const struct iqs915x_config *)d->dev->config)->channel_profile,s->id,
+                i/18,i%18,i/18/3,i%18/3);
+      }
+    }
+    (void)zeros;(void)disabled;
+    LOG_INF("channel diagnostic capture=%u zeros=%u disabled=%u info=0x%04x duration_ms=%u",
+            s->id,zeros,disabled,s->info_after,s->ended_ms-s->started_ms);
+  } else LOG_WRN("channel diagnostic capture=%u failed=%d restore_failed=%u",
+                 s->id,s->status,s->restore_failed);
+  k_mutex_lock(&d->channel_lock,K_FOREVER);d->channel_snapshot=*s;
+  k_mutex_unlock(&d->channel_lock);
+  atomic_clear(&d->channel_running);
+  bool reset=(s->info_before!=0xEEEE && (s->info_before & IQS915X_SHOW_RESET)) ||
+             (s->info_after!=0xEEEE && (s->info_after & IQS915X_SHOW_RESET));
+  if(s->restore_failed || reset)iqs915x_runtime_reset(d,"diagnostic restore/reset boundary");
+}

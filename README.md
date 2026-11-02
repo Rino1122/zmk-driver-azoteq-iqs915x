@@ -643,3 +643,26 @@ ATI Error gates both Mouse and raw-contact output, ends the session on error/rec
 and never pins Active, polls a held contact, or issues periodic host ATI requests.
 `iqs915x_status.ati_error` is cached MCU state for a local indicator, not an I2C read.
 Terminal set_mode records UI intent only; it cannot restart a latched sensor.
+
+## Explicit channel reference diagnostics
+
+`iqs915x_channels_start()` queues a capture on the sensor thread; it requires
+READY and requested/actual Active and never wakes an unselected/LP2/Suspend IC.
+`iqs915x_channels_page()` reads cached 8-value pages fenced by capture ID.
+`-EINPROGRESS`, cancellation, I/O, timeout, mapping mismatch and stale IDs are
+separate results; partial captures are never returned as successful pages.
+
+Capture temporarily closes input and disables TP/ALP automatic Re-ATI, verifies
+the setting, reads the packed 18x12 references from 0xB000 in 16-byte transactions,
+reads actual channel disables and RxTx mapping, checks status and restores/verifies
+the original configuration on every exit. Request generation changes cancel it.
+A failed restore routes into bounded normal recovery. The capture deadline is
+2000 ms (plus bounded I2C/restore time). No automatic or periodic captures occur.
+
+The snapshot supports only the verified 18x12 mapping in the configured init-data.
+Rows/columns correspond to physical grid positions; both halves use the same
+orientation. Enabled zero-reference channels are logged as check candidates,
+with zero-based 6x4 key positions computed from each 3x3 group. Disabled channels
+are excluded. ATI Error or low Confidence alone does not identify a faulty channel.
+Source: IQS9150/IQS9151 Datasheet v1.1, sections 7.1.4 and A.27 (87-88),
+https://www.azoteq.com/images/stories/pdf/IQS9150_IQS9151_datasheet.pdf .
