@@ -188,7 +188,6 @@ int iqs915x_validate_settings(const struct iqs915x_settings *settings);
 int iqs915x_apply_settings(const struct device *dev,
                            const struct iqs915x_settings *settings);
 
-#endif /* ZMK_DRIVER_IQS915X_H_ */
 
 #include <iqs915x_channel_capture.h>
 /* Explicit, nonblocking capture request. Requires READY, requested/actual Active.
@@ -205,3 +204,5 @@ struct iqs915x_channel_page {
 int iqs915x_channels_start(const struct device *dev, uint32_t *id);
 int iqs915x_channels_page(const struct device *dev, uint32_t id, unsigned offset,
                            struct iqs915x_channel_page *out);
+
+#endif /* ZMK_DRIVER_IQS915X_H_ */
