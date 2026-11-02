@@ -2749,14 +2749,20 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
       if (k_uptime_get() >= data->ati_deadline)
+      {
+        iqs915x_ati_timeout_capture(data);
         iqs915x_restart_initialization(dev, "ATI deadline read failed");
+      }
       return ret;
     }
 
     if (stream.info_flags == 0xEEEE)
     {
       if (k_uptime_get() >= data->ati_deadline)
+      {
+        iqs915x_ati_timeout_capture(data);
         iqs915x_restart_initialization(dev, "ATI busy deadline");
+      }
       // ICがまだビジー状態、次のRDYで再試行
       LOG_DBG("Init: IC busy (0xEEEE) during Re-ATI wait, cycle=%d",
               data->wait_count);
@@ -2797,6 +2803,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_ERR("Init: TP Re-ATI timeout at 5000 ms, reads=%d (flags=0x%04x)",
               data->wait_count, stream.info_flags);
+      iqs915x_ati_timeout_capture(data);
       iqs915x_restart_initialization(dev, "TP Re-ATI timeout");
       break;
     }

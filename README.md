@@ -691,3 +691,12 @@ Expected/observed values are the original failed comparison, not later probes.
 Per-read results and valid masks separate unavailable/busy responses from values.
 Config/Control evidence is derived from the raw block, with the block's I/O status.
 The terminal evidence remains separate and is never overwritten by this getter.
+
+The first initial Re-ATI timeout is retained separately with
+`iqs915x_ati_timeout_get()`. It captures Info/Config/Control before restarting the
+IC on an elapsed deadline (missing Occurred, busy or read failure). At most three
+read windows are used; busy or failed Info skips subsequent reads, and busy Config
+skips Control. No write or retry is added. Validity/read status must be checked;
+the reads are sequential, not atomic. The getter performs no I2C and survives IC
+retries/terminal failure until MCU reboot. stop_status is ENODATA because this
+capture precedes the restart, not a terminal Suspend.

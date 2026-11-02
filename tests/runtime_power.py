@@ -225,6 +225,24 @@ int main(void) {
   assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.evidence.busy && !(mismatch.evidence.valid_mask&2));
   setup(true);assert(iqs915x_mismatch_get(&dev,&mismatch)==-ENODATA);
 
+  /* Pre-reset ATI timeout record is bounded and independent of terminal evidence. */
+  setup(true);struct iqs915x_fault_snapshot ati;
+  assert(iqs915x_ati_timeout_get(&dev,&ati)==-ENODATA);
+  d.lifecycle=IQS915X_INITIALIZING;d.init_step=INIT_WAIT_REATI;d.wait_count=69;
+  ic_cfg=0x0c86;info_extra=IQS915X_ATI_ERROR;
+  iqs915x_ati_timeout_capture(&d);first_txns=txns;
+  assert(reads==3 && !writes && !iqs915x_ati_timeout_get(&dev,&ati) && txns==first_txns);
+  assert(ati.error==-ETIMEDOUT && ati.stop_status==-ENODATA && ati.valid_mask==7);
+  assert(ati.config==0x0c86 && ati.wait_count==69 && ati.init_step==INIT_WAIT_REATI);
+  iqs915x_ati_timeout_capture(&d);assert(txns==first_txns);
+  info_extra=0xEEEE;iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(!iqs915x_ati_timeout_get(&dev,&ati) && ati.config==0x0c86 && !ati.busy);
+  assert(d.fault_snapshot.busy && !d.mismatch_snapshot_valid);
+  setup(true);info_extra=0xEEEE;iqs915x_ati_timeout_capture(&d);
+  assert(reads==1 && !iqs915x_ati_timeout_get(&dev,&ati) && ati.busy && !ati.valid_mask);
+  setup(true);io_errors=1;iqs915x_ati_timeout_capture(&d);
+  assert(!iqs915x_ati_timeout_get(&dev,&ati) && ati.read_status[0]==-EIO && !ati.valid_mask);
+
   /* Explicit diagnostics must break a quiet Event-mode wait without a finger
    * or power-generation change, including an API wake inside the wait loop. */
   setup(true);atomic_set(&d.channel_pending,1);

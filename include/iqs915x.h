@@ -217,6 +217,8 @@ struct iqs915x_fault_snapshot {
   bool busy, rdy_active;
 };
 int iqs915x_fault_get(const struct device *dev, struct iqs915x_fault_snapshot *out);
+/* First initial Re-ATI timeout, captured before reset; cached until MCU reboot. */
+int iqs915x_ati_timeout_get(const struct device *dev, struct iqs915x_fault_snapshot *out);
 
 /* First CONFIG_SETTINGS mismatch per MCU boot, retained across IC retries and
  * terminal failure. raw[] is one 16-byte read from 0x11BC, not live registers. */

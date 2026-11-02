@@ -114,10 +114,13 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
+static unsigned timeout_captures;
+static void iqs915x_ati_timeout_capture(struct iqs915x_data *d){assert(d->init_step==INIT_WAIT_REATI);timeout_captures++;}
 static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
 static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data) { (void)data; }
 static void iqs915x_restart_initialization(const struct device *dev, const char *reason) {
-  (void)reason; dev->data->init_step = INIT_FAILED;
+  (void)reason; if(dev->data->init_step==INIT_WAIT_REATI)assert(timeout_captures);
+  dev->data->init_step = INIT_FAILED;
 }
 static int gpio_pin_get_dt(const int *gpio) { (void)gpio; rdy_checks++; return reati_ready; }
 static void k_sem_give(int *sem) { *sem = 1; }
@@ -293,7 +296,7 @@ int main(void) {
   for(int i=0;i<100;i++){reati_ready=true;run(&dev,1);}
   assert(data.init_step==INIT_WAIT_REATI); /* even after >61 reads */
   now=5000;reati_ready=false;run(&dev,1);
-  assert(data.init_step==INIT_FAILED); /* final deadline read */
+  assert(data.init_step==INIT_FAILED && timeout_captures==1); /* captured before restart */
   now=0;
 
   /* Real SHOW_RESET retains the full init-data transfer path. */
