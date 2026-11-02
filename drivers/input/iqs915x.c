@@ -1176,11 +1176,13 @@ static bool iqs915x_wait_window(struct iqs915x_data *data, bool force, int64_t t
 {
   const struct iqs915x_config *config = data->dev->config;
   int64_t watchdog = data->comm_completed_ms + 3LL * iqs915x_sampling_period(data);
-  if (data->applied_generation != iqs915x_request_generation(data)) { return false; }
+  if (atomic_get(&data->channel_pending) ||
+      data->applied_generation != iqs915x_request_generation(data)) { return false; }
   if (force) { return true; }
   for (;;)
   {
-    if (data->applied_generation != iqs915x_request_generation(data)) { return false; }
+    if (atomic_get(&data->channel_pending) ||
+      data->applied_generation != iqs915x_request_generation(data)) { return false; }
     if (gpio_pin_get_dt(&config->rdy_gpio) > 0)
     {
       k_sem_reset(&data->rdy_sem);
@@ -2589,6 +2591,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read retained CONFIG_SETTINGS: %d", ret);
       return ret;
     }
+    if(cfg==0xEEEE)return IQS915X_INIT_BUSY;
     data->init_pending_cfg = iqs915x_config_settings_without_event_mode(cfg);
     data->init_step = INIT_SET_STREAMING;
     break;
@@ -2635,6 +2638,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       LOG_ERR("Failed to read CONFIG_SETTINGS: %d", ret);
       return ret;
     }
+    if(cfg==0xEEEE)return IQS915X_INIT_BUSY;
     data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->wait_count = 0;
     data->init_step = INIT_SET_EVENT_MODE;
@@ -2658,13 +2662,15 @@ static int iqs915x_init_step_handler(const struct device *dev)
   {
     uint16_t cfg = 0;
 
-    data->wait_count++;
     ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &cfg);
     if (ret < 0)
     {
       LOG_ERR("Failed to confirm CONFIG_SETTINGS: %d", ret);
       return ret;
     }
+
+    if(cfg==0xEEEE)return IQS915X_INIT_BUSY;
+    data->wait_count++;
 
     uint16_t expected = IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT |
                         IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT;
@@ -2955,8 +2961,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         enum iqs915x_init_step previous_step = data->init_step;
 
         ret = iqs915x_init_step_handler(dev);
-        if (ret == 0) data->probe_failures = 0;
-        if (previous_step == INIT_CHECK_SHOW_RESET && ret == IQS915X_INIT_BUSY)
+        if (ret == 0 || ret == IQS915X_INIT_BUSY) data->probe_failures = 0;
+        if (ret == IQS915X_INIT_BUSY)
         {
           // The read consumed the previous RDY notification. Wake on the next
           // RDY instead of sleeping through it. A bounded wait also retries via
@@ -3053,7 +3059,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       forced_contact = true;
       window = iqs915x_wait_window(data, true, INT64_MAX);
     }
-    if (data->applied_generation != iqs915x_request_generation(data)) { continue; }
+    if (atomic_get(&data->channel_pending) ||
+        data->applied_generation != iqs915x_request_generation(data)) { continue; }
     struct iqs915x_stream_data stream = {0};
     uint64_t sample_time_us = 0;
     if (!window)

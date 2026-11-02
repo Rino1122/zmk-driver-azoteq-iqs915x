@@ -256,6 +256,16 @@ int main(void) {
     assert(data.initialized && !data.streaming_expected);
     assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_ALP_EVENT));
   }
+  /* A busy configuration is never converted into a policy write or mismatch.
+   * Event waiting remains bounded by the outer startup deadline. */
+  data=setup(false);data.init_step=INIT_PREPARE_EVENT_MODE;ic_cfg=0xEEEE;
+  run(&dev,5);assert(data.init_step==INIT_PREPARE_EVENT_MODE && !writes && busy_waits==5);
+  ic_cfg=0;run(&dev,1);assert(data.init_step==INIT_SET_EVENT_MODE);
+  run(&dev,1);assert(data.init_step==INIT_CONFIRM_EVENT_MODE);
+  ic_cfg=0xEEEE;run(&dev,5);
+  assert(data.init_step==INIT_CONFIRM_EVENT_MODE && data.wait_count==0 && writes==1);
+  ic_cfg=iqs915x_apply_config_settings_policy(0);run(&dev,1);
+  assert(data.initialized);
   /* Warm MCU boot retains calibration, including a recoverable ATI error. */
   for (int enabled=0;enabled<2;enabled++) {
     data=setup(enabled);data.init_step=INIT_CHECK_SHOW_RESET;

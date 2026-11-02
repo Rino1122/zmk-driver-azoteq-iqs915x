@@ -97,7 +97,7 @@ static int gpio_pin_get_dt(const struct gpio_dt_spec *g) {
 }
 static int k_sem_take(struct k_sem *s,k_timeout_t timeout) {
   sem_waits++;
-  if (wait_hook && timeout==2000) wait_hook();
+  if (wait_hook && (timeout==2000 || timeout==K_FOREVER)) wait_hook();
   if (s->count) { s->count=0; return 0; }
   if (timeout==K_FOREVER) { parked++; return -1; }
   int64_t end=now+timeout;
@@ -201,7 +201,18 @@ static void until_idle(void) {
   for (int i=0;i<40 && d.work_state!=WORK_READ_DATA;i++) run(&d,1);
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
+static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
+  /* Explicit diagnostics must break a quiet Event-mode wait without a finger
+   * or power-generation change, including an API wake inside the wait loop. */
+  setup(true);atomic_set(&d.channel_pending,1);
+  assert(!iqs915x_wait_window(&d,false,INT64_MAX) && !txns && !sem_waits);
+  setup(true);atomic_set(&d.channel_pending,1);
+  assert(!iqs915x_wait_window(&d,true,INT64_MAX) && !txns);
+  setup(true);wait_hook=diagnostic_wake;
+  assert(!iqs915x_wait_window(&d,false,INT64_MAX) && !txns && sem_waits==1);
+  wait_hook=NULL;
+
   setup(true);d.lifecycle=IQS915X_READY;
   uint32_t capture_id=0,other_id=0;struct iqs915x_channel_page page;
   assert(!iqs915x_channels_start(&dev,&capture_id) && capture_id);
