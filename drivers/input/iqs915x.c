@@ -317,6 +317,8 @@ static void iqs915x_report_pointer_pair(struct iqs915x_data *data,
 
 static uint16_t iqs915x_apply_config_settings_policy(uint16_t cfg)
 {
+  /* Repair retained settings to the clock-stretch + STOP contract too. */
+  cfg &= ~(IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS);
   cfg |= IQS915X_EVENT_MODE | IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT;
   cfg |= IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT;
   cfg &= ~(IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT |

@@ -41,6 +41,7 @@ def main():
         "IQS915X_SWITCH_EVENT", "IQS915X_SNAP_EVENT",
         "IQS915X_ALP_REATI_ENABLE", "IQS915X_ALP_EVENT", "IQS915X_MODE_ACTIVE",
         "IQS915X_INIT_EVENT_MODE_MAX_RETRIES", "IQS915X_POINTER_RESUME_GUARD_FRAMES",
+        "IQS915X_FORCE_COMMS_METHOD", "IQS915X_TERMINATE_COMMS",
         "IQS915X_INIT_BUSY_RETRY_MS", "IQS915X_INIT_BUSY", "IQS915X_ATI_ERROR", "IQS915X_INIT_ATI_TIMEOUT_MS",
     )
     definitions = "\n".join(
@@ -203,6 +204,8 @@ static struct iqs915x_data setup(bool enabled) {
   };
 }
 int main(void) {
+  assert(!(iqs915x_apply_config_settings_policy(0x0de6) &
+           (IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS)));
   (void)k_sleep; /* The old driver does not call the backoff stub. */
   const struct iqs915x_config config = {0};
   struct iqs915x_data data = setup(false);
