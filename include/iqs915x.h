@@ -68,11 +68,13 @@ struct iqs915x_status {
   enum iqs915x_mode requested_mode;
   enum iqs915x_mode actual_mode;
   bool transitioning;
+  bool ati_error; /* Cached TP calibration health; independent of power/lifecycle. */
   int last_error;
   uint32_t generation;
 };
 /** Nonblocking mode request; does not retry a terminal device. Suspend is the
- * IC's data-retaining Suspend bit, not LP2. It closes output immediately.
+ * IC's data-retaining Suspend bit, not LP2. Terminal devices record the
+ * requested mode for UI indication only and never perform hardware I/O. It closes output immediately.
  * Waking from Suspend triggers the IC's automatic reseed. Device PM uses
  * Suspend and restores the previous requested mode on resume. */
 int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode);

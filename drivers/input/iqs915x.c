@@ -44,7 +44,9 @@ static const uint8_t iqs915x_device_api = 0;
 
 #define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
 #define IQS915X_INIT_CHUNK_WRITE_MAX_RETRIES 3
-#define IQS915X_INIT_MAX_RESTARTS 3
+#define IQS915X_INIT_MAX_RESTARTS 1
+#define IQS915X_INIT_ATI_TIMEOUT_MS 5000
+#define IQS915X_INIT_TOTAL_TIMEOUT_MS 15000
 #define IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT 10
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
@@ -85,7 +87,7 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data)
 
 static bool iqs915x_output_is_enabled(const struct iqs915x_data *data)
 {
-  return atomic_get(&data->output_enabled) != 0;
+  return atomic_get(&data->output_enabled) != 0 && !atomic_get(&data->ati_error);
 }
 
 static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
@@ -989,6 +991,13 @@ static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
   atomic_clear(&data->mode_transitioning);
   atomic_set(&data->lifecycle, absent ? IQS915X_ABSENT : IQS915X_FAULT);
   const struct iqs915x_config *cfg = data->dev->config;
+  if (!absent) {
+    int rc = iqs915x_write_reg16(data->dev, IQS915X_SYSTEM_CONTROL, IQS915X_SUSPEND);
+    if (rc == 0) {
+      data->ic_suspended = true;
+      atomic_set(&data->actual_mode, IQS915X_POWER_SUSPEND);
+    } else LOG_WRN("terminal Suspend failed: %d", rc);
+  }
   gpio_pin_interrupt_configure_dt(&cfg->rdy_gpio, GPIO_INT_DISABLE);
   iqs915x_complete_transition(data, error);
 }
@@ -996,7 +1005,7 @@ static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
 static void iqs915x_runtime_reset(struct iqs915x_data *data, const char *reason)
 {
   atomic_set(&data->lifecycle, IQS915X_RECOVERING);
-  data->init_deadline = k_uptime_get() + 10000;
+  data->init_deadline = k_uptime_get() + IQS915X_INIT_TOTAL_TIMEOUT_MS;
   data->probe_failures = 0;
   data->ic_suspended = false;
   atomic_clear(&data->output_enabled);
@@ -1052,19 +1061,16 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
       LOG_INF("reati error=0 flags=0x%04x t=%lld", info, (long long)k_uptime_get());
     }
   }
+  bool changed = error != data->ati_error_seen;
   data->ati_error_seen = error;
-  if (reati)
-  {
-    bool reopen = iqs915x_output_is_enabled(data);
-    uint32_t generation = iqs915x_request_generation(data);
-    atomic_clear(&data->output_enabled);
+  atomic_set(&data->ati_error, error);
+  if (changed || reati) {
+    /* End the old epoch on both error and recovery. Power requests remain
+     * independent; a stationary error must not trigger periodic acquisition. */
     iqs915x_reset_input_session(data);
     data->pointer_resume_guard_frames = IQS915X_POINTER_RESUME_GUARD_FRAMES;
-    if (reopen && generation == iqs915x_request_generation(data) &&
-        atomic_get(&data->requested_enabled) && !atomic_get(&data->pm_suspended))
-    {
-      atomic_set(&data->output_enabled, 1);
-    }
+  }
+  if (reati) {
     LOG_INF("reati occurred flags=0x%04x mode=%u enabled=%u t=%lld", info,
             info & IQS915X_CHARGING_MODE_MASK,
             (unsigned int)atomic_get(&data->requested_enabled),
@@ -2318,9 +2324,11 @@ static int iqs915x_init_step_handler(const struct device *dev)
       if (ret > 0) { data->init_step = INIT_SOFTWARE_RESET; break; }
       // ICが設定を保持しているwarm bootではinit-dataを再転送しない。
       // Event ModeのLP2が保持されていても、ActiveでTP Re-ATIを要求する。
-      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Retaining init-data; requesting Re-ATI.",
+      LOG_INF("Init: SHOW_RESET is not set (0x%04x). Retaining init-data and calibration.",
               info_flags);
-      data->init_step = INIT_PREPARE_STREAMING;
+      atomic_set(&data->ati_error, !!(info_flags & IQS915X_ATI_ERROR));
+      data->ati_error_seen = !!(info_flags & IQS915X_ATI_ERROR);
+      data->init_step = INIT_PREPARE_EVENT_MODE;
     }
     break;
   }
@@ -2340,11 +2348,6 @@ static int iqs915x_init_step_handler(const struct device *dev)
   case INIT_WAIT_SOFTWARE_RESET:
   {
     data->wait_count++;
-    if (data->wait_count <= 10)
-    {
-      LOG_DBG("Init: Pausing for SW Reset (%d/10)", data->wait_count);
-      break;
-    }
 
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
@@ -2577,6 +2580,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
     LOG_INF("Init: Re-ATI requested");
     data->init_step = INIT_WAIT_REATI;
+    data->ati_deadline = k_uptime_get() + IQS915X_INIT_ATI_TIMEOUT_MS;
     data->wait_count = 0;
     break;
   }
@@ -2645,7 +2649,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       data->confirmed_mode = IQS915X_MODE_ACTIVE;
       atomic_set(&data->actual_mode, IQS915X_POWER_ACTIVE);
       data->streaming_expected = !(cfg & IQS915X_EVENT_MODE);
-      data->ati_error_seen = false;
+      /* Preserve calibration health observed during startup. */
       data->comm_fallback_active = false;
       data->applied_generation = iqs915x_request_generation(data);
       data->transition_generation = data->applied_generation;
@@ -2697,11 +2701,15 @@ static int iqs915x_init_step_handler(const struct device *dev)
     if (ret < 0)
     {
       LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
-      return ret; // 次のRDYでリトライ
+      if (k_uptime_get() >= data->ati_deadline)
+        iqs915x_restart_initialization(dev, "ATI deadline read failed");
+      return ret;
     }
 
     if (stream.info_flags == 0xEEEE)
     {
+      if (k_uptime_get() >= data->ati_deadline)
+        iqs915x_restart_initialization(dev, "ATI busy deadline");
       // ICがまだビジー状態、次のRDYで再試行
       LOG_DBG("Init: IC busy (0xEEEE) during Re-ATI wait, cycle=%d",
               data->wait_count);
@@ -2719,6 +2727,8 @@ static int iqs915x_init_step_handler(const struct device *dev)
     // REATI_OCCURRED (bit4) フラグでTP Re-ATI完了を検出する。
     // この段階で要求したTP Re-ATIの完了を初期化完了の必須条件にする。
     // このフラグはRe-ATIが実行されたRDYサイクルで1回だけセットされる
+    atomic_set(&data->ati_error, !!(stream.info_flags & IQS915X_ATI_ERROR));
+    data->ati_error_seen = !!(stream.info_flags & IQS915X_ATI_ERROR);
     if (stream.info_flags & IQS915X_REATI_OCCURRED)
     {
       LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
@@ -2735,9 +2745,9 @@ static int iqs915x_init_step_handler(const struct device *dev)
               stream.info_flags);
     }
 
-    if (data->wait_count > IQS915X_INIT_REATI_MAX_WAIT)
+    if (k_uptime_get() >= data->ati_deadline)
     {
-      LOG_ERR("Init: TP Re-ATI timeout after %d cycles (flags=0x%04x)",
+      LOG_ERR("Init: TP Re-ATI timeout at 5000 ms, reads=%d (flags=0x%04x)",
               data->wait_count, stream.info_flags);
       iqs915x_restart_initialization(dev, "TP Re-ATI timeout");
       break;
@@ -2898,7 +2908,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           data->init_step == INIT_PREPARE_EVENT_MODE ||
           data->init_step == INIT_SET_EVENT_MODE ||
           data->init_step == INIT_CONFIRM_EVENT_MODE ||
-          data->init_step == INIT_SOFTWARE_RESET)
+          data->init_step == INIT_SOFTWARE_RESET ||
+          data->init_step == INIT_WAIT_SOFTWARE_RESET)
       {
         enum iqs915x_init_step previous_step = data->init_step;
 
@@ -2914,6 +2925,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         else if (ret < 0 && ret != IQS915X_INIT_BUSY) {
           if (++data->probe_failures >= 3) iqs915x_terminal(data, true, ret);
           else k_sleep(K_MSEC(100));
+        }
+        else if (previous_step == INIT_WAIT_SOFTWARE_RESET) {
+          k_sleep(K_MSEC(20));
         }
         else if (data->init_step == previous_step)
         {
@@ -2934,7 +2948,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         k_sem_give(&data->rdy_sem);
       }
       ret = k_sem_take(&data->rdy_sem, K_MSEC(100));
-      if (ret == 0) {
+      if (ret == 0 || (data->init_step == INIT_WAIT_REATI &&
+                       k_uptime_get() >= data->ati_deadline)) {
         iqs915x_init_step_handler(dev);
       } else {
         LOG_WRN("Timed out waiting for IQS915x RDY during initialization");
@@ -3523,7 +3538,7 @@ static int iqs915x_init(const struct device *dev)
       },
   };
   data->dev = dev;
-  data->init_deadline = k_uptime_get() + 10000;
+  data->init_deadline = k_uptime_get() + IQS915X_INIT_TOTAL_TIMEOUT_MS;
   atomic_set(&data->lifecycle, IQS915X_PROBING);
   atomic_set(&data->mode_transitioning, 1);
   atomic_set(&data->requested_mode, config->disabled_by_default ? IQS915X_POWER_SUSPEND : IQS915X_POWER_ACTIVE);

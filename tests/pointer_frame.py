@@ -27,6 +27,7 @@ harness = r'''
 #define LOG_WRN(...) ((void)0)
 struct device { int unused; };
 struct iqs915x_data {
+  int ati_error;
   const struct device *dev;
   int output_enabled, request_generation;
 };

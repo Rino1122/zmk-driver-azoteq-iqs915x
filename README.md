@@ -625,3 +625,21 @@ Re-ATI. A mismatch requests software reset and the full verified init transfer;
 I2C errors return through the existing init retry path. This prevents an older
 right-side mask surviving a firmware update on the left IC. No runtime polling
 or per-contact processing is added by channel profiles.
+
+## Startup and calibration recovery
+
+Cold startup writes the profile in Streaming/Manual Active, clears Show Reset,
+and requests TP Re-ATI once. Wait for Occurred for 5000 ms using elapsed time,
+including one final status transaction if RDY is missing. A missing notification
+permits one software reset/reinitialization; total startup/recovery is bounded
+by 15000 ms. Final failure attempts Suspend once and latches until MCU reboot.
+Software-reset status checks are forced, not dependent on RDY edge counts.
+
+Warm MCU startup checks retained geometry/channel masks, wakes the IC, and restores
+Event Mode without requesting ATI or reseed. Mismatched profiles still reinitialize.
+Occurred may coexist with ATI Error: configuration completes and normal requested
+Active/LP2/Suspend policy resumes. TP automatic Re-ATI and its event remain enabled.
+ATI Error gates both Mouse and raw-contact output, ends the session on error/recovery,
+and never pins Active, polls a held contact, or issues periodic host ATI requests.
+`iqs915x_status.ati_error` is cached MCU state for a local indicator, not an I2C read.
+Terminal set_mode records UI intent only; it cannot restart a latched sensor.

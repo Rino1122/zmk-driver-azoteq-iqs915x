@@ -134,7 +134,12 @@ int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode)
   if (!dev || !device_is_ready(dev)) return -ENODEV;
   if ((unsigned)mode > IQS915X_POWER_SUSPEND) return -EINVAL;
   struct iqs915x_data *data = dev->data;
-  if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) return -ENODEV;
+  if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) {
+    /* Record user intent for the local error LED; never retry a latched IC. */
+    atomic_set(&data->requested_mode, mode);
+    atomic_set(&data->requested_enabled, mode == IQS915X_POWER_ACTIVE);
+    return 0;
+  }
   if (k_mutex_lock(&data->power_lock, K_NO_WAIT) < 0) return -EBUSY;
   int ret = -EBUSY;
   if (!atomic_get(&data->pm_suspended)) {
@@ -169,6 +174,7 @@ int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status)
     .lifecycle = atomic_get(&data->lifecycle),
     .requested_mode = atomic_get(&data->requested_mode),
     .actual_mode = atomic_get(&data->actual_mode),
+    .ati_error = atomic_get(&data->ati_error),
     .transitioning = atomic_get(&data->mode_transitioning),
     .last_error = atomic_get(&data->last_error),
     .generation = atomic_get(&data->request_generation),

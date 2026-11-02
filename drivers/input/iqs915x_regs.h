@@ -500,6 +500,8 @@ struct iqs915x_data
     atomic_t last_error;
     atomic_t mode_transitioning;
     int64_t init_deadline;
+    int64_t ati_deadline;
+    atomic_t ati_error;
     uint8_t probe_failures;
     uint8_t pm_saved_mode;
     bool ic_suspended;

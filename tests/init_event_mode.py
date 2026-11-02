@@ -41,7 +41,7 @@ def main():
         "IQS915X_SWITCH_EVENT", "IQS915X_SNAP_EVENT",
         "IQS915X_ALP_REATI_ENABLE", "IQS915X_ALP_EVENT", "IQS915X_MODE_ACTIVE",
         "IQS915X_INIT_EVENT_MODE_MAX_RETRIES", "IQS915X_POINTER_RESUME_GUARD_FRAMES",
-        "IQS915X_INIT_BUSY_RETRY_MS", "IQS915X_INIT_BUSY",
+        "IQS915X_INIT_BUSY_RETRY_MS", "IQS915X_INIT_BUSY", "IQS915X_ATI_ERROR", "IQS915X_INIT_ATI_TIMEOUT_MS",
     )
     definitions = "\n".join(
         re.search(r"^#define " + name + r"\b.*$", source + registers, re.M)[0]
@@ -86,13 +86,16 @@ struct iqs915x_data {
   uint16_t init_pending_cfg, confirmed_config_settings;
   uint32_t applied_generation, transition_generation;
   int requested_enabled, output_enabled, rdy_sem;
-  int actual_mode, probe_failures, lifecycle;
+  int actual_mode, probe_failures, lifecycle, ati_error;
+  int64_t ati_deadline;
   bool is_touching, streaming_expected, ati_error_seen, comm_fallback_active;
   uint16_t confirmed_mode, init_data_offset;
 };
 struct reset_gpio { int port; };
 struct iqs915x_config { int rdy_gpio; struct reset_gpio reset_gpio; };
 struct device { struct iqs915x_data *data; const struct iqs915x_config *config; };
+static int64_t now;
+static int64_t k_uptime_get(void) { return now; }
 static int busy_waits, busy_edges, read_error_code;
 static int writes, reads, sleeps, waits, rdy_checks, rejects, write_errors, read_errors;
 static uint16_t ic_cfg, ic_info;
@@ -150,7 +153,7 @@ static int iqs915x_read_reg16(const struct device *dev, uint16_t reg, uint16_t *
   *cfg = reg==IQS915X_CONFIG_SETTINGS ? ic_cfg : ic_info; return 0;
 }
 static int iqs915x_read_stream(const struct device *dev, struct iqs915x_stream_data *stream) {
-  (void)dev; assert(reati_ready); assert(!(ic_cfg & IQS915X_EVENT_MODE));
+  (void)dev; assert(reati_ready || now>=5000); assert(!(ic_cfg & IQS915X_EVENT_MODE));
   stream_reads++; stream->info_flags=ic_info; reati_ready=false; return 0;
 }
 static int gpio_is_ready_dt(const struct reset_gpio *gpio) { return gpio->port != 0; }
@@ -192,7 +195,7 @@ static struct iqs915x_data setup(bool enabled) {
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
   ic_cfg = ic_info = 0;
   reati_ready=reset_during_reati=false; reati_requests=stream_reads=0;
-  return (struct iqs915x_data){
+  return (struct iqs915x_data){.ati_deadline=5000,
     .init_step = INIT_SET_EVENT_MODE,
     .init_pending_cfg = iqs915x_apply_config_settings_policy(IQS915X_ALP_EVENT),
     .requested_enabled = enabled,
@@ -252,38 +255,32 @@ int main(void) {
     assert(data.initialized && !data.streaming_expected);
     assert((ic_cfg & IQS915X_EVENT_MODE) && !(ic_cfg & IQS915X_ALP_EVENT));
   }
-  /* A powered IC retained in LP2/Event Mode has no startup RDY. The first
-   * four control steps must force the check, Streaming setup, and TP Re-ATI. */
+  /* Warm MCU boot retains calibration, including a recoverable ATI error. */
   for (int enabled=0;enabled<2;enabled++) {
-    data=setup(enabled);
-    data.init_step=INIT_CHECK_SHOW_RESET;
-    ic_info=IQS915X_MODE_LP2;
+    data=setup(enabled);data.init_step=INIT_CHECK_SHOW_RESET;
+    ic_info=IQS915X_MODE_LP2 | IQS915X_ATI_ERROR;
     ic_cfg=iqs915x_apply_config_settings_policy(0) & ~IQS915X_TP_EVENT;
     run(&dev,1);
-    assert(data.init_step==INIT_PREPARE_STREAMING && reads==2 && writes==1);
-    run(&dev,1);
-    assert(data.init_step==INIT_SET_STREAMING && !(data.init_pending_cfg & IQS915X_EVENT_MODE));
-    write_errors=1; run(&dev,1);
-    assert(data.init_step==INIT_SET_STREAMING && sleeps==1);
-    run(&dev,1);
-    assert(data.init_step==INIT_REQUEST_REATI && data.streaming_expected);
-    run(&dev,1);
-    assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
-    assert(last_write_reg==IQS915X_SYSTEM_CONTROL && last_write_value==IQS915X_REATI_TP);
-    assert(!waits && !rdy_checks && !data.output_enabled);
+    assert(data.init_step==INIT_PREPARE_EVENT_MODE && data.ati_error);
     run(&dev,12);
-    assert(data.initialized && reati_requests==1 && stream_reads==1);
+    assert(data.initialized && reati_requests==0 && stream_reads==0);
     assert(!data.init_data_offset && !data.streaming_expected);
     assert(data.output_enabled==enabled && data.lp2_pending==!enabled);
     assert(ic_cfg & IQS915X_EVENT_MODE);
   }
-  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;ic_info=IQS915X_MODE_LP2;
-  mask_check_result=1;
-  run(&dev,1);assert(data.init_step==INIT_SOFTWARE_RESET && !reati_requests);
-  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;ic_info=IQS915X_MODE_LP2;
-  mask_check_result=-EIO;
-  assert(iqs915x_init_step_handler(&dev)==-EIO && data.init_step==INIT_CHECK_SHOW_RESET);
-  mask_check_result=0;
+  /* An Occurred notification with ATI Error completes configuration, leaving
+   * calibration recovery to the IC. No notification uses elapsed time. */
+  data=setup(true);data.init_step=INIT_WAIT_REATI;data.ati_deadline=5000;
+  ic_cfg=0;reati_ready=true;ic_info=IQS915X_REATI_OCCURRED|IQS915X_ATI_ERROR;
+  run(&dev,1);assert(data.init_step==INIT_PREPARE_EVENT_MODE && data.ati_error);
+  data=setup(false);data.init_step=INIT_WAIT_REATI;data.ati_deadline=5000;
+  ic_cfg=0;ic_info=0;now=4999;
+  for(int i=0;i<100;i++){reati_ready=true;run(&dev,1);}
+  assert(data.init_step==INIT_WAIT_REATI); /* even after >61 reads */
+  now=5000;reati_ready=false;run(&dev,1);
+  assert(data.init_step==INIT_FAILED); /* final deadline read */
+  now=0;
+
   /* Real SHOW_RESET retains the full init-data transfer path. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET;
   data.init_data_offset=123; data.init_chunk_retry_count=2;
@@ -296,8 +293,8 @@ int main(void) {
   run(&dev,1); assert(data.init_step==INIT_CHECK_SHOW_RESET && !sleeps && busy_waits==1 && !writes);
   ic_info=IQS915X_MODE_LP2; run(&dev,1);
   read_errors=1; run(&dev,1);
-  assert(data.init_step==INIT_PREPARE_STREAMING && sleeps==1);
-  run(&dev,12); assert(data.initialized && reati_requests==1);
+  assert(data.init_step==INIT_PREPARE_EVENT_MODE && sleeps==1);
+  run(&dev,12); assert(data.initialized && reati_requests==0);
   /* A new RDY wakes the busy wait and the very next check starts transfer. */
   data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET; ic_info=0xEEEE;
   busy_edges=1;
@@ -311,13 +308,11 @@ int main(void) {
   assert(data.init_step==INIT_CHECK_SHOW_RESET && sleeps==1 && !busy_waits);
   ic_info=IQS915X_SHOW_RESET; run(&dev,1);
   assert(data.init_step==INIT_WRITE_INIT_DATA && reads==2);
-  /* An actual IC reset during warm Re-ATI must return to the full path. */
-  data=setup(false); data.init_step=INIT_CHECK_SHOW_RESET;
-  ic_info=IQS915X_MODE_LP2; reset_during_reati=true;
-  run(&dev,5);
-  assert(!data.initialized && data.init_step==INIT_CHECK_SHOW_RESET);
-  run(&dev,1);
-  assert(data.init_step==INIT_WRITE_INIT_DATA && !data.output_enabled);
+  /* A new reset while waiting for a cold ATI returns to full transfer. */
+  data=setup(false);data.init_step=INIT_WAIT_REATI;
+  ic_cfg=0;ic_info=IQS915X_SHOW_RESET;reati_ready=true;
+  run(&dev,1);assert(data.init_step==INIT_CHECK_SHOW_RESET);
+  run(&dev,1);assert(data.init_step==INIT_WRITE_INIT_DATA);
   /* Optional reset wiring must not reset the IC before SHOW_RESET is read. */
   struct iqs915x_config wired=config;
   wired.reset_gpio.port=1;

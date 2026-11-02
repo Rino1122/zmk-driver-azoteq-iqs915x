@@ -138,12 +138,12 @@ static int i2c_write_read_dt(const struct i2c_dt_spec *i,const uint8_t *address,
   if (io_errors) { io_errors--; return -EIO; }
   uint16_t info=ic_mode|info_extra|(touch?IQS915X_GLOBAL_TP_TOUCH:0);
   if (reg==IQS915X_CONFIG_SETTINGS) { assert(len==2); put16(b,ic_cfg); }
-  else if (reg==IQS915X_INFO_FLAGS) { assert(len==2); put16(b,info); info_extra=0; }
+  else if (reg==IQS915X_INFO_FLAGS) { assert(len==2); put16(b,info); info_extra = info == 0xEEEE ? 0 : info_extra & IQS915X_ATI_ERROR; }
   else {
     assert(reg==IQS915X_REL_X && len==44); memset(b,0,len);
     put16(b+12,info); put16(b+14,fingers);
     for (int j=0;j<4;j++) { put16(b+16+j*8,coords[j*2]); put16(b+18+j*8,coords[j*2+1]); }
-    info_extra=0;
+    info_extra = info == 0xEEEE ? 0 : info_extra & IQS915X_ATI_ERROR;
   }
   return 0;
 }
@@ -200,6 +200,14 @@ static void until_idle(void) {
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 int main(void) {
+  setup(false);iqs915x_restart_initialization(&dev,"test missing notification");
+  assert(d.init_step==INIT_SOFTWARE_RESET && d.init_restart_count==1);
+  iqs915x_restart_initialization(&dev,"second missing notification");
+  assert(d.init_step==INIT_FAILED && d.init_restart_count==1);
+  setup(true);iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(d.lifecycle==IQS915X_FAULT && d.actual_mode==IQS915X_POWER_SUSPEND);
+  assert(writes==1 && !reads); /* best effort stop, no polling/retry */
+
   /* A normal power cycle must not require all-up; an unresolved mode/fault
    * barrier must survive exactly the same sequence of power requests. */
   for (int strict=0;strict<2;strict++) {
@@ -247,7 +255,8 @@ int main(void) {
   wait_hook=NULL;
   setup(false); iqs915x_terminal(&d,true,-ENODEV);
   int stopped=txns;
-  assert(iqs915x_set_mode(&dev,IQS915X_POWER_ACTIVE)==-ENODEV);
+  assert(iqs915x_set_mode(&dev,IQS915X_POWER_ACTIVE)==0);
+  assert(d.requested_mode==IQS915X_POWER_ACTIVE);
   assert(!iqs915x_pm_action(&dev,PM_DEVICE_ACTION_SUSPEND) && txns==stopped);
   struct iqs915x_status cached;
   assert(!iqs915x_get_status(&dev,&cached) && cached.lifecycle==IQS915X_ABSENT && txns==stopped);
@@ -420,7 +429,19 @@ int main(void) {
   setup(true); ic_cfg|=IQS915X_ALP_EVENT;
   d.requested_enabled=0; d.request_generation++; reject_cfg=10;
   run(&d,8); assert(!d.initialized && !d.output_enabled);
-  /* ATI Error is informational: the driver never requests a software ATI. */
+  /* Error closes input without pinning power or requesting host calibration.
+   * Recovery reopens only the current user-requested session. */
+  setup(true);touch=true;fingers=1;info_extra=IQS915X_ATI_ERROR;
+  event_rdy=true;run(&d,1);
+  assert(d.ati_error && !iqs915x_output_is_enabled(&d) && input_frames==0);
+  assert(input_resets==1 && !writes);
+  d.requested_enabled=0;d.requested_mode=IQS915X_POWER_LP2;d.request_generation++;
+  iqs915x_apply_pending_power_request(&d);
+  for(int i=0;i<8 && d.work_state!=WORK_READ_DATA;i++) iqs915x_mode_step(&d);
+  assert(d.confirmed_mode==IQS915X_MODE_LP2 && d.ati_error);
+  info_extra=IQS915X_REATI_OCCURRED;event_rdy=true;run(&d,1);
+  assert(!d.ati_error && !iqs915x_output_is_enabled(&d));
+  /* No host ATI command is issued during an error. */
   setup(false); info_extra=IQS915X_ATI_ERROR; event_rdy=true; run(&d,1);
   assert(d.ati_error_seen && !writes);
   /* Runtime Re-ATI resets input; cached debounce frames do not
@@ -490,8 +511,8 @@ int main(void) {
 '''
 
 def main():
-    defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_REATI_MAX_WAIT|INIT_BUSY|INIT_BUSY_RETRY_MS|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
-    names = ['iqs915x_request_generation', 'iqs915x_output_is_enabled',
+    defs = '\n'.join(re.findall(r'^#define IQS915X_(?:POWER_TRANSITION_MAX_RETRIES|INIT_TOTAL_TIMEOUT_MS|INIT_MAX_RESTARTS|INIT_REATI_MAX_WAIT|INIT_BUSY|INIT_BUSY_RETRY_MS|LP2_SAMPLING_PERIOD_MS|POINTER_RESUME_GUARD_FRAMES)\b.*$', SOURCE, re.M))
+    names = ['iqs915x_restart_initialization', 'iqs915x_request_generation', 'iqs915x_output_is_enabled',
              'iqs915x_power_retry_backoff_ms', 'iqs915x_complete_transition',
              'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
              'iqs915x_config_settings_without_event_mode',
@@ -499,8 +520,9 @@ def main():
              'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
     functions = []
     for name in names:
-        m = re.search(r'^static [^\n]*\b'+name+r'\(', SOURCE, re.M)
-        functions.append(block(SOURCE, m[0]))
+        matches = list(re.finditer(r'^static [^\n]*\b'+name+r'\(', SOURCE, re.M))
+        m = matches[-1]
+        functions.append(block(SOURCE[m.start():], m[0]))
     gestures = (ROOT/'drivers/input/iqs915x_gestures.c').read_text()
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
     a = SOURCE.index('static void iqs915x_terminal(')
@@ -536,7 +558,7 @@ def main():
                         '-Wno-unused-parameter','-Wno-unused-variable','-I'+tmp,
                         '-I'+str(ROOT/'include'),'-I'+str(ROOT/'drivers/input'),
                         str(directory/'test.c'),'-o',str(directory/'test')],check=True)
-        subprocess.run([str(directory/'test')],check=True)
+        subprocess.run([str(directory/'test')],check=True, timeout=10)
 
 if __name__ == '__main__':
     main()

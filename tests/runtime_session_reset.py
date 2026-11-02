@@ -58,6 +58,7 @@ struct k_sem { int count; };
 struct iqs915x_data;
 struct device { struct iqs915x_data *data; };
 struct iqs915x_data {
+  int ati_error;
  int contact_restart_requested;
  struct { bool blocked; } contacts;
  const struct device *dev;
