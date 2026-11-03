@@ -2455,7 +2455,8 @@ static int iqs915x_init_step_handler(const struct device *dev)
     if ((info_flags & IQS915X_SHOW_RESET) == 0)
     {
       LOG_INF("Init: SHOW_RESET cleared (flags=0x%04x)", info_flags);
-      data->init_step = INIT_REQUEST_REATI;
+      // Cold initialization must explicitly prepare/trace Streaming too.
+      data->init_step = INIT_PREPARE_STREAMING;
       data->wait_count = 0;
       break;
     }

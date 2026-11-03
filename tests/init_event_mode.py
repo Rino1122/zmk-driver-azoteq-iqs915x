@@ -34,6 +34,7 @@ def main():
     names = (
         "IQS915X_X_RESOLUTION", "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
         "IQS915X_INFO_FLAGS", "IQS915X_SHOW_RESET", "IQS915X_SYSTEM_CONTROL",
+        "IQS915X_ACK_RESET", "IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT",
         "IQS915X_REATI_TP", "IQS915X_REATI_OCCURRED", "IQS915X_ALP_REATI_OCCURRED",
         "IQS915X_MODE_LP2", "IQS915X_INIT_REATI_MAX_WAIT",
         "IQS915X_TP_EVENT", "IQS915X_GESTURE_EVENT", "IQS915X_TP_TOUCH_EVENT",
@@ -56,6 +57,8 @@ def main():
                     source.index("  case INIT_SOFTWARE_RESET:")]
     cases += source[source.index("  case INIT_PREPARE_STREAMING:"):
                     source.index("  case INIT_PREPARE_EVENT_MODE:")]
+    cases += block(source, "  case INIT_ACK_RESET:")
+    cases += block(source, "  case INIT_VERIFY_SHOW_RESET_CLEAR:")
     cases += block(source, "  case INIT_WAIT_REATI:")
     thread = source[source.index("static void iqs915x_thread_main("):]
     initialization = block(thread, "    if (!data->initialized)")
@@ -114,9 +117,10 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
-static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
-static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
-static void iqs915x_trace_request(struct iqs915x_data *d,int rc){(void)d;(void)rc;}
+static unsigned trace_starts,trace_configs,trace_requests;
+static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;trace_starts++;}
+static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;trace_configs++;}
+static void iqs915x_trace_request(struct iqs915x_data *d,int rc){(void)d;(void)rc;trace_requests++;}
 static void iqs915x_trace_sample(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
 static void iqs915x_trace_finish(struct iqs915x_data *d,unsigned o){(void)d;(void)o;}
 static void iqs915x_trace_wait_timeout(struct iqs915x_data *d){(void)d;}
@@ -147,6 +151,7 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg, uint16_t 
   if (write_errors) { write_errors--; return -5; }
   if (reg==IQS915X_SYSTEM_CONTROL) {
     /* Normal warm startup must only request Active TP Re-ATI, never SW reset. */
+    if (cfg==IQS915X_ACK_RESET){ic_info &= ~IQS915X_SHOW_RESET;reati_ready=true;return 0;}
     if (cfg==IQS915X_MODE_ACTIVE) return 0;
     assert(cfg==(IQS915X_MODE_ACTIVE|IQS915X_REATI_TP));
     reati_requests++; reati_ready=true;
@@ -203,6 +208,7 @@ INITIALIZATION
   }
 }
 static struct iqs915x_data setup(bool enabled) {
+  trace_starts=trace_configs=trace_requests=0;
   busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
   ic_cfg = ic_info = 0;
@@ -220,6 +226,20 @@ int main(void) {
   const struct iqs915x_config config = {0};
   struct iqs915x_data data = setup(false);
   struct device dev = {&data, &config};
+  /* Real cold path: ACK -> reset clear -> Streaming -> readback -> ATI. */
+  for(int enabled=0;enabled<2;enabled++) {
+    data=setup(enabled);data.init_step=INIT_ACK_RESET;
+    ic_info=IQS915X_SHOW_RESET|IQS915X_ATI_ERROR;
+    ic_cfg=iqs915x_apply_config_settings_policy(0);
+    reati_ready=true;run(&dev,2);
+    assert(data.init_step==INIT_PREPARE_STREAMING && !reati_requests);
+    run(&dev,1);assert(data.init_step==INIT_SET_STREAMING);
+    run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && trace_starts==1 && !reati_requests);
+    assert(!(ic_cfg & IQS915X_EVENT_MODE));
+    run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && trace_configs==1 && !reati_requests);
+    run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && trace_requests==1 && reati_requests==1);
+    run(&dev,12);assert(data.initialized && trace_starts==1 && trace_configs==1 && trace_requests==1);
+  }
   /* Diagnostic readback precedes Control request, but cannot gate/retry it. */
   data=setup(true);data.init_step=INIT_SET_STREAMING;
   data.init_pending_cfg=0x0c86;run(&dev,1);
