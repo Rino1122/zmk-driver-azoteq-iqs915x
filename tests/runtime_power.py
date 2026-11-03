@@ -205,7 +205,7 @@ static void until_idle(void) {
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
-  setup(true);d.ati_error=1;
+  setup(true);d.ati_error=1;d.request_generation=7;
   assert(iqs915x_ati_assist(&d)==2000 && !writes);
   now=1999;assert(iqs915x_ati_assist(&d)==2000 && !writes);
   d.requested_enabled=0;assert(iqs915x_ati_assist(&d)==INT64_MAX);

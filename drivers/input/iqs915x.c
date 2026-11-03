@@ -1253,7 +1253,9 @@ static int64_t iqs915x_ati_assist(struct iqs915x_data *data)
     data->ati_assist_state = 0;
     data->ati_assist_due = 0;
     data->ati_assist_generation = generation;
-    return INT64_MAX;
+    if (!eligible || atomic_get(&data->channel_pending) || data->channel_running)
+      return INT64_MAX;
+    /* Arm in this same iteration: Event Mode may provide no next wake. */
   }
   int64_t now = k_uptime_get();
   if (!data->ati_assist_state) {
