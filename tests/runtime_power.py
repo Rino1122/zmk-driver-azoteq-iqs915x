@@ -206,6 +206,29 @@ static void until_idle(void) {
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
+  /* Startup uses real per-transaction gate, not only the outer dispatch.
+   * Stale semaphore wakes cannot authorize a read while RDY is inactive. */
+  setup(true);d.initialized=false;d.init_deadline=15000;
+  d.lifecycle=IQS915X_INITIALIZING;d.init_step=INIT_TRACE_STREAMING;
+  no_rdy=true;k_sem_give(&d.rdy_sem);uint16_t observed=0x1234;
+  assert(iqs915x_read_reg16(&dev,IQS915X_CONFIG_SETTINGS,&observed)==-EAGAIN);
+  assert(!txns && observed==0x1234 && d.init_window_timeouts==1);
+  /* An actual subsequent RDY opens the window; consecutive reads wait for
+   * the next measurement, and block reads share the same STOP timestamp. */
+  no_rdy=false;ic_cfg &= ~IQS915X_EVENT_MODE;next_rdy=now+10;
+  assert(!iqs915x_read_reg16(&dev,IQS915X_CONFIG_SETTINGS,&observed));
+  int64_t first=now;uint8_t bytes[2];
+  assert(!iqs915x_read_block(&dev,IQS915X_CONFIG_SETTINGS,bytes,2));
+  assert(now>=first+10 && d.comm_completed_ms==now);
+  assert(d.init_rdy_accesses==2 && !forced_transactions);
+  /* Quiet retained Event Mode may use bounded Force Comms; strict phases
+   * and the total deadline may never fall back to speculative traffic. */
+  no_rdy=true;d.init_step=INIT_CONFIRM_EVENT_MODE;first=now;
+  assert(!iqs915x_read_reg16(&dev,IQS915X_CONFIG_SETTINGS,&observed));
+  assert(now>=first+150 && d.init_force_accesses==1 && forced_transactions==1);
+  int before=txns;d.init_deadline=now;
+  assert(iqs915x_read_reg16(&dev,IQS915X_CONFIG_SETTINGS,&observed)==-EAGAIN);
+  assert(txns==before);
   /* First mismatch survives subsequent writes, IC retry and terminal evidence. */
   setup(true);d.lifecycle=IQS915X_INITIALIZING;d.init_step=INIT_CONFIRM_EVENT_MODE;d.wait_count=1;
   ic_cfg=0x061e;iqs915x_mismatch_capture(&d,0x0d86,0x061e);
@@ -635,7 +658,7 @@ def main():
              'iqs915x_power_retry_backoff_ms', 'iqs915x_complete_transition',
              'iqs915x_apply_config_settings_policy', 'iqs915x_config_settings_for_mode',
              'iqs915x_config_settings_without_event_mode',
-             'iqs915x_read_block', 'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
+             'iqs915x_init_wait_window', 'iqs915x_read_block', 'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
              'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
     functions = []
     for name in names:

@@ -51,7 +51,7 @@ static const uint8_t iqs915x_device_api = 0;
 #define IQS915X_INIT_EVENT_MODE_MAX_RETRIES 3
 #define IQS915X_INIT_REATI_MAX_WAIT 60
 #define IQS915X_INIT_BUSY_RETRY_MS 150
-#define IQS915X_INIT_BUSY 1 /* Successful read with IC busy, distinct from I2C errors. */
+#define IQS915X_INIT_BUSY 1 /* Unusable 0xEEEE read; not a documented sensor busy code. */
 #define IQS915X_POWER_TRANSITION_MAX_RETRIES 3
 #define IQS915X_BUTTON_TAP_RELEASE_MS 100
 #define IQS915X_TAP_TOUCH_TIME_FALLBACK_MS 200
@@ -352,10 +352,56 @@ static uint16_t iqs915x_config_settings_without_event_mode(uint16_t cfg)
  * ストリーミング出力: 0x1014〜0x103F の44バイト
  * ============================================================ */
 
+/* Startup transactions prefer an asserted RDY, including the additional
+ * register reads inside warm-start validation and diagnostic snapshots.
+ * STOP needs time to release the previous window: do not immediately reuse
+ * its still-low RDY. The 1 ms guard is conservative host pacing, not a sensor
+ * timing specification. Runtime communication/power policy is unchanged.
+ */
+static int iqs915x_init_wait_window(const struct device *dev)
+{
+  struct iqs915x_data *data = dev->data;
+  const struct iqs915x_config *config = dev->config;
+  if (data->initialized || atomic_get(&data->lifecycle) >= IQS915X_ABSENT)
+    return 0;
+
+  int64_t now = k_uptime_get();
+  int64_t guard = data->comm_completed_ms + 1;
+  if (now < guard) k_sleep(K_MSEC(guard - now));
+  int64_t deadline = MIN(data->init_deadline, k_uptime_get() + 150);
+  while (k_uptime_get() < deadline) {
+    int rdy = gpio_pin_get_dt(&config->rdy_gpio);
+    if (rdy < 0) return rdy;
+    if (rdy > 0) { data->init_rdy_accesses++; return 0; }
+    k_sem_take(&data->rdy_sem, K_MSEC(MAX(1LL, deadline - k_uptime_get())));
+    /* API wakes and stale edge tokens are not communication permission. */
+  }
+  if (k_uptime_get() >= data->init_deadline) return -EAGAIN;
+
+  switch (data->init_step) {
+  case INIT_CHECK_SHOW_RESET: /* Retained Event Mode / Suspend may be quiet. */
+  case INIT_SOFTWARE_RESET:
+  case INIT_WAIT_SOFTWARE_RESET:
+  case INIT_PREPARE_EVENT_MODE: /* Also reached from retained warm boot. */
+  case INIT_SET_EVENT_MODE:
+  case INIT_CONFIRM_EVENT_MODE:
+    if (data->init_force_accesses++ == 0)
+      LOG_INF("Init: first Force Comms fallback step=%u after RDY wait", data->init_step);
+    return 0;
+  default:
+    /* Show Reset / Streaming must offer windows. No speculative I2C access,
+     * even at the ATI deadline; the overall startup deadline bounds retries. */
+    data->init_window_timeouts++;
+    return -EAGAIN;
+  }
+}
+
 // 16bitレジスタに書き込む（リトルエンディアン: LSB first）
 static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
                                uint16_t val)
 {
+  int window_status = iqs915x_init_wait_window(dev);
+  if (window_status < 0) return window_status;
   const struct iqs915x_config *config = dev->config;
   // アドレスもリトルエンディアン
   uint8_t buf[4] = {reg & 0xFF, reg >> 8, val & 0xFF, val >> 8};
@@ -373,6 +419,8 @@ static int iqs915x_write_reg16(const struct device *dev, uint16_t reg,
 static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
                               uint16_t *val)
 {
+  int window_status = iqs915x_init_wait_window(dev);
+  if (window_status < 0) return window_status;
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
   uint8_t buf[2];
@@ -395,6 +443,8 @@ static int iqs915x_read_reg16(const struct device *dev, uint16_t reg,
 static int iqs915x_write_block(const struct device *dev, uint16_t reg,
                                const uint8_t *data, uint16_t len)
 {
+  int window_status = iqs915x_init_wait_window(dev);
+  if (window_status < 0) return window_status;
   const struct iqs915x_config *config = dev->config;
   // アドレス(2バイト) + データを連結したバッファを作成
   uint8_t buf[IQS915X_INIT_WRITE_CHUNK_SIZE + 2];
@@ -408,12 +458,17 @@ static int iqs915x_write_block(const struct device *dev, uint16_t reg,
   buf[1] = reg >> 8;
   memcpy(&buf[2], data, len);
 
-  return i2c_write_dt(&config->i2c, buf, len + 2);
+  k_sem_reset(&((struct iqs915x_data *)dev->data)->rdy_sem);
+  int ret = i2c_write_dt(&config->i2c, buf, len + 2);
+  ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
+  return ret;
 }
 
 static int iqs915x_read_block(const struct device *dev, uint16_t reg,
                               uint8_t *data, uint16_t len)
 {
+  int window_status = iqs915x_init_wait_window(dev);
+  if (window_status < 0) return window_status;
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {reg & 0xFF, reg >> 8};
 
@@ -422,7 +477,10 @@ static int iqs915x_read_block(const struct device *dev, uint16_t reg,
     return -EINVAL;
   }
 
-  return i2c_write_read_dt(&config->i2c, reg_addr, sizeof(reg_addr), data, len);
+  k_sem_reset(&((struct iqs915x_data *)dev->data)->rdy_sem);
+  int ret = i2c_write_read_dt(&config->i2c, reg_addr, sizeof(reg_addr), data, len);
+  ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
+  return ret;
 }
 
 /* ============================================================
@@ -644,6 +702,8 @@ static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *dat
 static int iqs915x_read_stream(const struct device *dev,
                                struct iqs915x_stream_data *data)
 {
+  int window_status = iqs915x_init_wait_window(dev);
+  if (window_status < 0) return window_status;
   const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_REL_X & 0xFF, IQS915X_REL_X >> 8};
   uint8_t buf[44];
@@ -1037,6 +1097,8 @@ static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
   LOG_ERR("terminal lifecycle=%u cause=%d init_step=%u reads=%u restarts=%u stop_status=%d",
           (unsigned)atomic_get(&data->lifecycle),error,data->init_step,
           data->wait_count,data->init_restart_count,stop_status);
+  LOG_INF("Init comms: rdy=%u force=%u no_window=%u",
+              data->init_rdy_accesses, data->init_force_accesses, data->init_window_timeouts);
   gpio_pin_interrupt_configure_dt(&cfg->rdy_gpio, GPIO_INT_DISABLE);
   iqs915x_complete_transition(data, error);
 }
@@ -2334,7 +2396,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
     if (info_flags == 0xEEEE)
     {
-      // 正常なbusy応答を通信エラーと区別し、次のRDYで再試行する。
+      // 0xEEEEは有効な状態値として使わず、次の通信窓で再試行する。
       LOG_DBG("Init: IC busy (0xEEEE), waiting...");
       return IQS915X_INIT_BUSY;
     }
@@ -2744,6 +2806,8 @@ static int iqs915x_init_step_handler(const struct device *dev)
         atomic_clear(&data->output_enabled);
       }
       LOG_INF("IQS915x initialization complete");
+      LOG_INF("Init comms: rdy=%u force=%u no_window=%u",
+              data->init_rdy_accesses, data->init_force_accesses, data->init_window_timeouts);
       break;
     }
 
@@ -2987,9 +3051,9 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     if (!data->initialized)
     {
       // Event Mode can stop RDY immediately when no finger event is present.
-      // Force the startup check and warm-boot preparation as well as Event
-      // verification. An IC retained in LP2 may have no RDY at all. Each
-      // transaction still ends one separate communication window with STOP.
+      // Low-level helpers now wait RDY for EVERY startup transaction. These
+      // stages are dispatched without an extra outer wait so retained Event
+      // Mode can use the bounded Force Comms fallback where necessary.
       if (data->init_step == INIT_CHECK_SHOW_RESET ||
           data->init_step == INIT_PREPARE_STREAMING ||
           data->init_step == INIT_SET_STREAMING ||
@@ -3005,11 +3069,10 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
         ret = iqs915x_init_step_handler(dev);
         if (ret == 0 || ret == IQS915X_INIT_BUSY) data->probe_failures = 0;
-        if (ret == IQS915X_INIT_BUSY)
+        if (ret == IQS915X_INIT_BUSY || ret == -EAGAIN)
         {
-          // The read consumed the previous RDY notification. Wake on the next
-          // RDY instead of sleeping through it. A bounded wait also retries via
-          // Force Comms if no new edge arrives; retained Event Mode may be quiet.
+          // Retry unusable reads / missing windows without declaring an absent
+          // IC or bypassing the per-transaction RDY gate.
           k_sem_take(&data->rdy_sem, K_MSEC(IQS915X_INIT_BUSY_RETRY_MS));
         }
         else if (ret < 0 && ret != IQS915X_INIT_BUSY) {

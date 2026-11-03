@@ -51,15 +51,16 @@ def main():
     )
     policy = block(source, "static uint16_t iqs915x_apply_config_settings_policy")
     policy += "\n" + block(source, "static uint16_t iqs915x_config_settings_without_event_mode")
-    cases = source[source.index("  case INIT_PREPARE_EVENT_MODE:"):
-                   source.index("  case INIT_WAIT_REATI:", source.index("  case INIT_PREPARE_EVENT_MODE:"))]
-    cases += source[source.index("  case INIT_CHECK_SHOW_RESET:"):
-                    source.index("  case INIT_SOFTWARE_RESET:")]
-    cases += source[source.index("  case INIT_PREPARE_STREAMING:"):
-                    source.index("  case INIT_PREPARE_EVENT_MODE:")]
-    cases += block(source, "  case INIT_ACK_RESET:")
-    cases += block(source, "  case INIT_VERIFY_SHOW_RESET_CLEAR:")
-    cases += block(source, "  case INIT_WAIT_REATI:")
+    handler = block(source, "static int iqs915x_init_step_handler(")
+    cases = handler[handler.index("  case INIT_PREPARE_EVENT_MODE:"):
+                   handler.index("  case INIT_WAIT_REATI:", handler.index("  case INIT_PREPARE_EVENT_MODE:"))]
+    cases += handler[handler.index("  case INIT_CHECK_SHOW_RESET:"):
+                    handler.index("  case INIT_SOFTWARE_RESET:")]
+    cases += handler[handler.index("  case INIT_PREPARE_STREAMING:"):
+                    handler.index("  case INIT_PREPARE_EVENT_MODE:")]
+    cases += block(handler, "  case INIT_ACK_RESET:")
+    cases += block(handler, "  case INIT_VERIFY_SHOW_RESET_CLEAR:")
+    cases += block(handler, "  case INIT_WAIT_REATI:")
     thread = source[source.index("static void iqs915x_thread_main("):]
     initialization = block(thread, "    if (!data->initialized)")
     reset_gpio = block(source, "  if (config->reset_gpio.port)")
@@ -91,6 +92,7 @@ struct iqs915x_data {
   uint32_t applied_generation, transition_generation;
   int requested_enabled, output_enabled, rdy_sem;
   int actual_mode, probe_failures, lifecycle, ati_error, ati_sequence;
+  uint32_t init_rdy_accesses, init_force_accesses, init_window_timeouts;
   int64_t ati_deadline;
   bool is_touching, streaming_expected, ati_error_seen, comm_fallback_active;
   uint16_t confirmed_mode, init_data_offset;

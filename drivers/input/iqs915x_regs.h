@@ -629,6 +629,7 @@ struct iqs915x_data
     uint16_t confirmed_mode;
     uint32_t active_sampling_period_ms;
     int64_t comm_completed_ms;
+    uint32_t init_rdy_accesses, init_force_accesses, init_window_timeouts;
     bool comm_fallback_active;
     bool streaming_expected;
     bool ati_error_seen;

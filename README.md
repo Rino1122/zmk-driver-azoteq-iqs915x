@@ -719,3 +719,26 @@ Outcome 1=Occurred,2=ATI deadline,3=reset/restart,4=terminal,0=ongoing. A succes
 attempt is frozen too. Subsequent retries do not overwrite it. Counts distinguish
 zero timestamps/no sample; valid Info means non-EEEE, not successful calibration.
 The trace freezes before post-timeout diagnostic reads, avoiding their inclusion.
+
+### Startup communication windows
+
+Startup register, block and stream transactions now wait for asserted RDY at the
+low-level boundary, including warm-start checks and first-mismatch evidence.
+A conservative 1 ms host guard after the preceding transaction avoids immediate
+reuse of the preceding window; it is not a datasheet timing guarantee. A stale
+semaphore token alone never authorizes access. Each wait is bounded by 150 ms and
+the existing 15 s initialization deadline. Initial probing, software-reset
+recovery and Event Mode preparation/confirmation may fall back to Force Comms
+method 0 after that wait, because retained Event Mode/Suspend can be quiet.
+Init-data/ACK reset and Streaming preparation, verification and Re-ATI wait do
+not force access when RDY is absent. A missing window does not classify the IC as
+absent. Existing bounded reset/retry limits and verified configuration gate remain.
+
+`Init comms: rdy=... force=... no_window=...` reports startup access decisions
+(cumulative per MCU boot, including initialization retries). Terminal evidence
+and best-effort Suspend are outside these counters and remain bounded diagnostic
+accesses. `0xEEEE` is rejected as unusable state/configuration data; the legacy
+`busy` diagnostic name does not imply a documented IC busy-response code.
+Runtime sampling, Event Mode, LP2/Suspend and ATI-error auto-retry policy are
+unchanged. Hardware validation is required; this does not establish that any
+observed corruption originated in firmware rather than bus/power integrity.
