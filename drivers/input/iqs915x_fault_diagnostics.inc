@@ -138,3 +138,63 @@ static void iqs915x_ati_timeout_capture(struct iqs915x_data *d) {
           f.read_status[0],f.info,f.busy,f.read_status[1],f.config,
           f.read_status[2],f.control,f.valid_mask);
 }
+
+int iqs915x_ati_trace_get(const struct device *dev,struct iqs915x_ati_trace *out) {
+  if(!dev || !device_is_ready(dev) || !out)return -ENODEV;
+  if(k_is_in_isr())return -EWOULDBLOCK;
+  struct iqs915x_data *d=dev->data;
+  if(k_mutex_lock(&d->channel_lock,K_NO_WAIT))return -EBUSY;
+  int ret=d->ati_trace_valid?0:-ENODATA;
+  if(!ret)*out=d->ati_trace;
+  k_mutex_unlock(&d->channel_lock);return ret;
+}
+static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t expected,int status) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(!d->ati_trace_valid) {
+    d->ati_trace=(struct iqs915x_ati_trace){.started_ms=k_uptime_get(),
+      .expected_config=expected,.config_write_status=status,
+      .config_read_status=-ENODATA,.request_write_status=-ENODATA};
+    d->ati_trace_valid=d->ati_trace_active=true;
+  }
+  k_mutex_unlock(&d->channel_lock);
+}
+static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t value,int status) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(d->ati_trace_active){d->ati_trace.config_read_status=status;d->ati_trace.config_readback=value;}
+  k_mutex_unlock(&d->channel_lock);
+  LOG_INF("ATI pre-request config expected=0x%04x read=0x%04x rc=%d",d->init_pending_cfg,value,status);
+}
+static void iqs915x_trace_request(struct iqs915x_data *d,int status) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(d->ati_trace_active){d->ati_trace.request_write_status=status;d->ati_trace.request_ms=k_uptime_get();}
+  k_mutex_unlock(&d->channel_lock);
+  LOG_INF("ATI request control=0x%04x rc=%d",IQS915X_MODE_ACTIVE|IQS915X_REATI_TP,status);
+}
+static void iqs915x_trace_sample(struct iqs915x_data *d,uint16_t info,int status) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(d->ati_trace_active) {
+    struct iqs915x_ati_trace *t=&d->ati_trace;t->reads++;
+    if(status<0)t->read_errors++;
+    else if(info==0xEEEE){if(!t->busy_reads)t->first_busy_ms=k_uptime_get();t->busy_reads++;}
+    else {
+      if(!t->valid_reads){t->first_valid_ms=k_uptime_get();t->first_valid_info=info;}
+      t->valid_reads++;t->last_valid_ms=k_uptime_get();t->last_info=info;
+    }
+  }
+  k_mutex_unlock(&d->channel_lock);
+}
+static void iqs915x_trace_wait_timeout(struct iqs915x_data *d) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(d->ati_trace_active)d->ati_trace.rdy_timeouts++;
+  k_mutex_unlock(&d->channel_lock);
+}
+static void iqs915x_trace_finish(struct iqs915x_data *d,unsigned outcome) {
+  k_mutex_lock(&d->channel_lock,K_FOREVER);
+  if(d->ati_trace_active) {
+    d->ati_trace.outcome=outcome;d->ati_trace.finished_ms=k_uptime_get();d->ati_trace_active=false;
+    const struct iqs915x_ati_trace *t=&d->ati_trace;
+    LOG_INF("ATI trace outcome=%u reads=%u valid=%u busy=%u errors=%u rdy_timeouts=%u first_busy_ms=%u last_valid_ms=%u last_info=0x%04x",
+      outcome,t->reads,t->valid_reads,t->busy_reads,t->read_errors,t->rdy_timeouts,t->first_busy_ms,t->last_valid_ms,t->last_info);
+  }
+  k_mutex_unlock(&d->channel_lock);
+}

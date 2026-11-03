@@ -700,3 +700,15 @@ skips Control. No write or retry is added. Validity/read status must be checked;
 the reads are sequential, not atomic. The getter performs no I2C and survives IC
 retries/terminal failure until MCU reboot. stop_status is ENODATA because this
 capture precedes the restart, not a terminal Suspend.
+
+Initial Re-ATI trace (`iqs915x_ati_trace_get`) retains the first attempt per MCU
+boot. One new diagnostic Config read window is inserted after Streaming write
+and before Control request. Read error, busy and mismatch are recorded without
+changing the existing retry/timeout decision. Config write status refers to the
+first attempted Streaming write; request status is the latest request write in
+that attempt. Waiting uses the existing stream reads: valid/busy/error counts,
+first busy time, first/last valid Info and RDY semaphore timeout count add no I2C.
+Outcome 1=Occurred,2=ATI deadline,3=reset/restart,4=terminal,0=ongoing. A successful
+attempt is frozen too. Subsequent retries do not overwrite it. Counts distinguish
+zero timestamps/no sample; valid Info means non-EEEE, not successful calibration.
+The trace freezes before post-timeout diagnostic reads, avoiding their inclusion.

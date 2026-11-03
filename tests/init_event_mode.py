@@ -114,6 +114,12 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
+static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
+static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
+static void iqs915x_trace_request(struct iqs915x_data *d,int rc){(void)d;(void)rc;}
+static void iqs915x_trace_sample(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
+static void iqs915x_trace_finish(struct iqs915x_data *d,unsigned o){(void)d;(void)o;}
+static void iqs915x_trace_wait_timeout(struct iqs915x_data *d){(void)d;}
 static unsigned timeout_captures;
 static void iqs915x_ati_timeout_capture(struct iqs915x_data *d){assert(d->init_step==INIT_WAIT_REATI);timeout_captures++;}
 static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
@@ -214,6 +220,16 @@ int main(void) {
   const struct iqs915x_config config = {0};
   struct iqs915x_data data = setup(false);
   struct device dev = {&data, &config};
+  /* Diagnostic readback precedes Control request, but cannot gate/retry it. */
+  data=setup(true);data.init_step=INIT_SET_STREAMING;
+  data.init_pending_cfg=0x0c86;run(&dev,1);
+  assert(data.init_step==INIT_TRACE_STREAMING && writes==1 && !reati_requests);
+  read_errors=1;run(&dev,1);
+  assert(data.init_step==INIT_REQUEST_REATI && reads==1 && !reati_requests);
+  run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
+  data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0xEEEE;
+  run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && reads==1 && !writes);
+  data=setup(false);
   /* No split central, no finger event, no RDY: initialization still completes. */
   run(&dev, 12);
   assert(data.initialized && data.init_step == INIT_COMPLETE);

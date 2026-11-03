@@ -1011,6 +1011,7 @@ static void iqs915x_channels_cancel_pending(struct iqs915x_data *d) {
 
 static void iqs915x_terminal(struct iqs915x_data *data, bool absent, int error)
 {
+  iqs915x_trace_finish(data,4);
   iqs915x_channels_cancel_pending(data);
   atomic_clear(&data->output_enabled);
   data->enabled = false;
@@ -2284,6 +2285,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
 static void iqs915x_restart_initialization(const struct device *dev,
                                            const char *reason)
 {
+  iqs915x_trace_finish(dev->data,3);
   struct iqs915x_data *data = dev->data;
 
   if (data->init_restart_count >= IQS915X_INIT_MAX_RESTARTS)
@@ -2602,20 +2604,32 @@ static int iqs915x_init_step_handler(const struct device *dev)
   case INIT_SET_STREAMING:
     // Re-ATI後の通信が接触イベントに依存しないようStreamingへ移る。
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, data->init_pending_cfg);
+    iqs915x_trace_begin(data,data->init_pending_cfg,ret);
     if (ret < 0)
     {
       LOG_ERR("Failed to prepare Streaming for Re-ATI: %d", ret);
       return ret;
     }
     data->streaming_expected = true;
-    data->init_step = INIT_REQUEST_REATI;
+    data->init_step = INIT_TRACE_STREAMING;
     break;
+
+  case INIT_TRACE_STREAMING:
+  {
+    // Diagnostic only: one read window; preserve the original retry policy.
+    uint16_t observed=0;
+    int rc=iqs915x_read_reg16(dev,IQS915X_CONFIG_SETTINGS,&observed);
+    iqs915x_trace_config(data,observed,rc);
+    data->init_step=INIT_REQUEST_REATI;
+    break;
+  }
 
   case INIT_REQUEST_REATI:
   {
     uint16_t sys_ctrl = IQS915X_MODE_ACTIVE | IQS915X_REATI_TP;
 
     ret = iqs915x_write_reg16(dev, IQS915X_SYSTEM_CONTROL, sys_ctrl);
+    iqs915x_trace_request(data,ret);
     if (ret < 0)
     {
       LOG_ERR("Failed to request Re-ATI: %d", ret);
@@ -2745,11 +2759,13 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
     struct iqs915x_stream_data stream;
     ret = iqs915x_read_stream(dev, &stream);
+    iqs915x_trace_sample(data,ret<0?0:stream.info_flags,ret);
     if (ret < 0)
     {
       LOG_ERR("Failed to read during Re-ATI wait: %d", ret);
       if (k_uptime_get() >= data->ati_deadline)
       {
+        iqs915x_trace_finish(data,2);
         iqs915x_ati_timeout_capture(data);
         iqs915x_restart_initialization(dev, "ATI deadline read failed");
       }
@@ -2760,6 +2776,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       if (k_uptime_get() >= data->ati_deadline)
       {
+        iqs915x_trace_finish(data,2);
         iqs915x_ati_timeout_capture(data);
         iqs915x_restart_initialization(dev, "ATI busy deadline");
       }
@@ -2771,6 +2788,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
     if (stream.info_flags & IQS915X_SHOW_RESET)
     {
+      iqs915x_trace_finish(data,3);
       // 保持設定を使う途中でICがリセットされた場合は通常の初期化へ戻る。
       LOG_WRN("Init: SHOW_RESET during Re-ATI wait; checking reset again");
       data->init_step = INIT_CHECK_SHOW_RESET;
@@ -2784,6 +2802,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     data->ati_error_seen = !!(stream.info_flags & IQS915X_ATI_ERROR);
     if (stream.info_flags & IQS915X_REATI_OCCURRED)
     {
+      iqs915x_trace_finish(data,1);
       atomic_inc(&data->ati_sequence);
       LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
               stream.info_flags, data->wait_count);
@@ -2803,6 +2822,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_ERR("Init: TP Re-ATI timeout at 5000 ms, reads=%d (flags=0x%04x)",
               data->wait_count, stream.info_flags);
+      iqs915x_trace_finish(data,2);
       iqs915x_ati_timeout_capture(data);
       iqs915x_restart_initialization(dev, "TP Re-ATI timeout");
       break;
@@ -2961,6 +2981,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       if (data->init_step == INIT_CHECK_SHOW_RESET ||
           data->init_step == INIT_PREPARE_STREAMING ||
           data->init_step == INIT_SET_STREAMING ||
+          data->init_step == INIT_TRACE_STREAMING ||
           data->init_step == INIT_REQUEST_REATI ||
           data->init_step == INIT_PREPARE_EVENT_MODE ||
           data->init_step == INIT_SET_EVENT_MODE ||
@@ -3005,6 +3026,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
         k_sem_give(&data->rdy_sem);
       }
       ret = k_sem_take(&data->rdy_sem, K_MSEC(100));
+      if(ret != 0 && data->init_step == INIT_WAIT_REATI)iqs915x_trace_wait_timeout(data);
       if (ret == 0 || (data->init_step == INIT_WAIT_REATI &&
                        k_uptime_get() >= data->ati_deadline)) {
         iqs915x_init_step_handler(dev);

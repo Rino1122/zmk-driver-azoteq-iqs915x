@@ -230,4 +230,30 @@ struct iqs915x_mismatch_snapshot {
 };
 int iqs915x_mismatch_get(const struct device *dev, struct iqs915x_mismatch_snapshot *out);
 
+/* First initial Re-ATI attempt, retained until MCU reboot. Status fields are
+ * signed errno represented as int32_t. outcome: 0=in progress,1=Occurred,
+ * 2=ATI deadline,3=reset/restart,4=terminal failure. No I2C in getter. */
+struct iqs915x_ati_trace {
+  uint32_t started_ms;
+  uint32_t finished_ms;
+  uint32_t expected_config;
+  int32_t config_write_status;
+  int32_t config_read_status;
+  uint32_t config_readback;
+  int32_t request_write_status;
+  uint32_t request_ms;
+  uint32_t reads;
+  uint32_t valid_reads;
+  uint32_t busy_reads;
+  uint32_t read_errors;
+  uint32_t rdy_timeouts;
+  uint32_t first_busy_ms;
+  uint32_t last_valid_ms;
+  uint32_t last_info;
+  uint32_t outcome;
+  uint32_t first_valid_ms;
+  uint32_t first_valid_info;
+};
+int iqs915x_ati_trace_get(const struct device *dev, struct iqs915x_ati_trace *out);
+
 #endif /* ZMK_DRIVER_IQS915X_H_ */

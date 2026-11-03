@@ -225,6 +225,26 @@ int main(void) {
   assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.evidence.busy && !(mismatch.evidence.valid_mask&2));
   setup(true);assert(iqs915x_mismatch_get(&dev,&mismatch)==-ENODATA);
 
+  /* First-attempt trace: cached, bounded and frozen before restart. */
+  setup(true);struct iqs915x_ati_trace trace;
+  assert(iqs915x_ati_trace_get(&dev,&trace)==-ENODATA);
+  iqs915x_trace_begin(&d,0x0c86,0);iqs915x_trace_config(&d,0x0c86,0);
+  now=10;iqs915x_trace_request(&d,0);
+  now=20;iqs915x_trace_sample(&d,0x0208,0);
+  now=30;iqs915x_trace_sample(&d,0xEEEE,0);
+  now=40;iqs915x_trace_sample(&d,0,-EIO);iqs915x_trace_wait_timeout(&d);
+  now=50;iqs915x_trace_sample(&d,0x0018,0);iqs915x_trace_finish(&d,1);
+  int no_txns=txns;assert(!iqs915x_ati_trace_get(&dev,&trace) && txns==no_txns);
+  assert(trace.outcome==1 && trace.reads==4 && trace.valid_reads==2 && trace.busy_reads==1 && trace.read_errors==1);
+  assert(trace.first_valid_ms==20 && trace.first_valid_info==0x0208 && trace.last_info==0x0018 && trace.last_valid_ms==50);
+  assert(trace.first_busy_ms==30 && trace.rdy_timeouts==1 && trace.request_ms==10);
+  iqs915x_trace_begin(&d,0, -EIO);iqs915x_trace_config(&d,0,-EIO);iqs915x_trace_request(&d,-EIO);
+  iqs915x_trace_sample(&d,0xEEEE,0);iqs915x_trace_wait_timeout(&d);iqs915x_trace_finish(&d,2);
+  assert(!iqs915x_ati_trace_get(&dev,&trace) && trace.outcome==1 && trace.reads==4 && trace.config_readback==0x0c86);
+  setup(true);iqs915x_trace_begin(&d,0x0c86,-EIO);iqs915x_trace_config(&d,0,-EIO);
+  iqs915x_trace_finish(&d,2);iqs915x_terminal(&d,false,-ETIMEDOUT);
+  assert(!iqs915x_ati_trace_get(&dev,&trace) && trace.outcome==2 && trace.config_write_status==-EIO && trace.config_read_status==-EIO);
+
   /* Pre-reset ATI timeout record is bounded and independent of terminal evidence. */
   setup(true);struct iqs915x_fault_snapshot ati;
   assert(iqs915x_ati_timeout_get(&dev,&ati)==-ENODATA);
@@ -610,6 +630,7 @@ def main():
         m = matches[-1]
         functions.append(block(SOURCE[m.start():], m[0]))
     gestures = (ROOT/'drivers/input/iqs915x_gestures.c').read_text()
+    functions.insert(0, "static void iqs915x_trace_finish(struct iqs915x_data *,unsigned);")
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
     a = SOURCE.index('static void iqs915x_terminal(')
     b = SOURCE.index('/* ============================================================\n * ボタンリリース遅延処理', a)
