@@ -2470,7 +2470,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       break;
     }
 
-    LOG_DBG("Init: Waiting for SHOW_RESET clear (flags=0x%04x, cycle=%d/%d)",
+    LOG_DBG("Init: Waiting for SHOW_RESET clear (flags=0x%04x, cycle=%u/%d)",
             info_flags, data->wait_count,
             IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT);
     break;
@@ -2599,6 +2599,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
     if(cfg==0xEEEE)return IQS915X_INIT_BUSY;
     data->init_pending_cfg = iqs915x_config_settings_without_event_mode(cfg);
+    data->wait_count=0;
     data->init_step = INIT_SET_STREAMING;
     break;
   }
@@ -2618,10 +2619,19 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
   case INIT_TRACE_STREAMING:
   {
-    // Diagnostic only: one read window; preserve the original retry policy.
+    // Do not queue ATI until Streaming has a meaningful matching readback.
     uint16_t observed=0;
     int rc=iqs915x_read_reg16(dev,IQS915X_CONFIG_SETTINGS,&observed);
     iqs915x_trace_config(data,observed,rc);
+    if(rc<0)return rc;
+    if(observed==0xEEEE)return IQS915X_INIT_BUSY;
+    if(observed!=data->init_pending_cfg) {
+      iqs915x_mismatch_capture(data,data->init_pending_cfg,observed);
+      if(++data->wait_count>=IQS915X_INIT_EVENT_MODE_MAX_RETRIES)
+        iqs915x_restart_initialization(dev,"Streaming verification failed");
+      else data->init_step=INIT_SET_STREAMING;
+      break;
+    }
     data->init_step=INIT_REQUEST_REATI;
     break;
   }
@@ -2748,7 +2758,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
 
     LOG_WRN("Init: CONFIG_SETTINGS policy mismatch (0x%04x), "
-            "retrying force (%d/%d)",
+            "retrying force (%u/%d)",
             cfg, data->wait_count, IQS915X_INIT_EVENT_MODE_MAX_RETRIES);
     data->init_pending_cfg = iqs915x_apply_config_settings_policy(cfg);
     data->init_step = INIT_SET_EVENT_MODE;
@@ -2783,7 +2793,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
         iqs915x_restart_initialization(dev, "ATI busy deadline");
       }
       // ICがまだビジー状態、次のRDYで再試行
-      LOG_DBG("Init: IC busy (0xEEEE) during Re-ATI wait, cycle=%d",
+      LOG_DBG("Init: IC busy (0xEEEE) during Re-ATI wait, cycle=%u",
               data->wait_count);
       break;
     }
@@ -2806,7 +2816,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       iqs915x_trace_finish(data,1);
       atomic_inc(&data->ati_sequence);
-      LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %d cycles",
+      LOG_INF("Init: TP Re-ATI occurred (flags=0x%04x) after %u cycles",
               stream.info_flags, data->wait_count);
       // Re-ATI完了後にEvent Modeを明示writeする
       data->init_step = INIT_PREPARE_EVENT_MODE;
@@ -2822,7 +2832,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
 
     if (k_uptime_get() >= data->ati_deadline)
     {
-      LOG_ERR("Init: TP Re-ATI timeout at 5000 ms, reads=%d (flags=0x%04x)",
+      LOG_ERR("Init: TP Re-ATI timeout at 5000 ms, reads=%u (flags=0x%04x)",
               data->wait_count, stream.info_flags);
       iqs915x_trace_finish(data,2);
       iqs915x_ati_timeout_capture(data);
@@ -2831,7 +2841,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
 
     // Re-ATIはまだ発生していない、次のRDYで再確認
-    LOG_DBG("Init: Waiting for TP Re-ATI (flags=0x%04x, cycle=%d/%d)",
+    LOG_DBG("Init: Waiting for TP Re-ATI (flags=0x%04x, cycle=%u/%d)",
             stream.info_flags, data->wait_count, IQS915X_INIT_REATI_MAX_WAIT);
     break;
   }

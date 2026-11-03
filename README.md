@@ -708,8 +708,10 @@ capture precedes the restart, not a terminal Suspend.
 
 Initial Re-ATI trace (`iqs915x_ati_trace_get`) retains the first attempt per MCU
 boot. One new diagnostic Config read window is inserted after Streaming write
-and before Control request. Read error, busy and mismatch are recorded without
-changing the existing retry/timeout decision. Config write status refers to the
+and before Control request. The latest readback is recorded. Busy waits for a new bounded opportunity;
+read errors use existing backoff, and a valid mismatch rewrites the intended
+Streaming configuration up to three checks. ATI cannot be queued before a
+matching non-busy readback. The 15-second initialization deadline remains. Config write status refers to the
 first attempted Streaming write; request status is the latest request write in
 that attempt. Waiting uses the existing stream reads: valid/busy/error counts,
 first busy time, first/last valid Info and RDY semaphore timeout count add no I2C.

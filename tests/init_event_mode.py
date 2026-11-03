@@ -240,15 +240,24 @@ int main(void) {
     run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && trace_requests==1 && reati_requests==1);
     run(&dev,12);assert(data.initialized && trace_starts==1 && trace_configs==1 && trace_requests==1);
   }
-  /* Diagnostic readback precedes Control request, but cannot gate/retry it. */
+  /* Busy/error/mismatch cannot queue ATI; matching readback opens the gate. */
   data=setup(true);data.init_step=INIT_SET_STREAMING;
   data.init_pending_cfg=0x0c86;run(&dev,1);
   assert(data.init_step==INIT_TRACE_STREAMING && writes==1 && !reati_requests);
   read_errors=1;run(&dev,1);
-  assert(data.init_step==INIT_REQUEST_REATI && reads==1 && !reati_requests);
+  assert(data.init_step==INIT_TRACE_STREAMING && reads==1 && !reati_requests);
+  run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
   run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
   data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0xEEEE;
-  run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && reads==1 && !writes);
+  run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && reads==1 && !writes && !reati_requests);
+  assert(!data.wait_count && busy_waits==1);
+  ic_cfg=data.init_pending_cfg;run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
+  run(&dev,1);assert(reati_requests==1);
+  data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0x061e;
+  run(&dev,1);assert(data.init_step==INIT_SET_STREAMING && data.wait_count==1 && !reati_requests);
+  run(&dev,3);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
+  data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0x061e;rejects=10;
+  run(&dev,10);assert(data.init_step==INIT_FAILED && !reati_requests);
   data=setup(false);
   /* No split central, no finger event, no RDY: initialization still completes. */
   run(&dev, 12);

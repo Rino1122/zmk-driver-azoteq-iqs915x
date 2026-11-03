@@ -528,7 +528,7 @@ struct iqs915x_data
     enum iqs915x_work_state work_state; // 通常動作ステート
     bool initialized;                   // 初期化完了フラグ
     uint16_t init_data_offset;          // init-data書き込み進捗（バイトオフセット）
-    uint8_t wait_count;                 // SW ResetやRe-ATIなどの待機リトライカウンタ
+    uint32_t wait_count;                 // SW ResetやRe-ATIなどの待機リトライカウンタ
     uint8_t init_chunk_retry_count;      // 現在のinit-dataチャンク書き込みリトライ回数
     uint8_t init_restart_count;          // 初期化リカバリのためのsoftware reset回数
     uint16_t init_pending_cfg;           // 初期化中の通信設定を次transactionへ持ち越す値
