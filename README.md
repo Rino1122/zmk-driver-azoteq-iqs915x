@@ -747,3 +747,18 @@ causes repeated requests; disable/re-enable the layer to retry. Power generation
 changes, disabled output and channel diagnostics discard elapsed time. Every ATI
 occurred notification rearms the 2 s interval if error persists. Normal sensing
 without ATI error has no additional timer polling.
+
+
+Temporary diagnostic jobs
+-------------------------
+`iqs915x_diagnostic_start(dev, run_ati, id)` queues one bounded sensor-thread job
+from READY, including LP2/Suspend, without changing requested mode or settings.
+Input closes before temporary Active. With run_ati, Streaming is selected and a
+TP ATI request waits up to 5 s for RDY/Occurred. If the ATI error clears, no
+Compensation capture is necessary (successful result with info_after error bit
+clear). Otherwise the existing bounded Compensation capture runs. The latest
+requested power mode is restored before the result becomes available. Result
+ati_status and restore_status distinguish ATI and restoration failures. A changed
+power generation or PM request cancels sampling; restore reconciles newest intent.
+Host disconnect does not prolong a job: sensor-thread deadlines finish restoration
+without host participation. No persistent policy is changed.

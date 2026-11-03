@@ -505,6 +505,7 @@ struct iqs915x_data
     atomic_t ati_error;
     atomic_t ati_sequence;
     atomic_t channel_pending, channel_running;
+    atomic_t diagnostic_job; /* 1 capture, 2 ATI then capture */
     atomic_t channel_auto_attempted;
     uint32_t channel_requested_generation;
     struct k_mutex channel_lock;

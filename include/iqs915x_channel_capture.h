@@ -11,6 +11,7 @@
 struct iqs915x_channel_snapshot {
     uint32_t id, started_ms, ended_ms;
     int status;
+    int ati_status, restore_status;
     uint16_t info_before, info_after, config_before;
     uint16_t compensation[IQS915X_CHANNEL_COUNT];
     uint8_t disabled[48], mapping[30];

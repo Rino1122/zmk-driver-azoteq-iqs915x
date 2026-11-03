@@ -1065,6 +1065,7 @@ static void iqs915x_channels_cancel_pending(struct iqs915x_data *d) {
   if(atomic_cas(&d->channel_pending,1,0)) {
     k_mutex_lock(&d->channel_lock,K_FOREVER);
     d->channel_snapshot.status=-ECANCELED;
+    atomic_clear(&d->diagnostic_job);
     k_mutex_unlock(&d->channel_lock);
   }
 }
@@ -3052,6 +3053,8 @@ static void iqs915x_apply_pending_power_request(struct iqs915x_data *data)
           generation, output, (unsigned int)atomic_get(&data->pm_suspended), data->power_force_comms);
 }
 
+static void
+iqs915x_apply_pending_power_request(struct iqs915x_data *data);
 #include "iqs915x_channel_diagnostics.inc"
 
 /* ============================================================
@@ -3143,7 +3146,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
     iqs915x_channels_auto_request(data);
     if (atomic_cas(&data->channel_pending, 1, 0)) {
-      iqs915x_channels_capture_pending(data);
+      if (atomic_get(&data->diagnostic_job)) iqs915x_diagnostic_execute(data);
+      else iqs915x_channels_capture_pending(data);
       data->ati_assist_state = 0;
       data->ati_assist_due = 0;
       continue;
