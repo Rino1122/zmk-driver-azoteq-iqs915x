@@ -515,8 +515,6 @@ struct iqs915x_data
     bool mismatch_snapshot_valid;
     struct iqs915x_fault_snapshot ati_timeout_snapshot;
     bool ati_timeout_snapshot_valid;
-    struct iqs915x_ati_trace ati_trace;
-    bool ati_trace_valid, ati_trace_active;
     uint8_t diagnostic_low_confidence;
     int64_t diagnostic_confidence_ms;
     uint8_t probe_failures;
