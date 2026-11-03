@@ -13,7 +13,8 @@ int iqs915x_channels_start(const struct device *dev, uint32_t *id) {
   else {
     uint32_t next=d->channel_snapshot.id+1;if(!next)next=1;
     d->channel_snapshot=(struct iqs915x_channel_snapshot){.id=next,.status=-EINPROGRESS};
-    *id=next;d->channel_requested_generation=iqs915x_request_generation(d);
+    *id=next;if(atomic_get(&d->ati_error))atomic_set(&d->channel_auto_attempted,1);
+    d->channel_requested_generation=iqs915x_request_generation(d);
     atomic_set(&d->channel_pending,1);k_sem_give(&d->rdy_sem);
   }
   k_mutex_unlock(&d->channel_lock);return ret;
@@ -34,7 +35,7 @@ int iqs915x_channels_page(const struct device *dev,uint32_t id,unsigned offset,
       if(s->status==0) {
         out->count=MIN(IQS915X_CHANNEL_PAGE,IQS915X_CHANNEL_COUNT-offset);
         for(unsigned i=0;i<out->count;i++) {
-          out->values[i]=s->reference[offset+i];
+          out->values[i]=s->compensation[offset+i];
           if(iqs915x_channel_disabled(s,offset+i))out->disabled_mask|=BIT(i);
         }
       }
@@ -75,19 +76,19 @@ static void iqs915x_channels_capture_pending(struct iqs915x_data *d) {
   }
   if(!s->status) {
     iqs915x_runtime_info(d,s->info_after);
-    unsigned zeros=0,disabled=0;
+    unsigned saturated=0,disabled=0;
     for(unsigned i=0;i<IQS915X_CHANNEL_COUNT;i++) {
       if(iqs915x_channel_disabled(s,i)){disabled++;continue;}
-      if(!s->reference[i]) {
-        zeros++;
-        LOG_WRN("channel diagnostic profile=%u capture=%u row=%u col=%u key_row=%u key_col=%u reference=0 (check candidate)",
+      if(s->compensation[i]==0 || s->compensation[i]==1023) {
+        saturated++;
+        LOG_WRN("channel diagnostic profile=%u capture=%u row=%u col=%u key_row=%u key_col=%u compensation=%u (ATI limit, check candidate)",
                 ((const struct iqs915x_config *)d->dev->config)->channel_profile,s->id,
-                i/18,i%18,i/18/3,i%18/3);
+                i/18,i%18,i/18/3,i%18/3,s->compensation[i]);
       }
     }
-    (void)zeros;(void)disabled;
-    LOG_INF("channel diagnostic capture=%u zeros=%u disabled=%u info=0x%04x duration_ms=%u",
-            s->id,zeros,disabled,s->info_after,s->ended_ms-s->started_ms);
+    (void)saturated;(void)disabled;
+    LOG_INF("channel diagnostic capture=%u ati_limits=%u disabled=%u info=0x%04x duration_ms=%u",
+            s->id,saturated,disabled,s->info_after,s->ended_ms-s->started_ms);
   } else LOG_WRN("channel diagnostic capture=%u failed=%d restore_failed=%u",
                  s->id,s->status,s->restore_failed);
   k_mutex_lock(&d->channel_lock,K_FOREVER);d->channel_snapshot=*s;
@@ -96,4 +97,21 @@ static void iqs915x_channels_capture_pending(struct iqs915x_data *d) {
   bool reset=(s->info_before!=0xEEEE && (s->info_before & IQS915X_SHOW_RESET)) ||
              (s->info_after!=0xEEEE && (s->info_after & IQS915X_SHOW_RESET));
   if(s->restore_failed || reset)iqs915x_runtime_reset(d,"diagnostic restore/reset boundary");
+}
+
+/* One bounded automatic attempt per ATI-error episode, not per Re-ATI event.
+ * Failed/cancelled attempts remain cached; explicit start can retry. */
+static bool iqs915x_channels_auto_request(struct iqs915x_data *d) {
+  if(!atomic_get(&d->ati_error)){atomic_clear(&d->channel_auto_attempted);return false;}
+  if(atomic_get(&d->channel_auto_attempted) || atomic_get(&d->channel_running) ||
+     atomic_get(&d->channel_pending) || atomic_get(&d->lifecycle)!=IQS915X_READY ||
+     atomic_get(&d->requested_mode)!=IQS915X_POWER_ACTIVE ||
+     atomic_get(&d->actual_mode)!=IQS915X_POWER_ACTIVE ||
+     atomic_get(&d->mode_transitioning) || atomic_get(&d->pm_suspended))return false;
+  uint32_t id;
+  int rc=iqs915x_channels_start(d->dev,&id);
+  if(rc)return false;
+  atomic_set(&d->channel_auto_attempted,1);
+  LOG_INF("ATI compensation auto capture=%u",id);
+  return true;
 }

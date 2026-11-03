@@ -190,7 +190,7 @@ int iqs915x_apply_settings(const struct device *dev,
 
 
 #include <iqs915x_channel_capture.h>
-/* Explicit, nonblocking capture request. Requires READY, requested/actual Active.
+/* ATI Compensation (10-bit values), explicit nonblocking capture request. Requires READY, requested/actual Active.
  * The sensor thread closes input while capturing; layer/power changes cancel it.
  * No automatic/periodic capture is performed. IDs fence stale paged reads. */
 struct iqs915x_channel_page {

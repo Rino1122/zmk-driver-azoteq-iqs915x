@@ -12,7 +12,7 @@ struct iqs915x_channel_snapshot {
     uint32_t id, started_ms, ended_ms;
     int status;
     uint16_t info_before, info_after, config_before;
-    uint16_t reference[IQS915X_CHANNEL_COUNT];
+    uint16_t compensation[IQS915X_CHANNEL_COUNT];
     uint8_t disabled[48], mapping[30];
     bool mapping_valid, restore_failed;
 };
@@ -24,9 +24,9 @@ struct iqs915x_channel_io {
     uint32_t (*now)(void *);
 };
 static inline uint16_t iqs_channel_u16(const uint8_t *p) {return p[0]|((uint16_t)p[1]<<8);}
-/* Every callback performs exactly one I2C transaction/STOP. Explicit capture
+/* Every callback performs exactly one I2C transaction/STOP. Compensation capture
  * temporarily suppresses auto-ATI; no engineering/streaming selector is needed
- * for the direct 0xB000 reference window (datasheet A.27, packed Total Rxs).
+ * for direct 0xD000 compensation words (A.26 and channel numbering 5.2.1).
  * A capture is unavailable, never partial-success, after reset/busy/cancellation.
  */
 static inline int iqs915x_channel_capture(const struct iqs915x_channel_io *io,
@@ -54,8 +54,8 @@ static inline int iqs915x_channel_capture(const struct iqs915x_channel_io *io,
     }
     for(unsigned i=0;i<48;i+=16){CAP_READ(0x1246+i,16);memcpy(s->disabled+i,b,16);}
     for(unsigned i=0;i<IQS915X_CHANNEL_COUNT;i+=8) {
-        CAP_READ(0xB000+2*i,16);
-        for(unsigned j=0;j<8;j++)s->reference[i+j]=iqs_channel_u16(b+2*j);
+        CAP_READ(0xD000+2*i,16);
+        for(unsigned j=0;j<8;j++)s->compensation[i+j]=iqs_channel_u16(b+2*j)&0x03FFU;
     }
     CAP_READ(0x1020,2);s->info_after=iqs_channel_u16(b);
     if(s->info_after==0xEEEE || (s->info_after&0x97) ||

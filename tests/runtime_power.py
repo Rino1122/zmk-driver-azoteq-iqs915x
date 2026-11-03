@@ -273,6 +273,19 @@ int main(void) {
   assert(!iqs915x_wait_window(&d,false,INT64_MAX) && !txns && sem_waits==1);
   wait_hook=NULL;
 
+  /* Auto capture only once per error episode, only selected stable Active. */
+  setup(false);d.lifecycle=IQS915X_READY;d.ati_error=1;
+  assert(!iqs915x_channels_auto_request(&d) && !txns && !d.channel_auto_attempted);
+  setup(true);d.lifecycle=IQS915X_READY;d.actual_mode=IQS915X_POWER_ACTIVE;d.ati_error=1;
+  assert(iqs915x_channels_auto_request(&d) && d.channel_pending && !txns);
+  assert(!iqs915x_channels_auto_request(&d));
+  atomic_clear(&d.channel_pending);d.channel_snapshot.status=-ECANCELED;
+  assert(!iqs915x_channels_auto_request(&d)); /* no automatic retry loop */
+  iqs915x_runtime_info(&d,0);d.ati_error=1;
+  assert(iqs915x_channels_auto_request(&d)); /* actual error clearance rearms */
+  setup(true);d.lifecycle=IQS915X_READY;d.actual_mode=IQS915X_POWER_ACTIVE;d.ati_error=1;d.pm_suspended=1;
+  assert(!iqs915x_channels_auto_request(&d) && !txns);
+
   setup(true);d.lifecycle=IQS915X_READY;
   uint32_t capture_id=0,other_id=0;struct iqs915x_channel_page page;
   assert(!iqs915x_channels_start(&dev,&capture_id) && capture_id);

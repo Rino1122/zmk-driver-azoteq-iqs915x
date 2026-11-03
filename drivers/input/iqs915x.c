@@ -1101,6 +1101,7 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
       LOG_INF("reati error=0 flags=0x%04x t=%lld", info, (long long)k_uptime_get());
     }
   }
+  if(!error)atomic_clear(&data->channel_auto_attempted);
   bool changed = error != data->ati_error_seen;
   data->ati_error_seen = error;
   atomic_set(&data->ati_error, error);
@@ -3037,6 +3038,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
 
+    iqs915x_channels_auto_request(data);
     if (atomic_cas(&data->channel_pending, 1, 0)) {
       iqs915x_channels_capture_pending(data);
       continue;
