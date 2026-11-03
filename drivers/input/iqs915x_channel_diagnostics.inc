@@ -132,6 +132,7 @@ int iqs915x_diagnostic_start(const struct device *dev,bool run_ati,uint32_t *id)
     uint32_t next=d->channel_snapshot.id+1;if(!next)next=1;
     d->channel_snapshot=(struct iqs915x_channel_snapshot){.id=next,.status=-EINPROGRESS};
     d->channel_requested_generation=iqs915x_request_generation(d);
+    if(atomic_get(&d->ati_error))atomic_set(&d->channel_auto_attempted,1);
     atomic_set(&d->diagnostic_job,run_ati?2:1);atomic_set(&d->channel_pending,1);
     *id=next;k_sem_give(&d->rdy_sem);
   }
