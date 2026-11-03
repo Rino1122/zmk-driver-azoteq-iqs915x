@@ -161,6 +161,12 @@ static void iqs915x_diagnostic_execute(struct iqs915x_data *d) {
   if(!rc && kind==2) {
     uint16_t cfg=iqs915x_config_settings_without_event_mode(d->confirmed_config_settings);
     rc=iqs915x_write_reg16(d->dev,IQS915X_CONFIG_SETTINGS,cfg);
+    uint16_t observed=0;
+    if(!rc)rc=iqs915x_read_reg16(d->dev,IQS915X_CONFIG_SETTINGS,&observed);
+    if(!rc && observed!=cfg)rc=-EIO;
+    /* Consume any previous Occurred before issuing this request. */
+    if(!rc)rc=iqs915x_read_reg16(d->dev,IQS915X_INFO_FLAGS,&observed);
+    if(!rc && (observed==0xEEEE || (observed&IQS915X_SHOW_RESET)))rc=-EIO;
     if(!rc)rc=iqs915x_write_reg16(d->dev,IQS915X_SYSTEM_CONTROL,IQS915X_MODE_ACTIVE|IQS915X_REATI_TP);
     int64_t ati_end=MIN(deadline,k_uptime_get()+5000);
     bool occurred=false;
