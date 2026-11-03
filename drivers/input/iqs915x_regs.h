@@ -628,6 +628,9 @@ struct iqs915x_data
     bool power_force_comms; // 有効化・無効化の制御通信はRDYを待たずに進める
     uint16_t confirmed_mode;
     uint32_t active_sampling_period_ms;
+    int64_t ati_assist_due;
+    uint32_t ati_assist_generation;
+    uint8_t ati_assist_state; /* 0 idle, 1 armed, 2 waiting, 3 timed out */
     int64_t comm_completed_ms;
     uint32_t init_rdy_accesses, init_force_accesses, init_window_timeouts;
     bool comm_fallback_active;

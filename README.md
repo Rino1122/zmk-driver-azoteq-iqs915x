@@ -739,3 +739,11 @@ accesses. `0xEEEE` is rejected as unusable state/configuration data; the legacy
 Runtime sampling, Event Mode, LP2/Suspend and ATI-error auto-retry policy are
 unchanged. Hardware validation is required; this does not establish that any
 observed corruption originated in firmware rather than bus/power integrity.
+
+ATI-error assistance runs only in confirmed Active with output requested. After
+2 s without an ATI occurred notification (1 s retry plus 1 s margin), it requests
+TP ATI once and waits up to 5 s. A missing completion or ambiguous write never
+causes repeated requests; disable/re-enable the layer to retry. Power generation
+changes, disabled output and channel diagnostics discard elapsed time. Every ATI
+occurred notification rearms the 2 s interval if error persists. Normal sensing
+without ATI error has no additional timer polling.

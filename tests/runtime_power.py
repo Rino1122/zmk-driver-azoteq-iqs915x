@@ -125,8 +125,7 @@ static int i2c_write_dt(const struct i2c_dt_spec *i,const uint8_t *b,size_t len)
   } else {
     assert(reg==IQS915X_SYSTEM_CONTROL);
     if (reject_mode) reject_mode--; else ic_mode=value & IQS915X_CHARGING_MODE_MASK;
-    /* Runtime writes may select a mode, but must never request calibration. */
-    assert(!(value & (IQS915X_TP_RESEED | BIT(4) | IQS915X_REATI_TP)));
+    assert(!(value & (IQS915X_TP_RESEED | BIT(4))));
   }
   next_rdy=now+period();
   if (io_errors) { io_errors--; return -EIO; }
@@ -206,6 +205,16 @@ static void until_idle(void) {
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
+  setup(true);d.ati_error=1;
+  assert(iqs915x_ati_assist(&d)==2000 && !writes);
+  now=1999;assert(iqs915x_ati_assist(&d)==2000 && !writes);
+  d.requested_enabled=0;assert(iqs915x_ati_assist(&d)==INT64_MAX);
+  now=3000;d.requested_enabled=1;assert(iqs915x_ati_assist(&d)==5000);
+  now=5000;assert(iqs915x_ati_assist(&d)==10000 && writes==1);
+  now=9999;iqs915x_ati_assist(&d);assert(writes==1);
+  now=10000;assert(iqs915x_ati_assist(&d)==INT64_MAX && writes==1);
+  now=12000;iqs915x_ati_assist(&d);assert(writes==1);
+
   /* Startup uses real per-transaction gate, not only the outer dispatch.
    * Stale semaphore wakes cannot authorize a read while RDY is inactive. */
   setup(true);d.initialized=false;d.init_deadline=15000;
@@ -666,6 +675,7 @@ def main():
         m = matches[-1]
         functions.append(block(SOURCE[m.start():], m[0]))
     gestures = (ROOT/'drivers/input/iqs915x_gestures.c').read_text()
+    functions.insert(0, "static int iqs915x_write_reg16(const struct device *,uint16_t,uint16_t);")
     functions.insert(0, "static void iqs915x_trace_finish(struct iqs915x_data *,unsigned);")
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
     a = SOURCE.index('static void iqs915x_terminal(')

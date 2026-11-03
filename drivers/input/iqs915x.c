@@ -1150,6 +1150,7 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
     return false;
   }
   bool reati = (info & IQS915X_REATI_OCCURRED) != 0;
+  if (reati) { data->ati_assist_state = 0; data->ati_assist_due = 0; }
   bool error = (info & IQS915X_ATI_ERROR) != 0;
   if (error != data->ati_error_seen || (error && reati))
   {
@@ -1238,6 +1239,43 @@ static uint32_t iqs915x_sampling_period(const struct iqs915x_data *data)
 
 /* Return false on a timer/API wake without an asserted RDY. Such wakes must
  * neither count as samples nor extend the watchdog's last-STOP deadline. */
+/* Run only on the sensor thread. A new power/layer generation discards all
+ * elapsed time, including a pending request timeout. */
+static int64_t iqs915x_ati_assist(struct iqs915x_data *data)
+{
+  uint32_t generation = iqs915x_request_generation(data);
+  bool eligible = data->initialized && atomic_get(&data->requested_enabled) &&
+      !atomic_get(&data->pm_suspended) && !data->ic_suspended &&
+      data->work_state == WORK_READ_DATA && data->confirmed_mode == IQS915X_MODE_ACTIVE &&
+      atomic_get(&data->ati_error);
+  if (!eligible || generation != data->ati_assist_generation ||
+      atomic_get(&data->channel_pending) || data->channel_running) {
+    data->ati_assist_state = 0;
+    data->ati_assist_due = 0;
+    data->ati_assist_generation = generation;
+    return INT64_MAX;
+  }
+  int64_t now = k_uptime_get();
+  if (!data->ati_assist_state) {
+    data->ati_assist_state = 1;
+    data->ati_assist_due = now + 2000; /* retry_s=1 plus 1 s margin */
+  }
+  if (data->ati_assist_state == 3) return INT64_MAX;
+  if (now < data->ati_assist_due) return data->ati_assist_due;
+  if (data->ati_assist_state == 2) {
+    LOG_ERR("ATI assist completion timeout after 5000 ms; re-enable layer to retry");
+    data->ati_assist_state = 3;
+    return INT64_MAX;
+  }
+  int ret = iqs915x_write_reg16(data->dev, IQS915X_SYSTEM_CONTROL,
+                               IQS915X_MODE_ACTIVE | IQS915X_REATI_TP);
+  LOG_WRN("ATI assist request rc=%d", ret);
+  /* An ambiguous write may have reached the IC. Never immediately resend. */
+  data->ati_assist_state = 2;
+  data->ati_assist_due = k_uptime_get() + 5000;
+  return data->ati_assist_due;
+}
+
 static bool iqs915x_wait_window(struct iqs915x_data *data, bool force, int64_t timer)
 {
   const struct iqs915x_config *config = data->dev->config;
@@ -3116,6 +3154,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
     iqs915x_channels_auto_request(data);
     if (atomic_cas(&data->channel_pending, 1, 0)) {
       iqs915x_channels_capture_pending(data);
+      data->ati_assist_state = 0;
+      data->ati_assist_due = 0;
       continue;
     }
     iqs915x_apply_pending_power_request(data);
@@ -3151,12 +3191,12 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
     uint32_t frame_generation = iqs915x_request_generation(data);
-    int64_t deadline = INT64_MAX;
+    int64_t deadline = iqs915x_ati_assist(data);
     if (!data->streaming_expected && iqs915x_output_is_enabled(data) &&
         data->finger_tracker.count_change_pending)
     {
-      deadline = data->finger_tracker.candidate_since_ms +
-                 IQS915X_FINGER_COUNT_DEBOUNCE_MS;
+      deadline = MIN(deadline, data->finger_tracker.candidate_since_ms +
+                 IQS915X_FINGER_COUNT_DEBOUNCE_MS);
     }
     int64_t contact_deadline = iqs915x_contact_refresh_deadline(data);
     deadline = MIN(deadline, contact_deadline);
