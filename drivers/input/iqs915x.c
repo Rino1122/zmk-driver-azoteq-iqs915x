@@ -2564,6 +2564,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
 
     ret = iqs915x_write_block(dev, addr, buffer, chunk);
+    if (ret == -EAGAIN) return ret; /* No transaction: retain retry budget. */
     if (ret < 0)
     {
       data->init_chunk_retry_count++;
@@ -2611,6 +2612,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     }
 
     ret = iqs915x_read_block(dev, addr, actual, chunk);
+    if (ret == -EAGAIN) return ret; /* No window is not a read-back mismatch. */
     if (ret < 0)
     {
       LOG_ERR("Failed to read back init-data at 0x%04x: %d", addr, ret);

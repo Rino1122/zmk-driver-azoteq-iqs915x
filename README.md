@@ -342,20 +342,17 @@ been removed; migrate firmware overlays by removing them and the profile node.
 The Azoteq header supplies the base bytes. Before each transfer, the driver
 patches a temporary buffer with its sensor settings and mandatory protocol bits.
 Read-back verification uses the same patched bytes. The export itself is never
-modified. At driver startup, the first INFO_FLAGS read uses Force Comms and
-selects the initialization path from SHOW_RESET:
+modified. At driver startup, INFO_FLAGS selects the path from SHOW_RESET:
 
-- SHOW_RESET set: transfer init-data, acknowledge reset, request TP Re-ATI,
-  and verify the Event Mode policy as before.
-- SHOW_RESET clear: assume the IC is already configured, preserve its sensor
-  settings, and skip software reset, init-data transfer and reset acknowledgement.
-  Read the retained communication settings, temporarily select Streaming with
-  Manual Control, request Active TP Re-ATI, then restore and verify Event Mode.
+- SHOW_RESET set: transfer init-data, acknowledge reset, verify Streaming,
+  request TP Re-ATI and verify the Event Mode policy.
+- SHOW_RESET clear: check retained resolution and channel mask. If they match,
+  retain init-data and calibration and verify Event Mode without requesting ATI.
+  A mismatched retained profile starts the software-reset initialization path.
 
-Both paths still force TP Re-ATI. The initial status check, retained-config
-read/write, Re-ATI request and Event policy read/write use Force Comms so startup
-cannot wait for a finger event in retained LP2. Re-ATI completion and init-data
-transfer remain RDY-driven, with one transaction per communication window.
+Startup accesses prefer RDY with bounded Force Comms fallback for quiet retained
+states; see "Startup communication windows" below. Streaming Re-ATI waits and
+init-data transfer require RDY.
 The optional reset GPIO is configured inactive at startup without a reset pulse.
 Changes to the initialization header take effect on the next IC reset; a host
 reboot with SHOW_RESET clear keeps the previous sensor settings.
@@ -487,9 +484,9 @@ read wakes the sensor again. Suspend exit clears the bit using Force Comms and
 allows the IC's automatic reseed. Device PM uses Suspend and restores the previous
 requested mode.
 
-Startup uses Force Comms even without RDY. Three unanswered transactions latch
+Startup can fall back to Force Comms for quiet retained states. Three failed probe transactions latch
 ABSENT; the using firmware must configure a finite I2C transfer timeout (Bretagne:
-1000 ms). Initialization has a 10-second deadline and otherwise latches FAULT.
+1000 ms). Initialization has a 15-second deadline and otherwise latches FAULT.
 Terminal states disable RDY and stop all retries until this MCU boots again;
 reading status never re-probes the sensor. A known sensor's SHOW_RESET starts
 recovery and reapplies the latest requested mode. The initialization header stays
