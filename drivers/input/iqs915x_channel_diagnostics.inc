@@ -204,7 +204,7 @@ static void iqs915x_diagnostic_execute(struct iqs915x_data *d) {
     int restore=diagnostic_mode_finish(d,k_uptime_get()+3000);
     restore_status=restore;
     if(restore)rc=restore;
-  } else if(!rc)rc=-EIO;
+  } else {restore_status=-ENODEV;if(!rc)rc=-EIO;}
   k_mutex_lock(&d->channel_lock,K_FOREVER);
   d->channel_snapshot.status=rc;
   d->channel_snapshot.ati_status=ati_status;d->channel_snapshot.restore_status=restore_status;
