@@ -257,9 +257,6 @@ int main(void) {
   assert(!iqs915x_mismatch_get(&dev,&mismatch) && mismatch.evidence.busy && !(mismatch.evidence.valid_mask&2));
   setup(true);assert(iqs915x_mismatch_get(&dev,&mismatch)==-ENODATA);
 
-  setup(true);struct iqs915x_ati_trace trace;
-  assert(iqs915x_ati_trace_get(&dev,&trace)==-ENOTSUP && !txns);
-
   /* Pre-reset ATI timeout record is bounded and independent of terminal evidence. */
   setup(true);struct iqs915x_fault_snapshot ati;
   assert(iqs915x_ati_timeout_get(&dev,&ati)==-ENODATA);
@@ -659,7 +656,6 @@ def main():
         functions.append(block(SOURCE[m.start():], m[0]))
     gestures = (ROOT/'drivers/input/iqs915x_gestures.c').read_text()
     functions.insert(0, "static int iqs915x_write_reg16(const struct device *,uint16_t,uint16_t);")
-    functions.insert(0, "static void iqs915x_trace_finish(struct iqs915x_data *,unsigned);")
     functions.insert(0, block(gestures, 'bool iqs915x_get_finger_coordinates('))
     a = SOURCE.index('static void iqs915x_terminal(')
     b = SOURCE.index('/* ============================================================\n * ボタンリリース遅延処理', a)

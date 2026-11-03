@@ -119,13 +119,6 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data) {
 static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
   data->initialized = value;
 }
-static unsigned trace_starts,trace_configs,trace_requests;
-static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;trace_starts++;}
-static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;trace_configs++;}
-static void iqs915x_trace_request(struct iqs915x_data *d,int rc){(void)d;(void)rc;trace_requests++;}
-static void iqs915x_trace_sample(struct iqs915x_data *d,uint16_t v,int rc){(void)d;(void)v;(void)rc;}
-static void iqs915x_trace_finish(struct iqs915x_data *d,unsigned o){(void)d;(void)o;}
-static void iqs915x_trace_wait_timeout(struct iqs915x_data *d){(void)d;}
 static unsigned timeout_captures;
 static void iqs915x_ati_timeout_capture(struct iqs915x_data *d){assert(d->init_step==INIT_WAIT_REATI);timeout_captures++;}
 static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
@@ -210,7 +203,6 @@ INITIALIZATION
   }
 }
 static struct iqs915x_data setup(bool enabled) {
-  trace_starts=trace_configs=trace_requests=0;
   busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
   ic_cfg = ic_info = 0;
@@ -236,11 +228,11 @@ int main(void) {
     reati_ready=true;run(&dev,2);
     assert(data.init_step==INIT_PREPARE_STREAMING && !reati_requests);
     run(&dev,1);assert(data.init_step==INIT_SET_STREAMING);
-    run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && trace_starts==1 && !reati_requests);
+    run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && !reati_requests);
     assert(!(ic_cfg & IQS915X_EVENT_MODE));
-    run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && trace_configs==1 && !reati_requests);
-    run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && trace_requests==1 && reati_requests==1);
-    run(&dev,12);assert(data.initialized && trace_starts==1 && trace_configs==1 && trace_requests==1);
+    run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
+    run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
+    run(&dev,12);assert(data.initialized);
   }
   /* Busy/error/mismatch cannot queue ATI; matching readback opens the gate. */
   data=setup(true);data.init_step=INIT_SET_STREAMING;

@@ -139,14 +139,3 @@ static void iqs915x_ati_timeout_capture(struct iqs915x_data *d) {
           f.read_status[2],f.control,f.valid_mask);
 }
 
-/* Retired forensic trace opcode: preserve wire/API compatibility. */
-int iqs915x_ati_trace_get(const struct device *dev,struct iqs915x_ati_trace *out) {
-  if(!dev || !out)return -ENODEV;
-  return -ENOTSUP;
-}
-static void iqs915x_trace_begin(struct iqs915x_data *d,uint16_t expected,int status) {}
-static void iqs915x_trace_config(struct iqs915x_data *d,uint16_t value,int status) {}
-static void iqs915x_trace_request(struct iqs915x_data *d,int status) {}
-static void iqs915x_trace_sample(struct iqs915x_data *d,uint16_t info,int status) {}
-static void iqs915x_trace_wait_timeout(struct iqs915x_data *d) {}
-static void iqs915x_trace_finish(struct iqs915x_data *d,unsigned outcome) {}
