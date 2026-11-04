@@ -59,8 +59,6 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
         scroll-threshold-start = <2>;         /* Arm inertia above this velocity */
         scroll-threshold-stop = <0>;          /* Stop inertia at/below this velocity */
 
-        /* Optional absolute coordinate correction; disabled if omitted */
-        coordinate-correction;
 
         /* Optional firmware-side pointer acceleration; disabled if omitted */
         pointer-accel;
@@ -85,9 +83,10 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 ```
 
 The driver uses IQS9150 finger coordinates from registers `0x1024` and
-`0x1026` as the internal pointer source. If `coordinate-correction` is set, raw
-coordinates are corrected with per-axis block-local LUTs.
-If the property is omitted, raw IQS9150 absolute coordinates are used directly.
+`0x1026` as the internal pointer source. A validated runtime calibration map
+corrects all four absolute-coordinate slots before contact frames and gesture
+processing. Without a map the transform is exactly the identity; the old
+`coordinate-correction` DTS switch and periodic LUT are retired.
 The driver converts consecutive-sample deltas to `INPUT_REL_X`/`INPUT_REL_Y` for
 the host. The first sample after touch-down is used as a baseline (no cursor
 move), then relative movement is reported while `TP Movement` is asserted.
@@ -104,21 +103,22 @@ using the driver-owned Active sampling period (15 ms). When `pointer-accel` is o
 `pointer-sensitivity-percent` is left at `100`, pointer output is unchanged from
 the raw absolute-coordinate delta path.
 
-Coordinate correction uses 6 X blocks and 4 Y blocks. Block widths are derived
-from `X_RESOLUTION` (`0x11E6`) and `Y_RESOLUTION` (`0x11E8`) in the compiled
-init-data, independently of whether swipe gestures are enabled; no fixed
-6000/4000 resolution is assumed. Each block boundary
-and block center is treated as a fixed point, and the same axis-specific
-half-block LUT is mirrored across every block half, including corner blocks.
-Both axes use 17 Q15 samples of `g(u) = u + 0.5*u*(1-u)` (`a = 0.5`), where
-`u` is the distance from the key center divided by the half-block width.
-Linear interpolation between samples moves intermediate positions toward the
-gaps without snapping, while keeping the mapping monotonic. For a block spanning
-0..1000, 250 maps to about 188 and 750 to about 813; 0, 500 and 1000 stay fixed.
-The LUTs are defined in `iqs915x_sensor_config.h`. The log-fitting utility
-`scripts/generate_coord_lut.py` is retained for experiments; it does not generate
-the current fixed-strength curve. Correction applies to all four finger slots
-before pointer and gesture processing, including scroll and swipe.
+Harbour builds a separate 17×13 displacement map for each sensor. The driver
+uses integer Q12 bilinear weights, int64 intermediate sums and signed nearest
+rounding (ties away from zero). The 884-byte payload holds signed 16-bit X and
+Y displacement arrays. The 16-byte BRC1 header binds the map to its side,
+electrode profile, orientation and initial XY resolution; CRC32 covers the
+payload. The boundary-normal displacement is zero; magnitude is at most
+3.2 mm and conservative Jacobian checks bound local scales to 0.5–2.
+
+`iqs915x_calibration_command()` provides bounded raw sample pages, a 3-second
+capture lease and staged map uploads. Failed uploads never alter an active or
+pending map. Maps switch on an all-up sample, or while a sleeping sensor has no
+live output epoch. Calibration start/end closes contact epochs. Capture reads
+fresh data at 15 ms only while requested; normal calibration adds no timer,
+Flash access, or bus transaction per sample. Persistence and split transport
+belong to the consuming firmware. See `include/iqs915x_calibration.h` and the
+Bretagne calibration RPC documentation for wire layouts.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
 The driver emits raw touched stream samples before calibration as INFO logs in
@@ -322,8 +322,7 @@ there is no manually copied array or DTS conversion. Header or generator changes
 regenerate the array before compilation. Invalid byte counts, section addresses,
 duplicate definitions and out-of-range values fail the build.
 
-`drivers/input/iqs915x_sensor_config.h` owns the coordinate LUTs (17 entries per
-axis, 6 X blocks and 4 Y blocks) and initialization overrides: Active sampling
+`drivers/input/iqs915x_sensor_config.h` owns initialization overrides: Active sampling
 period 15 ms, LP2 sampling period 500 ms, Re-ATI retry 1 second and axis
 orientation. Firmware DTS supplies only the I2C/GPIO wiring and input behavior
 settings, such as tap, scroll, acceleration and enable state. The former

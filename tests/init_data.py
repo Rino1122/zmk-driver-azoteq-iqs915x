@@ -111,8 +111,8 @@ int main(void) {
   assert(!(written[IQS915X_TRACKPAD_SETTINGS - 0x115C] & (IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS)));
   assert(!(written[IQS915X_SINGLE_FINGER_GESTURES_ENABLE - 0x115C] & (IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD)));
   assert(!(written[IQS915X_TWO_FINGER_GESTURES_ENABLE - 0x115C] & (IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL)));
-  assert(sizeof(iqs915x_coord_lut_x) / sizeof(uint16_t) == 17);
-  assert(sizeof(iqs915x_coord_lut_y) / sizeof(uint16_t) == 17);
+  /* Coordinate maps are validated by coordinate_correction.py. */
+
   uint8_t baseline[1174];memcpy(baseline,written,sizeof(baseline));
   unsigned mask_offset=IQS915X_CHANNEL_DISABLE_BASE-IQS915X_INIT_DATA_BASE_ADDR;
   for(unsigned selected=0;selected<=2;selected++) {

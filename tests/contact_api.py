@@ -27,7 +27,7 @@ harness=r'''
 #define IQS915X_TAP_AIR_TIME_FALLBACK_MS 150
 #define IQS915X_TAP_DISTANCE_FALLBACK 100
 static int64_t k_uptime_get(void) {return 123;}
-static bool k_is_in_isr(void) {return false;}
+
 FUNCTIONS
 static struct iqs915x_contact_frame received;
 static int frames;
