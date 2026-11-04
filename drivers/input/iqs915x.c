@@ -511,115 +511,7 @@ static int iqs915x_read_block(const struct device *dev, uint16_t reg,
  *   [42-43]: FINGER4_Y (uint16)
  * ============================================================ */
 
-#define IQS915X_COORD_LUT_Q15_SCALE BIT(15)
-
-
-static uint16_t iqs915x_correct_half_block_distance(uint16_t distance,
-                                                    uint16_t half_block,
-                                                    const uint16_t *lut,
-                                                    size_t lut_len)
-{
-  uint32_t pos;
-  uint32_t idx;
-  uint32_t rem;
-  uint32_t low;
-  uint32_t high;
-  uint32_t corrected_q15;
-
-  if (distance == 0 || half_block == 0)
-  {
-    return 0;
-  }
-
-  if (distance >= half_block)
-  {
-    return half_block;
-  }
-
-  if (lut_len < 2)
-  {
-    return distance;
-  }
-
-  pos = (uint32_t)distance * (lut_len - 1U);
-  idx = pos / half_block;
-  rem = pos % half_block;
-
-  if (idx >= lut_len - 1U)
-  {
-    return half_block;
-  }
-
-  low = lut[idx];
-  high = lut[idx + 1U];
-  corrected_q15 = low + (((high - low) * rem) / half_block);
-
-  return (uint16_t)(((uint32_t)half_block * corrected_q15 +
-                     (IQS915X_COORD_LUT_Q15_SCALE / 2U)) /
-                    IQS915X_COORD_LUT_Q15_SCALE);
-}
-
-static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolution,
-                                                uint8_t blocks,
-                                                const uint16_t *lut,
-                                                size_t lut_len)
-{
-  uint32_t block;
-  uint32_t block_start;
-  uint32_t block_end;
-  uint32_t block_center;
-  uint16_t half_block;
-  uint16_t distance;
-  uint16_t corrected_distance;
-
-  if (raw == UINT16_MAX || (resolution > 0 && raw > resolution))
-  {
-    return UINT16_MAX;
-  }
-
-  if (resolution == 0 || blocks == 0)
-  {
-    return raw;
-  }
-
-  if (raw >= resolution)
-  {
-    raw = resolution;
-  }
-
-  block = ((uint32_t)raw * blocks) / resolution;
-  if (block >= blocks)
-  {
-    block = blocks - 1U;
-  }
-
-  block_start = ((uint32_t)resolution * block) / blocks;
-  block_end = ((uint32_t)resolution * (block + 1U)) / blocks;
-  block_center = (block_start + block_end) / 2U;
-
-  if ((uint32_t)raw == block_start || (uint32_t)raw == block_center ||
-      (uint32_t)raw == block_end)
-  {
-    return raw;
-  }
-
-  if ((uint32_t)raw < block_center)
-  {
-    half_block = (uint16_t)(block_center - block_start);
-    distance = (uint16_t)(block_center - raw);
-    corrected_distance =
-        iqs915x_correct_half_block_distance(distance, half_block, lut, lut_len);
-    return (uint16_t)(block_center - corrected_distance);
-  }
-
-  half_block = (uint16_t)(block_end - block_center);
-  distance = (uint16_t)(raw - block_center);
-  corrected_distance =
-      iqs915x_correct_half_block_distance(distance, half_block, lut, lut_len);
-  return (uint16_t)(block_center + corrected_distance);
-}
-
-/* Validate before LUT correction so an unused 0xffff slot cannot become an
+/* Validate before map correction so an unused 0xffff slot cannot become an
  * apparently valid coordinate at the edge. Apply this even without correction. */
 static void iqs915x_validate_stream_coordinates(const struct iqs915x_data *data,
                                                 struct iqs915x_stream_data *stream)
@@ -672,6 +564,7 @@ static int iqs915x_read_stream(const struct device *dev,
 {
   int window_status = iqs915x_init_wait_window(dev);
   if (window_status < 0) return window_status;
+  const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_REL_X & 0xFF, IQS915X_REL_X >> 8};
   uint8_t buf[44];
   int ret;
@@ -682,6 +575,10 @@ static int iqs915x_read_stream(const struct device *dev,
   ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
   if (ret < 0)
   {
+    if(atomic_get(&((struct iqs915x_data *)dev->data)->calibration_capturing)) {
+      struct iqs915x_stream_data lost={.trackpad_flags=7,.abs_x=UINT16_MAX,.abs_y=UINT16_MAX};
+      iqs915x_calibration_sample(dev,&lost);
+    }
     return ret;
   }
 
@@ -3834,8 +3731,7 @@ static int iqs915x_init(const struct device *dev)
  * ============================================================ */
 BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data) == IQS915X_INIT_DATA_TOTAL_SIZE,
              "IQS915x header must supply 1174 init bytes");
-BUILD_ASSERT(ARRAY_SIZE(iqs915x_coord_lut_x) == 17 && ARRAY_SIZE(iqs915x_coord_lut_y) == 17,
-             "IQS915x coordinate LUTs must have 17 entries");
+
 BUILD_ASSERT(IQS915X_COORD_X_BLOCKS > 0 && IQS915X_COORD_Y_BLOCKS > 0,
              "IQS915x coordinate block counts must be positive");
 BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PERIOD_MS <= UINT16_MAX,
@@ -3851,12 +3747,6 @@ BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PE
       .init_data = iqs915x_init_data,                                                                                                                                                           \
       .channel_profile = DT_INST_ENUM_IDX(n, channel_profile), \
       .init_data_len = ARRAY_SIZE(iqs915x_init_data),                                                                                                                                          \
-      .coord_lut_x_q15 = iqs915x_coord_lut_x,                                                                                                                                                  \
-      .coord_lut_x_len = ARRAY_SIZE(iqs915x_coord_lut_x),                                                                                                                                      \
-      .coord_lut_y_q15 = iqs915x_coord_lut_y,                                                                                                                                                  \
-      .coord_lut_y_len = ARRAY_SIZE(iqs915x_coord_lut_y),                                                                                                                                      \
-      .coord_x_blocks = IQS915X_COORD_X_BLOCKS,                                                                                                                 \
-      .coord_y_blocks = IQS915X_COORD_Y_BLOCKS,                                                                                                                 \
       .one_finger_tap = DT_INST_PROP(n, one_finger_tap),                                                                                                                                           \
       .tap_and_hold = DT_INST_PROP(n, tap_and_hold),                                                                                                                                               \
       .two_finger_tap = DT_INST_PROP(n, two_finger_tap),                                                                                                                                           \
@@ -3891,7 +3781,6 @@ BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PE
       .swipe_direction_lock_numerator = DT_INST_PROP_OR(n, swipe_direction_lock_numerator, 3),                                                                                                     \
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .report_rate_ms = IQS915X_ACTIVE_SAMPLING_PERIOD_MS,                                                                                                                                     \
-      .coordinate_correction = DT_INST_PROP(n, coordinate_correction),                                                                                                                             \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
       .switch_xy = IQS915X_SENSOR_SWITCH_XY,                                                                                                                                                     \
       .flip_x = IQS915X_SENSOR_FLIP_X,                                                                                                                                                           \

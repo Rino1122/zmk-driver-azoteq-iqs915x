@@ -159,10 +159,8 @@ static void iqs915x_reset_input_session(struct iqs915x_data *d) {
   d->finger_tracker.count_change_pending=false;
 }
 static void iqs915x_mark_initialized(struct iqs915x_data *d,bool init) { d->initialized=init; }
-static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *c,
-                                               const struct iqs915x_data *d,
-                                               struct iqs915x_stream_data *s) {
-  (void)c; (void)d; s->abs_x+=50;
+static void iqs915x_calibration_sample(const struct device *dev,struct iqs915x_stream_data *s) {
+  (void)dev; s->abs_x+=50;
 }
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *s) { (void)s; }
 FUNCTIONS
@@ -618,8 +616,8 @@ int main(void) {
   setup(false); d.pm_suspended=1; d.request_generation++;
   iqs915x_apply_pending_power_request(&d);
   assert(!txns && d.transition_sem.count && d.work_state==WORK_READ_DATA);
-  /* Removing the raw-coordinate monitor preserves optional correction. */
-  setup(false); config.coordinate_correction=true; fingers=1; coords[0]=coords[1]=100;
+  /* Fresh validated reads reach the calibration stage. */
+  setup(false); fingers=1; coords[0]=coords[1]=100;
   struct iqs915x_stream_data sample;
   assert(!iqs915x_read_stream(&dev,&sample));
   assert(sample.abs_x==150);

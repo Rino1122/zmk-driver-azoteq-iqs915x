@@ -23,8 +23,13 @@ static void iqs915x_calibration_sample(const struct device *dev,struct iqs915x_s
         if(seq>128)d->calibration_dropped++;
         uint8_t *b=d->calibration_ring[(seq-1)%128];
         cal_put32(b,seq);cal_put32(b+4,d->comm_completed_ms);
-        cal_put16(b+8,s->abs_x);cal_put16(b+10,s->abs_y);
-        b[12]=fingers;b[13]=(s->trackpad_flags>>8)&15;
+        uint16_t xs[]={s->abs_x,s->finger2_x,s->finger3_x,s->finger4_x};
+        uint16_t ys[]={s->abs_y,s->finger2_y,s->finger3_y,s->finger4_y};
+        unsigned slot=0;
+        if(fingers==1)while(slot<3&&(xs[slot]==UINT16_MAX||ys[slot]==UINT16_MAX))slot++;
+        cal_put16(b+8,xs[slot]);cal_put16(b+10,ys[slot]);
+        b[12]=(s->info_flags&IQS915X_SHOW_RESET)?255:fingers;
+        b[13]=(s->trackpad_flags>>(8+slot))&1;
     }
     if(!fingers && atomic_get(&d->calibration_dirty)) {
         d->calibration_active=d->calibration_pending;

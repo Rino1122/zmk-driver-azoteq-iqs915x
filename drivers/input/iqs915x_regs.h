@@ -415,12 +415,6 @@ struct iqs915x_config
     // ドライバ内蔵の初期化データと座標補正（DTSからの注入は不可）
     const uint8_t *init_data;
     uint16_t init_data_len;
-    const uint16_t *coord_lut_x_q15;
-    size_t coord_lut_x_len;
-    const uint16_t *coord_lut_y_q15;
-    size_t coord_lut_y_len;
-    uint8_t coord_x_blocks;
-    uint8_t coord_y_blocks;
 
     // ジェスチャー設定
     bool one_finger_tap;
@@ -454,7 +448,6 @@ struct iqs915x_config
     uint16_t report_rate_ms; // ドライバ設定のActive Modeサンプリング周期(ms)
 
     // 座標補正
-    bool coordinate_correction; // true=絶対座標にブロック内LUT補正を適用
 
     // 軸設定
     bool switch_xy;
