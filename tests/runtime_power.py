@@ -117,6 +117,7 @@ static void record(uint16_t reg,bool write) {
   next_rdy=now+period();
 }
 static void put16(uint8_t *p,uint16_t v) { p[0]=v; p[1]=v>>8; }
+static bool simulate_ati;
 static int i2c_write_dt(const struct i2c_dt_spec *i,const uint8_t *b,size_t len) {
   (void)i; assert(len==4); uint16_t reg=b[0]|b[1]<<8, value=b[2]|b[3]<<8;
   record(reg,true); writes++;
@@ -127,6 +128,7 @@ static int i2c_write_dt(const struct i2c_dt_spec *i,const uint8_t *b,size_t len)
     if (reject_mode) reject_mode--; else ic_mode=value & IQS915X_CHARGING_MODE_MASK;
     assert(!(value & (IQS915X_TP_RESEED | BIT(4))));
   }
+  if(simulate_ati && (value & IQS915X_REATI_TP))info_extra=IQS915X_REATI_OCCURRED;
   next_rdy=now+period();
   if (io_errors) { io_errors--; return -EIO; }
   return 0;
@@ -205,6 +207,29 @@ static void until_idle(void) {
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
 int main(void) {
+  /* Diagnostic ATI works from LP2 without modifying user intent and restores it. */
+  setup(false);d.lifecycle=IQS915X_READY;simulate_ati=true;
+  uint32_t job;
+  assert(!iqs915x_diagnostic_start(&dev,true,&job));
+  assert(iqs915x_diagnostic_start(&dev,true,&job)==-EBUSY);
+  atomic_clear(&d.channel_pending);iqs915x_diagnostic_execute(&d);
+  assert(!d.channel_snapshot.status && !d.channel_snapshot.restore_status);
+  assert(!d.channel_snapshot.ati_status && !(d.channel_snapshot.info_after & IQS915X_ATI_ERROR));
+  assert(d.requested_mode==IQS915X_POWER_LP2 && d.actual_mode==IQS915X_POWER_LP2 && !d.output_enabled);
+  assert(!d.diagnostic_job && !d.channel_running);simulate_ati=false;
+
+  setup(false);d.lifecycle=IQS915X_READY;d.requested_mode=IQS915X_POWER_SUSPEND;
+  d.actual_mode=IQS915X_POWER_SUSPEND;d.ic_suspended=true;
+  assert(!iqs915x_diagnostic_start(&dev,true,&job));
+  atomic_clear(&d.channel_pending);iqs915x_diagnostic_execute(&d);
+  assert(d.channel_snapshot.status==-ETIMEDOUT && d.channel_snapshot.ati_status==-ETIMEDOUT);
+  assert(!d.channel_snapshot.restore_status && d.ic_suspended && d.actual_mode==IQS915X_POWER_SUSPEND);
+  setup(false);d.lifecycle=IQS915X_READY;
+  assert(!iqs915x_diagnostic_start(&dev,false,&job));d.request_generation++;
+  atomic_clear(&d.channel_pending);iqs915x_diagnostic_execute(&d);
+  assert(d.channel_snapshot.status==-ECANCELED && !writes && !d.diagnostic_job);
+  d.pm_suspended=1;assert(iqs915x_diagnostic_start(&dev,false,&job)==-EACCES);
+
   setup(true);d.ati_error=1;d.request_generation=7;
   assert(iqs915x_ati_assist(&d)==2000 && !writes);
   now=1999;assert(iqs915x_ati_assist(&d)==2000 && !writes);
@@ -665,6 +690,7 @@ def main():
     functions.append(block(SOURCE, 'static bool iqs915x_deliver_contacts('))
     functions.append((ROOT/'drivers/input/iqs915x_fault_diagnostics.inc').read_text())
     functions.append(SOURCE[a:b])
+    functions.append('static void iqs915x_apply_pending_power_request(struct iqs915x_data *);')
     functions.append((ROOT/'drivers/input/iqs915x_channel_diagnostics.inc').read_text())
     functions.append(block(SOURCE, 'static void iqs915x_apply_pending_power_request('))
     power = (ROOT / 'drivers/input/iqs915x_power.c').read_text()

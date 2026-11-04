@@ -196,11 +196,13 @@ int iqs915x_apply_settings(const struct device *dev,
 struct iqs915x_channel_page {
   uint32_t id, started_ms, ended_ms;
   int status;
+    int ati_status, restore_status;
   uint16_t info_before, info_after, config_before;
   uint16_t offset, count, values[IQS915X_CHANNEL_PAGE];
   uint8_t disabled_mask;
   bool mapping_valid;
 };
+int iqs915x_diagnostic_start(const struct device *dev, bool run_ati, uint32_t *id);
 int iqs915x_channels_start(const struct device *dev, uint32_t *id);
 int iqs915x_channels_page(const struct device *dev, uint32_t id, unsigned offset,
                            struct iqs915x_channel_page *out);
