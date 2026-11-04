@@ -11,6 +11,7 @@ static uint32_t cal_crc(const uint8_t *p,unsigned n) {
 static void iqs915x_calibration_expire(struct k_work *work) {
     struct iqs915x_data *d=CONTAINER_OF(k_work_delayable_from_work(work),struct iqs915x_data,calibration_timeout);
     atomic_clear(&d->calibration_capturing);
+    atomic_set(&d->contact_restart_requested,1);
     k_sem_give(&d->rdy_sem);
 }
 /* The calibration mutex excludes a read during publication. A sleeping sensor
@@ -75,11 +76,11 @@ static int cal_validate(struct iqs915x_data *d,const uint8_t *b,struct iqs915x_c
         for(unsigned corner=0;corner<4;corner++) {
             unsigned h=i+((corner&2)?17:0),v=i+((corner&1)?1:0);
             int64_t a=65536+(int64_t)(g->dx[h+1]-g->dx[h])*16*65536/d->swipe_resolution_x;
-            int64_t b=(int64_t)(g->dx[v+17]-g->dx[v])*12*97500*65536/d->swipe_resolution_x/64000;
+            int64_t cross_x=(int64_t)(g->dx[v+17]-g->dx[v])*12*97500*65536/d->swipe_resolution_x/64000;
             int64_t c1=(int64_t)(g->dy[h+1]-g->dy[h])*16*64000*65536/d->swipe_resolution_y/97500;
             int64_t e=65536+(int64_t)(g->dy[v+17]-g->dy[v])*12*65536/d->swipe_resolution_y;
-            int64_t aa=(a*a+c1*c1)>>16,bb=(b*b+e*e)>>16,ab=llabs((a*b+c1*e)>>16);
-            if(a*e-b*c1<=0||MIN(aa,bb)-ab<16384||MAX(aa,bb)+ab>262144)return -ERANGE;
+            int64_t aa=(a*a+c1*c1)>>16,bb=(cross_x*cross_x+e*e)>>16,ab=llabs((a*cross_x+c1*e)>>16);
+            if(a*e-cross_x*c1<=0||MIN(aa,bb)-ab<16384||MAX(aa,bb)+ab>262144)return -ERANGE;
         }
     }
     return 0;
@@ -111,13 +112,14 @@ int iqs915x_calibration_command(const struct device *dev,const uint8_t *q,
         else atomic_set(&d->calibration_capturing,1);
         k_mutex_unlock(&d->channel_lock);
         if(rc)break;
+        atomic_set(&d->contact_restart_requested,1);
         k_work_reschedule(&d->calibration_timeout,K_MSEC(3000));k_sem_give(&d->rdy_sem);break;
     case 2:
         if(token!=d->calibration_session||!atomic_get(&d->calibration_capturing)){rc=-ESTALE;break;}
         k_work_reschedule(&d->calibration_timeout,K_MSEC(3000));break;
     case 3:
         if(token!=d->calibration_session){rc=-ESTALE;break;}
-        atomic_clear(&d->calibration_capturing);k_work_cancel_delayable(&d->calibration_timeout);break;
+        atomic_clear(&d->calibration_capturing);atomic_set(&d->contact_restart_requested,1);k_sem_give(&d->rdy_sem);k_work_cancel_delayable(&d->calibration_timeout);break;
     case 4: {
         if(token!=d->calibration_session){rc=-ESTALE;break;}
         uint32_t first=d->calibration_sequence>128?d->calibration_sequence-127:1;
