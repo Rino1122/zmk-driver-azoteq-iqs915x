@@ -15,7 +15,7 @@
   - 調整値: スクロール慣性、スワイプ閾値、タップ/ホールド時間、入力処理の設定など
 - IQS915x の初期化データは `drivers/input/IQS9150_init.h` を直接コンパイルします。
   - CMake が `scripts/generate_init_array.py` で1174個のマクロ参照配列を自動生成します。DTSへの変換・注入はありません。
-  - 初期化時の上書き値と座標補正は `drivers/input/iqs915x_sensor_config.h` で管理します。
+  - 初期化時の上書き値は `drivers/input/iqs915x_sensor_config.h`、固定ピッチ補正とMCU IIRは `iqs915x_processing.inc` と `include/iqs915x_processing_math.h` で管理します。
 - `drivers/input/iqs915x.c` は IQS915x 専用の実装です。
   - 16-bit little-endian register read/write を実装しています。
   - RDY GPIO 割り込みで専用スレッドを起こし、1 RDY 期間に 1 I2C transaction で処理する設計です。

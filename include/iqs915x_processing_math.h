@@ -51,7 +51,7 @@ static inline int64_t iqs915x_div_round(int64_t value,uint64_t denominator) {
 static inline bool iqs915x_dynamic_iir(struct iqs915x_iir_state *s,
     const struct iqs915x_processing_settings *p,uint32_t now,uint16_t *x,uint16_t *y) {
     uint32_t dt=now-s->previous_ms;
-    if(!s->valid || dt>250) {
+    if(!s->valid || dt>250 || p->bottom_beta==256) {
         *s=(struct iqs915x_iir_state){.x_q16=(int64_t)*x*65536,.y_q16=(int64_t)*y*65536,
             .previous_x=*x,.previous_y=*y,.previous_ms=now,.valid=true};return false;
     }

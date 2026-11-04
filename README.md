@@ -82,43 +82,47 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 };
 ```
 
-The driver uses IQS9150 finger coordinates from registers `0x1024` and
-`0x1026` as the internal pointer source. A validated runtime calibration map
-corrects all four absolute-coordinate slots before contact frames and gesture
-processing. Without a map the transform is exactly the identity; the old
-`coordinate-correction` DTS switch and periodic LUT are retired.
-The driver converts consecutive-sample deltas to `INPUT_REL_X`/`INPUT_REL_Y` for
-the host. The first sample after touch-down is used as a baseline (no cursor
-move), then relative movement is reported while `TP Movement` is asserted.
+The driver uses IQS9150 absolute finger coordinates. Processing now runs in
+this order on each MCU: validated sensor coordinates -> periodic key-pitch
+correction -> dynamic IIR -> contact/Mouse output. The IC's XY IIR is disabled
+in the init-data (0x11E2 bit 3 clear). Retained warm-start settings are checked;
+an old enabled IIR forces a complete reinitialization. Jitter/area/MAV settings
+are preserved.
 
-If `pointer-accel` is enabled, the driver applies a lightweight integer-only
-scale curve to single-finger `INPUT_REL_X`/`INPUT_REL_Y` reports immediately
-before emission. Gesture recognition still uses the calibrated absolute
-coordinates before acceleration, so tap, scroll, and swipe thresholds are not
-changed. `pointer-sensitivity-percent` is the base scale; speeds at or below
-`pointer-accel-threshold` use that base scale, speeds at or above
-`pointer-accel-saturation` use `pointer-accel-max-percent`, and speeds between
-them are linearly interpolated. Speeds are normalized to a 10 ms report interval
-using the driver-owned Active sampling period (15 ms). When `pointer-accel` is omitted and
-`pointer-sensitivity-percent` is left at `100`, pointer output is unchanged from
-the raw absolute-coordinate delta path.
+The periodic correction restores the earlier 6 X / 4 Y block curve. Each block
+center and boundary stays fixed. A 17-point Q15 LUT samples
+`g(u)=u+a*u*(1-u)`, mirrored around each center. The signed coefficient is
+specified in permille (-900..900), factory 500 (a=0.5); 0 is exact bypass. The
+LUT is rebuilt only when settings change. No per-position calibration maps are
+loaded or applied.
 
-Harbour builds a separate 17×13 displacement map for each sensor. The driver
-uses integer Q12 bilinear weights, int64 intermediate sums and signed nearest
-rounding (ties away from zero). The 884-byte payload holds signed 16-bit X and
-Y displacement arrays. The 16-byte BRC1 header binds the map to its side,
-electrode profile, orientation and initial XY resolution; CRC32 covers the
-payload. The boundary-normal displacement is zero; magnitude is at most
-3.2 mm and conservative Jacobian checks bound local scales to 0.5–2.
+MCU dynamic IIR uses Bottom Beta (0..256), Bottom Speed and Top Speed, following
+the beta-vs-speed shape in Azoteq's datasheet section 7.8.1:
+https://www.azoteq.com/images/stories/pdf/IQS9150_IQS9151_datasheet.pdf
+Beta is constant below Bottom Speed, linearly interpolated to 256 at Top Speed,
+and 256 above it. Speed is the Euclidean corrected-input displacement divided
+by measured milliseconds, in sensor pixels/second, not pixels/cycle. An integer
+square root retains Q8 subpixel distance precision. The beta gain at the 15ms
+reference interval is beta/256. For variable dt, gain is
+`beta*dt / (beta*dt+(256-beta)*15)`. This is an MCU implementation inspired by
+the documented dynamic filter, not a claim to reproduce undocumented IC internals.
 
-`iqs915x_calibration_command()` provides bounded raw sample pages, a 3-second
-capture lease and staged map uploads. Failed uploads never alter an active or
-pending map. Maps switch on an all-up sample, or while a sleeping sensor has no
-live output epoch. Calibration start/end closes contact epochs. Capture reads
-fresh data at 15 ms only while requested; normal calibration adds no timer,
-Flash access, or bus transaction per sample. Persistence and split transport
-belong to the consuming firmware. See `include/iqs915x_calibration.h` and the
-Bretagne calibration RPC documentation for wire layouts.
+All arithmetic is integer. Filter states retain Q16 fractions independently for
+four physical slots. First touch, tracking loss, low confidence, read errors,
+reset and power/output boundaries reset the state; gaps over 250ms reseed.
+Beta 256 bypasses filtering (and speed calculation), Beta 0 holds slow positions
+without tail polling. In event-only Mouse mode, fresh 15ms samples are requested
+only while filter output needs convergence; polling stops at half-pixel residual
+or lift. There is no steady idle timer, fabricated timestamp, per-sample Flash
+access, or additional BLE stream. PTP keeps its normal fresh-sample policy.
+
+`iqs915x_processing_command()` exposes GET/SET of a 12-byte LE settings record:
+coefficient:i16, beta:u16, bottom_speed:u32, top_speed:u32. The two speeds obey
+0 <= bottom < top <= 1,000,000. Defaults: 500, 60, 5333, 233333 (the speed
+thresholds convert the old 80/3500-pixel-per-cycle values at 15ms). Updates are
+published at all-up or with no live output. Firmware owns persistence and
+split synchronization. See `include/iqs915x_processing.h` for the command format.
+Old calibration map commands and their buffers are removed.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
 The driver emits raw touched stream samples before calibration as INFO logs in

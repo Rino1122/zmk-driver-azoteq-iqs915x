@@ -35,6 +35,16 @@ int main(void) {
     // Gain 256 is exact bypass; zero gain holds and never requests tail polling.
     p.bottom_beta=256;x=61000;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1015,&x,&y)&&x==61000);
     p.bottom_beta=0;x=61001;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1030,&x,&y)&&x==61000);
+    // Equal speeds at different sample intervals select the same beta;
+    // the gain then compensates for elapsed time rather than pixel/cycle.
+    p=(struct iqs915x_processing_settings){0,64,100,1000};
+    for(unsigned dt=10;dt<=20;dt+=10) {
+        struct iqs915x_iir_state state={0};x=1000;y=1000;iqs915x_dynamic_iir(&state,&p,0,&x,&y);
+        x=1000+dt/2;y=1000;iqs915x_dynamic_iir(&state,&p,dt,&x,&y);
+        unsigned beta=iqs915x_dynamic_beta(&p,500);
+        int64_t expected=1000LL*65536+iqs915x_div_round((int64_t)(dt/2)*65536*beta*dt,beta*dt+(256-beta)*15);
+        assert(state.x_q16==expected);
+    }
     p.top_speed=p.bottom_speed;assert(!iqs915x_processing_valid(&p));
     puts("Processing math: periodic correction, beta thresholds, convergence, timestamps and integer limits PASS");
 }

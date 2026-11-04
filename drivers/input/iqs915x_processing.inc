@@ -26,8 +26,10 @@ static void iqs915x_processing_sample(const struct device *dev,struct iqs915x_st
     for(unsigned i=0;i<4;i++)if(*xs[i]!=UINT16_MAX&&*ys[i]!=UINT16_MAX)valid++;
     bool tail=false;
     for(unsigned i=0;i<4;i++) {
-        *xs[i]=iqs915x_pitch_axis(*xs[i],d->swipe_resolution_x,6,d->processing_lut);
-        *ys[i]=iqs915x_pitch_axis(*ys[i],d->swipe_resolution_y,4,d->processing_lut);
+        if(d->processing.coefficient_permille) {
+            *xs[i]=iqs915x_pitch_axis(*xs[i],d->swipe_resolution_x,6,d->processing_lut);
+            *ys[i]=iqs915x_pitch_axis(*ys[i],d->swipe_resolution_y,4,d->processing_lut);
+        }
         if(iqs915x_output_is_enabled(d) && fingers && fingers<=4 && valid==fingers && !(s->info_flags&IQS915X_SHOW_RESET) &&
            *xs[i]!=UINT16_MAX && *ys[i]!=UINT16_MAX && (s->trackpad_flags&BIT(8+i))) {
             uint16_t previous_x=(d->processing_iir[i].x_q16+32768)/65536;
