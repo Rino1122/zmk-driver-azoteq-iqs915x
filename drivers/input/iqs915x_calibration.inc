@@ -123,11 +123,13 @@ int iqs915x_calibration_command(const struct device *dev,const uint8_t *q,
         if(!d->calibration_upload_valid||token!=d->calibration_upload_token||off!=d->calibration_uploaded||
            n==9||off+n-9>900){rc=-EINVAL;break;}
         memcpy(d->calibration_upload+off,q+9,n-9);d->calibration_uploaded+=n-9;break;
-    case 7:
+    case 7: {
+        struct iqs915x_calibration_grid candidate;
         if(!d->calibration_upload_valid||token!=d->calibration_upload_token||d->calibration_uploaded!=900){rc=-EINVAL;break;}
-        rc=cal_validate(d,d->calibration_upload,&d->calibration_pending);
-        if(!rc){d->calibration_pending_enabled=true;d->calibration_pending_crc=cal_get32(d->calibration_upload+12);atomic_set(&d->calibration_dirty,1);d->calibration_upload_valid=false;}
+        rc=cal_validate(d,d->calibration_upload,&candidate);
+        if(!rc){d->calibration_pending=candidate;d->calibration_pending_enabled=true;d->calibration_pending_crc=cal_get32(d->calibration_upload+12);atomic_set(&d->calibration_dirty,1);d->calibration_upload_valid=false;}
         break;
+    }
     case 8:d->calibration_pending_enabled=false;d->calibration_pending_crc=0;atomic_set(&d->calibration_dirty,1);break;
     default:rc=-EINVAL;
     }
