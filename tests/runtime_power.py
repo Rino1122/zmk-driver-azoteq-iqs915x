@@ -159,7 +159,7 @@ static void iqs915x_reset_input_session(struct iqs915x_data *d) {
   d->finger_tracker.count_change_pending=false;
 }
 static void iqs915x_mark_initialized(struct iqs915x_data *d,bool init) { d->initialized=init; }
-static void iqs915x_calibration_sample(const struct device *dev,struct iqs915x_stream_data *s) {
+static void iqs915x_processing_sample(const struct device *dev,struct iqs915x_stream_data *s) {
   (void)dev; s->abs_x+=50;
 }
 static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *s) { (void)s; }

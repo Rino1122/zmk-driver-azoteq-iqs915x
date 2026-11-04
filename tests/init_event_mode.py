@@ -32,7 +32,7 @@ def main():
     registers = (root / "drivers/input/iqs915x_regs.h").read_text()
     enum = block(registers, "enum iqs915x_init_step") + ";"
     names = (
-        "IQS915X_X_RESOLUTION", "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
+        "IQS915X_TRACKPAD_SETTINGS", "IQS915X_X_RESOLUTION", "IQS915X_CONFIG_SETTINGS", "IQS915X_EVENT_MODE", "IQS915X_MANUAL_CONTROL",
         "IQS915X_INFO_FLAGS", "IQS915X_SHOW_RESET", "IQS915X_SYSTEM_CONTROL",
         "IQS915X_ACK_RESET", "IQS915X_INIT_SHOW_RESET_CLEAR_MAX_WAIT",
         "IQS915X_REATI_TP", "IQS915X_REATI_OCCURRED", "IQS915X_ALP_REATI_OCCURRED",
@@ -180,6 +180,10 @@ RESET_GPIO
   return 0;
 }
 POLICY
+static uint8_t retained_trackpad_settings;
+static int iqs915x_read_block(const struct device *dev,uint16_t reg,uint8_t *bytes,uint16_t len) {
+  (void)dev;assert(reg==IQS915X_TRACKPAD_SETTINGS&&len==1);bytes[0]=retained_trackpad_settings;return 0;
+}
 static int mask_check_result,mask_checks;
 static int iqs915x_check_channel_profile(const struct device *dev) {(void)dev;mask_checks++;return mask_check_result;}
 static void iqs915x_get_init_data_reg16(const void *config, int reg, uint16_t *out) { (void)config; (void)reg; *out=6000; }
@@ -205,7 +209,7 @@ INITIALIZATION
 static struct iqs915x_data setup(bool enabled) {
   busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
-  ic_cfg = ic_info = 0;
+  ic_cfg = ic_info = 0; retained_trackpad_settings=0;
   reati_ready=reset_during_reati=false; reati_requests=stream_reads=0;
   return (struct iqs915x_data){.ati_deadline=5000,
     .init_step = INIT_SET_EVENT_MODE,
@@ -377,6 +381,8 @@ int main(void) {
   assert(!configure_reset(&dev) && reset_configurations==1);
   dev.config=&config;
   assert(!configure_reset(&dev) && reset_configurations==1);
+  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;retained_trackpad_settings=8;
+  run(&dev,1);assert(data.init_step==INIT_SOFTWARE_RESET && !data.initialized);
   puts("IQS915x init: Event verification, warm startup without RDY, forced Re-ATI and reset routing passed");
 }
 '''

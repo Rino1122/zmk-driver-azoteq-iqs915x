@@ -161,6 +161,8 @@ int iqs915x_get_contact_resolution(const struct device *dev, uint16_t *max_x, ui
 }
 static void iqs915x_end_contact_session(struct iqs915x_data *data)
 {
+  atomic_set(&data->processing_reset,1);
+  atomic_clear(&data->processing_tail);
   struct iqs915x_contact_frame frame;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
   data->contact_confirm_ms = 0;
@@ -182,8 +184,7 @@ static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
  * No periodic reads for idle, quarantined, gated or legacy Mouse states. */
 static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
 {
-  if (atomic_get(&data->calibration_capturing) ||
-      (atomic_get(&data->calibration_dirty) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE)) return data->comm_completed_ms + 15;
+  if (atomic_get(&data->processing_tail) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE) return data->comm_completed_ms + 15;
   int64_t deadline = INT64_MAX;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
   if (iqs915x_output_is_enabled(data) &&
@@ -558,7 +559,7 @@ static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *dat
 }
 
 // ストリーミングデータを読み取る
-#include "iqs915x_calibration.inc"
+#include "iqs915x_processing.inc"
 
 static int iqs915x_read_stream(const struct device *dev,
                                struct iqs915x_stream_data *data)
@@ -576,10 +577,8 @@ static int iqs915x_read_stream(const struct device *dev,
   ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
   if (ret < 0)
   {
-    if(atomic_get(&((struct iqs915x_data *)dev->data)->calibration_capturing)) {
-      struct iqs915x_stream_data lost={.trackpad_flags=7,.abs_x=UINT16_MAX,.abs_y=UINT16_MAX};
-      iqs915x_calibration_sample(dev,&lost);
-    }
+    atomic_set(&((struct iqs915x_data *)dev->data)->processing_reset,1);
+    atomic_clear(&((struct iqs915x_data *)dev->data)->processing_tail);
     return ret;
   }
 
@@ -600,7 +599,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
   iqs915x_validate_stream_coordinates(dev->data, data);
-  iqs915x_calibration_sample(dev, data);
+  iqs915x_processing_sample(dev, data);
 
   return 0;
 }
@@ -2203,7 +2202,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       }
       else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
       {
-        uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS;
+        uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS | BIT(3);
         uint8_t set = 0;
         if (config->flip_x)
           set |= IQS915X_FLIP_X;
@@ -2327,6 +2326,10 @@ static int iqs915x_init_step_handler(const struct device *dev)
         data->init_step = INIT_SOFTWARE_RESET;
         break;
       }
+      uint8_t retained_trackpad=0;
+      ret=iqs915x_read_block(dev,IQS915X_TRACKPAD_SETTINGS,&retained_trackpad,1);
+      if(ret<0)return ret;
+      if(retained_trackpad&BIT(3)){data->init_step=INIT_SOFTWARE_RESET;break;}
       ret = iqs915x_check_channel_profile(dev);
       if (ret < 0) return ret;
       if (ret > 0) { data->init_step = INIT_SOFTWARE_RESET; break; }
@@ -3569,8 +3572,10 @@ static int iqs915x_init(const struct device *dev)
     return -ENODEV;
   }
 
-  k_mutex_init(&data->calibration_lock);
-  k_work_init_delayable(&data->calibration_timeout, iqs915x_calibration_expire);
+  k_mutex_init(&data->processing_lock);
+  data->processing=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
+  data->processing_pending=data->processing;
+  iqs915x_pitch_lut(data->processing.coefficient_permille,data->processing_lut);
   k_mutex_init(&data->settings_lock);
   k_mutex_init(&data->power_lock);
   k_mutex_init(&data->contacts_lock);

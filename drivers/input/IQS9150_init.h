@@ -177,7 +177,7 @@
 
 /* Trackpad Settings */
 /* Memory Map Position 0x11E2 - 0x11F5 */
-#define TRACKPAD_SETTINGS_0_0                    0x28
+#define TRACKPAD_SETTINGS_0_0                    0x20
 #define TRACKPAD_SETTINGS_0_1                    0x12
 #define TRACKPAD_SETTINGS_1_0                    0x0C
 #define TRACKPAD_SETTINGS_1_1                    0x04

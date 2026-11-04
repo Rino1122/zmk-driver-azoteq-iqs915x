@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <iqs915x_contacts.h>
-#include <iqs915x_calibration.h>
+#include <iqs915x_processing.h>
 
 
 /** Single synchronous subscriber per sensor. Called from the sensor thread,
