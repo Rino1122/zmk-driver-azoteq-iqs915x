@@ -182,6 +182,7 @@ static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
  * No periodic reads for idle, quarantined, gated or legacy Mouse states. */
 static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
 {
+  if (atomic_get(&data->calibration_capturing) || atomic_get(&data->calibration_dirty)) return data->comm_completed_ms + 15;
   int64_t deadline = INT64_MAX;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
   if (iqs915x_output_is_enabled(data) &&
@@ -618,41 +619,6 @@ static uint16_t iqs915x_correct_axis_coordinate(uint16_t raw, uint16_t resolutio
   return (uint16_t)(block_center + corrected_distance);
 }
 
-static void iqs915x_correct_stream_coordinates(const struct iqs915x_config *config,
-                                               const struct iqs915x_data *driver_data,
-                                               struct iqs915x_stream_data *data)
-{
-  /* Loaded from X/Y_RESOLUTION in init-data, independently of swipe enable. */
-  uint16_t res_x = driver_data->swipe_resolution_x;
-  uint16_t res_y = driver_data->swipe_resolution_y;
-
-  data->abs_x = iqs915x_correct_axis_coordinate(
-      data->abs_x, res_x, config->coord_x_blocks, config->coord_lut_x_q15,
-      config->coord_lut_x_len);
-  data->finger2_x = iqs915x_correct_axis_coordinate(
-      data->finger2_x, res_x, config->coord_x_blocks,
-      config->coord_lut_x_q15, config->coord_lut_x_len);
-  data->finger3_x = iqs915x_correct_axis_coordinate(
-      data->finger3_x, res_x, config->coord_x_blocks,
-      config->coord_lut_x_q15, config->coord_lut_x_len);
-  data->finger4_x = iqs915x_correct_axis_coordinate(
-      data->finger4_x, res_x, config->coord_x_blocks,
-      config->coord_lut_x_q15, config->coord_lut_x_len);
-
-  data->abs_y = iqs915x_correct_axis_coordinate(
-      data->abs_y, res_y, config->coord_y_blocks, config->coord_lut_y_q15,
-      config->coord_lut_y_len);
-  data->finger2_y = iqs915x_correct_axis_coordinate(
-      data->finger2_y, res_y, config->coord_y_blocks,
-      config->coord_lut_y_q15, config->coord_lut_y_len);
-  data->finger3_y = iqs915x_correct_axis_coordinate(
-      data->finger3_y, res_y, config->coord_y_blocks,
-      config->coord_lut_y_q15, config->coord_lut_y_len);
-  data->finger4_y = iqs915x_correct_axis_coordinate(
-      data->finger4_y, res_y, config->coord_y_blocks,
-      config->coord_lut_y_q15, config->coord_lut_y_len);
-}
-
 /* Validate before LUT correction so an unused 0xffff slot cannot become an
  * apparently valid coordinate at the edge. Apply this even without correction. */
 static void iqs915x_validate_stream_coordinates(const struct iqs915x_data *data,
@@ -699,12 +665,13 @@ static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *dat
 }
 
 // ストリーミングデータを読み取る
+#include "iqs915x_calibration.inc"
+
 static int iqs915x_read_stream(const struct device *dev,
                                struct iqs915x_stream_data *data)
 {
   int window_status = iqs915x_init_wait_window(dev);
   if (window_status < 0) return window_status;
-  const struct iqs915x_config *config = dev->config;
   uint8_t reg_addr[2] = {IQS915X_REL_X & 0xFF, IQS915X_REL_X >> 8};
   uint8_t buf[44];
   int ret;
@@ -735,10 +702,7 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
   iqs915x_validate_stream_coordinates(dev->data, data);
-  if (config->coordinate_correction)
-  {
-    iqs915x_correct_stream_coordinates(config, dev->data, data);
-  }
+  iqs915x_calibration_sample(dev, data);
 
   return 0;
 }
@@ -3707,6 +3671,8 @@ static int iqs915x_init(const struct device *dev)
     return -ENODEV;
   }
 
+  k_mutex_init(&data->calibration_lock);
+  k_work_init_delayable(&data->calibration_timeout, iqs915x_calibration_expire);
   k_mutex_init(&data->settings_lock);
   k_mutex_init(&data->power_lock);
   k_mutex_init(&data->contacts_lock);

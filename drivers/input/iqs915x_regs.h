@@ -28,6 +28,7 @@
 #include <stdint.h>
 
 #include <iqs915x.h>
+#include <iqs915x_calibration_math.h>
 #include "iqs915x_scroll_motion.h"
 #include "iqs915x_contacts_internal.h"
 #include "iqs915x_scroll_inertia.h"
@@ -482,6 +483,19 @@ struct iqs915x_data
     struct k_work_delayable tap_and_hold_start_work;
 
     // Runtime pointer/inertia settings and state shared with system workqueue.
+    struct k_mutex calibration_lock;
+    struct k_work_delayable calibration_timeout;
+    struct iqs915x_calibration_grid calibration_active, calibration_pending;
+    bool calibration_enabled, calibration_pending_enabled;
+    atomic_t calibration_dirty;
+    uint32_t calibration_crc, calibration_pending_crc;
+    uint8_t calibration_upload[IQS915X_CAL_BLOB_SIZE];
+    unsigned calibration_uploaded;
+    uint32_t calibration_upload_token;
+    bool calibration_upload_valid;
+    atomic_t calibration_capturing;
+    uint32_t calibration_session, calibration_sequence, calibration_dropped;
+    uint8_t calibration_ring[128][14];
     struct k_mutex settings_lock;
     struct k_mutex contacts_lock;
     struct iqs915x_contacts_state contacts;
