@@ -9,7 +9,7 @@ int iqs915x_channels_start(const struct device *dev, uint32_t *id) {
      atomic_get(&d->mode_transitioning) || atomic_get(&d->pm_suspended))return -EACCES;
   if(k_mutex_lock(&d->channel_lock,K_NO_WAIT))return -EBUSY;
   int ret=0;
-  if(atomic_get(&d->diagnostic_job) || d->channel_snapshot.status==-EINPROGRESS)ret=-EBUSY;
+  if(atomic_get(&d->calibration_capturing) || atomic_get(&d->diagnostic_job) || d->channel_snapshot.status==-EINPROGRESS)ret=-EBUSY;
   else {
     uint32_t next=d->channel_snapshot.id+1;if(!next)next=1;
     d->channel_snapshot=(struct iqs915x_channel_snapshot){.id=next,.status=-EINPROGRESS};
@@ -127,7 +127,7 @@ int iqs915x_diagnostic_start(const struct device *dev,bool run_ati,uint32_t *id)
   if(atomic_get(&d->pm_suspended))return -EACCES;
   if(k_mutex_lock(&d->channel_lock,K_NO_WAIT))return -EBUSY;
   int rc=0;
-  if(atomic_get(&d->diagnostic_job) || d->channel_snapshot.status==-EINPROGRESS)rc=-EBUSY;
+  if(atomic_get(&d->calibration_capturing) || atomic_get(&d->diagnostic_job) || d->channel_snapshot.status==-EINPROGRESS)rc=-EBUSY;
   else {
     uint32_t next=d->channel_snapshot.id+1;if(!next)next=1;
     d->channel_snapshot=(struct iqs915x_channel_snapshot){.id=next,.status=-EINPROGRESS};

@@ -98,7 +98,11 @@ int iqs915x_calibration_command(const struct device *dev,const uint8_t *q,
         if(!atomic_get(&d->calibration_capturing)) {
             d->calibration_session=token;d->calibration_sequence=d->calibration_dropped=0;
         }
-        atomic_set(&d->calibration_capturing,1);
+        if(k_mutex_lock(&d->channel_lock,K_NO_WAIT)){rc=-EBUSY;break;}
+        if(atomic_get(&d->diagnostic_job)||atomic_get(&d->channel_pending)||atomic_get(&d->channel_running))rc=-EBUSY;
+        else atomic_set(&d->calibration_capturing,1);
+        k_mutex_unlock(&d->channel_lock);
+        if(rc)break;
         k_work_reschedule(&d->calibration_timeout,K_MSEC(3000));k_sem_give(&d->rdy_sem);break;
     case 2:
         if(token!=d->calibration_session||!atomic_get(&d->calibration_capturing)){rc=-ESTALE;break;}

@@ -10,6 +10,7 @@
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define K_FOREVER 0
+#define K_NO_WAIT 0
 #define K_MSEC(x) (x)
 #define IQS915X_NUM_FINGERS_MASK 7
 #define IQS915X_SHOW_RESET 128
@@ -22,7 +23,7 @@
 struct k_work {int unused;};
 struct k_work_delayable {struct k_work work;};
 static struct k_work_delayable *k_work_delayable_from_work(struct k_work *w) {return (void*)w;}
-#define k_mutex_lock(p,t) ((void)(p),(void)(t))
+static int k_mutex_lock(int *p,int t){(void)p;(void)t;return 0;}
 #define k_mutex_unlock(p) ((void)(p))
 #define k_sem_give(p) ((void)(p))
 #define k_work_reschedule(p,t) ((void)(p),(void)(t))
@@ -32,7 +33,7 @@ static bool device_is_ready(const struct device *dev){return dev!=NULL;}
 struct iqs915x_config {unsigned channel_profile;};
 struct iqs915x_stream_data {uint16_t abs_x,abs_y,finger2_x,finger2_y,finger3_x,finger3_y,finger4_x,finger4_y,trackpad_flags,info_flags;};
 struct iqs915x_data {
- const struct device *dev;int calibration_lock,rdy_sem,lifecycle,ati_error;
+ const struct device *dev;int calibration_lock,rdy_sem,lifecycle,ati_error,channel_lock,diagnostic_job,channel_pending,channel_running;
  struct k_work_delayable calibration_timeout;
  struct iqs915x_calibration_grid calibration_active,calibration_pending;
  bool calibration_enabled,calibration_pending_enabled;

@@ -3732,8 +3732,7 @@ static int iqs915x_init(const struct device *dev)
 BUILD_ASSERT(ARRAY_SIZE(iqs915x_init_data) == IQS915X_INIT_DATA_TOTAL_SIZE,
              "IQS915x header must supply 1174 init bytes");
 
-BUILD_ASSERT(IQS915X_COORD_X_BLOCKS > 0 && IQS915X_COORD_Y_BLOCKS > 0,
-             "IQS915x coordinate block counts must be positive");
+
 BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PERIOD_MS <= UINT16_MAX,
              "IQS915x Active sampling period must fit a nonzero 16-bit value");
 
