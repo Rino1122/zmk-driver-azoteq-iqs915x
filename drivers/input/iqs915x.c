@@ -182,7 +182,8 @@ static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
  * No periodic reads for idle, quarantined, gated or legacy Mouse states. */
 static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
 {
-  if (atomic_get(&data->calibration_capturing) || atomic_get(&data->calibration_dirty)) return data->comm_completed_ms + 15;
+  if (atomic_get(&data->calibration_capturing) ||
+      (atomic_get(&data->calibration_dirty) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE)) return data->comm_completed_ms + 15;
   int64_t deadline = INT64_MAX;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
   if (iqs915x_output_is_enabled(data) &&

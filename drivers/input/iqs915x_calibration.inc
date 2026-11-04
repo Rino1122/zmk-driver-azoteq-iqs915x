@@ -13,6 +13,18 @@ static void iqs915x_calibration_expire(struct k_work *work) {
     atomic_clear(&d->calibration_capturing);
     k_sem_give(&d->rdy_sem);
 }
+/* The calibration mutex excludes a read during publication. A sleeping sensor
+ * has no live output epoch, so publishing there cannot jump a held pointer. */
+static void cal_commit(struct iqs915x_data *d) {
+    d->calibration_active=d->calibration_pending;
+    d->calibration_enabled=d->calibration_pending_enabled;
+    d->calibration_crc=d->calibration_pending_crc;
+    atomic_clear(&d->calibration_dirty);
+    k_mutex_lock(&d->settings_lock,K_FOREVER);
+    d->last_abs_x=d->last_abs_y=0;
+    k_mutex_unlock(&d->settings_lock);
+    atomic_set(&d->contact_restart_requested,1);
+}
 /* Called only for fresh successful reads, before any coordinate transform. */
 static void iqs915x_calibration_sample(const struct device *dev,struct iqs915x_stream_data *s) {
     struct iqs915x_data *d=dev->data;
@@ -32,12 +44,7 @@ static void iqs915x_calibration_sample(const struct device *dev,struct iqs915x_s
         b[13]=(s->trackpad_flags>>(8+slot))&1;
     }
     if(!fingers && atomic_get(&d->calibration_dirty)) {
-        d->calibration_active=d->calibration_pending;
-        d->calibration_enabled=d->calibration_pending_enabled;
-        d->calibration_crc=d->calibration_pending_crc;
-        atomic_clear(&d->calibration_dirty);
-        d->last_abs_x=d->last_abs_y=0;
-        atomic_set(&d->contact_restart_requested,1);
+        cal_commit(d);
     }
     if(d->calibration_enabled && !atomic_get(&d->calibration_capturing)) {
         uint16_t *xs[]={&s->abs_x,&s->finger2_x,&s->finger3_x,&s->finger4_x};
@@ -56,6 +63,7 @@ static int cal_validate(struct iqs915x_data *d,const uint8_t *b,struct iqs915x_c
     for(unsigned i=0;i<IQS915X_CAL_NODES;i++) {
         g->dx[i]=(int16_t)cal_get16(b+16+i*2);
         g->dy[i]=(int16_t)cal_get16(b+16+442+i*2);
+        if(((i%17==0||i%17==16)&&g->dx[i])||((i<17||i>=204)&&g->dy[i]))return -ERANGE;
         int64_t x=(int64_t)g->dx[i]*97500/d->swipe_resolution_x;
         int64_t y=(int64_t)g->dy[i]*64000/d->swipe_resolution_y;
         if(x*x+y*y>3200LL*3200)return -ERANGE;
@@ -137,5 +145,7 @@ int iqs915x_calibration_command(const struct device *dev,const uint8_t *q,
     case 8:d->calibration_pending_enabled=false;d->calibration_pending_crc=0;atomic_set(&d->calibration_dirty,1);break;
     default:rc=-EINVAL;
     }
+    if(!rc && atomic_get(&d->calibration_dirty) &&
+       atomic_get(&d->actual_mode)!=IQS915X_POWER_ACTIVE && !atomic_get(&d->mode_transitioning))cal_commit(d);
     k_mutex_unlock(&d->calibration_lock);return rc;
 }

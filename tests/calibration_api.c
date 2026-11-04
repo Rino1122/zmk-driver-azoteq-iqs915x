@@ -16,6 +16,7 @@
 #define IQS915X_SHOW_RESET 128
 #define IQS915X_CHANNEL_PROFILE_BRETAGNE_LEFT 2
 #define IQS915X_READY 2
+#define IQS915X_POWER_ACTIVE 0
 #define atomic_get(p) (*(p))
 #define atomic_set(p,v) (*(p)=(v))
 #define atomic_clear(p) (*(p)=0)
@@ -33,7 +34,7 @@ static bool device_is_ready(const struct device *dev){return dev!=NULL;}
 struct iqs915x_config {unsigned channel_profile;};
 struct iqs915x_stream_data {uint16_t abs_x,abs_y,finger2_x,finger2_y,finger3_x,finger3_y,finger4_x,finger4_y,trackpad_flags,info_flags;};
 struct iqs915x_data {
- const struct device *dev;int calibration_lock,rdy_sem,lifecycle,ati_error,channel_lock,diagnostic_job,channel_pending,channel_running;
+ const struct device *dev;int actual_mode,mode_transitioning,settings_lock,calibration_lock,rdy_sem,lifecycle,ati_error,channel_lock,diagnostic_job,channel_pending,channel_running;
  struct k_work_delayable calibration_timeout;
  struct iqs915x_calibration_grid calibration_active,calibration_pending;
  bool calibration_enabled,calibration_pending_enabled;
@@ -72,7 +73,7 @@ int main(void) {
  assert(!cmd(3,123,0,NULL,0)&&!d.calibration_capturing);
  uint8_t map[900]={ 'B','R','C','1',1,0,2,0 };
  cal_put16(map+8,1024);cal_put16(map+10,768);
- for(unsigned i=0;i<221;i++)cal_put16(map+16+i*2,3);
+ for(unsigned i=0;i<221;i++)if(i%17>0&&i%17<16)cal_put16(map+16+i*2,3);
  cal_put32(map+12,cal_crc(map+16,884));
  assert(!upload(map,42)&&d.calibration_dirty&&!d.calibration_enabled);
  // Invalid upload must not damage an already staged valid candidate.
