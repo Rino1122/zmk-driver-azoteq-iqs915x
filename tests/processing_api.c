@@ -29,6 +29,7 @@ struct iqs915x_data {
 };
 static bool output_enabled=true;
 static bool iqs915x_output_is_enabled(const struct iqs915x_data *d){(void)d;return output_enabled;}
+#define iqs915x_circle_command(...) (-ENOTSUP)
 #include "iqs915x_processing.inc"
 static struct iqs915x_data d;
 static const struct iqs915x_config cfg={2};static const struct device dev={&d,&cfg};

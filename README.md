@@ -776,3 +776,30 @@ ati_status and restore_status distinguish ATI and restoration failures. A change
 power generation or PM request cancels sampling; restore reconciles newest intent.
 Host disconnect does not prolong a job: sensor-thread deadlines finish restoration
 without host participation. No persistent policy is changed.
+
+### Circle-calibration raw capture
+
+Processing command operations 2/3/4/5 are START/RENEW/STOP/PAGE. All use a
+9-byte request `{op:u8, session:u32LE, after_sequence:u32LE}`; the host chooses
+a nonzero session. Only PAGE uses after_sequence. A duplicate START for the
+active session renews without resetting data. A different session is busy.
+The 3500ms MCU lease closes output and restores the pre-capture requested
+power mode even if central/split communication disappears. Host firmware must
+also manage its own shorter lease and restore the latest activation policy.
+
+During capture, the existing validated stream branches into a 128-record raw
+ring before correction/IIR; neither is applied and normal output is suppressed.
+One real read is requested at 15ms while capture is active, including all-up.
+The contact subscriber is unchanged. No sensor IIR setting, processing parameter,
+or Flash value is modified. On exit filter state is reset. Normal capture timers
+stop; restore retries occur only while a power-lock conflict is outstanding.
+
+Reply is 20..90 bytes: version=1:u8, active:u8, session:u32, last_sequence:u32,
+overwritten:u32, maxX:u16, maxY:u16, count:u8, reserved=0:u8, then up to 5 records
+`{sequence:u32,time_ms:u32,x:u16,y:u16,flags:u16}` (all little endian).
+Flags retain low 12 contact bits; bit13 marks bad tracking/read failure and bit15
+reset. Valid samples require exactly one finger, a valid coordinate pair and its
+confidence bit. All-up is recorded even if coordinate registers retain old XY.
+The overwrite counter is cumulative: consumers detect actual missing data by
+sequence gaps rather than treating every overwritten already-read record as loss.
+`tests/circle_capture.c` exercises the production ring/session/lease code.
