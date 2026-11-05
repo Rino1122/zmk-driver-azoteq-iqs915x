@@ -479,7 +479,7 @@ struct iqs915x_data
     struct k_mutex processing_lock;
     struct iqs915x_processing_settings processing,processing_pending;
     struct iqs915x_iir_state processing_iir[4];
-    uint16_t processing_lut[17];
+    int16_t processing_map[5][5][2];
     bool processing_dirty,processing_touch;
     uint32_t processing_generation;
     atomic_t processing_tail,processing_reset;

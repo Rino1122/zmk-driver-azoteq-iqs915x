@@ -3575,7 +3575,7 @@ static int iqs915x_init(const struct device *dev)
   k_mutex_init(&data->processing_lock);
   data->processing=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
   data->processing_pending=data->processing;
-  iqs915x_pitch_lut(data->processing.coefficient_permille,data->processing_lut);
+  iqs915x_map_generate(&data->processing,data->processing_map);
   k_mutex_init(&data->settings_lock);
   k_mutex_init(&data->power_lock);
   k_mutex_init(&data->contacts_lock);

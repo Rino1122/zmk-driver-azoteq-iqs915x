@@ -8,26 +8,41 @@ struct iqs915x_iir_state {
     uint32_t previous_ms;
     bool valid,pending;
 };
-static inline void iqs915x_pitch_lut(int16_t coefficient,uint16_t lut[17]) {
-    for(unsigned i=0;i<17;i++) {
-        int32_t u=i*2048;
-        lut[i]=u+(int64_t)coefficient*u*(32768-u)/(1000LL*32768);
+/* A uniform 5x5 tile, displacement in Q15 fractions of one key pitch.
+ * X is odd about the key centre. Y is even in X and asymmetric in Y.
+ * Opposite edges agree: normal displacement is zero, tangential displacement
+ * repeats. The six bounded controls guarantee positive axis derivatives
+ * (>=0.325 before quantization), hence no folded cells. */
+static inline int32_t iqs915x_map_round(int64_t n,int64_t d) {
+    return n<0?-(int32_t)((-n+d/2)/d):(int32_t)((n+d/2)/d);
+}
+static inline void iqs915x_map_generate(const struct iqs915x_processing_settings *p,int16_t map[5][5][2]) {
+    int16_t a[5]={p->x_middle,p->coefficient_permille,p->x_middle,p->x_lower,p->x_middle};
+    int32_t y[5]={0,-2*p->y_upper+p->y_center,2*p->y_center,2*p->y_lower+p->y_center,0};
+    for(unsigned j=0;j<5;j++)for(unsigned i=0;i<5;i++) {
+        map[j][i][0]=(i==1?-1:i==3?1:0)*iqs915x_map_round((int64_t)a[j]*32768,8000);
+        map[j][i][1]=iqs915x_map_round((int64_t)y[j]*32768,16000);
     }
 }
-static inline uint16_t iqs915x_pitch_axis(uint16_t raw,uint16_t resolution,unsigned blocks,const uint16_t lut[17]) {
-    if(raw==UINT16_MAX || (resolution && raw>resolution))return UINT16_MAX;
-    if(!resolution || !blocks)return raw;
-    unsigned block=(uint32_t)raw*blocks/resolution;
-    if(block>=blocks)block=blocks-1;
-    unsigned start=(uint32_t)resolution*block/blocks,end=(uint32_t)resolution*(block+1)/blocks,center=(start+end)/2;
-    if(raw==start||raw==center||raw==end)return raw;
-    unsigned half=raw<center?center-start:end-center,distance=raw<center?center-raw:raw-center;
-    if(!half)return raw;
-    unsigned pos=distance*16,idx=pos/half,rem=pos%half;
-    if(idx>=16)return raw<center?start:end;
-    unsigned q15=lut[idx]+((uint32_t)(lut[idx+1]-lut[idx])*rem)/half;
-    unsigned corrected=(half*q15+16384)/32768;
-    return raw<center?center-corrected:center+corrected;
+static inline void iqs915x_map_position(uint16_t raw,uint16_t resolution,unsigned blocks,unsigned *cell,unsigned *rem,unsigned *span) {
+    unsigned block=(uint32_t)raw*blocks/resolution;if(block>=blocks)block=blocks-1;
+    unsigned start=(uint32_t)resolution*block/blocks,end=(uint32_t)resolution*(block+1)/blocks;
+    *span=end-start;unsigned q=(raw-start)*4;*cell=q/(*span);*rem=q%(*span);
+    if(*cell>=4){*cell=3;*rem=*span;}
+}
+/* One final signed division, ties away from zero. Largest intermediate is
+ * < 2^62 for uint16 resolutions and the bounded map. No floating point or I/O. */
+static inline void iqs915x_map_apply(uint16_t *x,uint16_t *y,uint16_t rx,uint16_t ry,const int16_t map[5][5][2]) {
+    if(rx<6||ry<4||*x>rx||*y>ry||*x==UINT16_MAX||*y==UINT16_MAX)return;
+    unsigned i,j,u,v,w,h;iqs915x_map_position(*x,rx,6,&i,&u,&w);iqs915x_map_position(*y,ry,4,&j,&v,&h);
+    if(!w||!h)return;
+    uint16_t *axis[2]={x,y};unsigned pitch[2]={w,h};
+    for(unsigned k=0;k<2;k++) {
+        int64_t a=(int64_t)map[j][i][k]*(w-u)+(int64_t)map[j][i+1][k]*u;
+        int64_t b=(int64_t)map[j+1][i][k]*(w-u)+(int64_t)map[j+1][i+1][k]*u;
+        int32_t delta=iqs915x_map_round((a*(h-v)+b*v)*pitch[k],(int64_t)w*h*32768);
+        *axis[k]=(uint16_t)((int32_t)*axis[k]+delta);
+    }
 }
 static inline uint32_t iqs915x_isqrt(uint64_t n) {
     uint64_t root=0,bit=1ULL<<62;

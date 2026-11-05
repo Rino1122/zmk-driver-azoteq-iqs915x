@@ -3,19 +3,30 @@
 #include <stdio.h>
 #include <iqs915x_processing_math.h>
 int main(void) {
-    uint16_t lut[17];struct iqs915x_processing_settings p=IQS915X_PROCESSING_DEFAULTS;
-    assert(iqs915x_processing_valid(&p));
-    iqs915x_pitch_lut(500,lut);
-    for(unsigned i=0;i<17;i++){unsigned u=i*2048;assert(lut[i]==u+(uint64_t)u*(32768-u)/65536);}
-    assert(iqs915x_pitch_axis(250,6000,6,lut)==187);
-    assert(iqs915x_pitch_axis(750,6000,6,lut)==813);
-    for(int a=-900;a<=900;a+=100)for(unsigned res=5999;res<=6001;res++) {
-        iqs915x_pitch_lut(a,lut);unsigned previous=0;
-        for(unsigned x=0;x<=res;x++) {unsigned y=iqs915x_pitch_axis(x,res,6,lut);assert(y>=previous&&y<=res);previous=y;}
-        assert(iqs915x_pitch_axis(UINT16_MAX,res,6,lut)==UINT16_MAX);
+    struct iqs915x_processing_settings p=IQS915X_PROCESSING_DEFAULTS;
+    assert(iqs915x_processing_valid(&p));int16_t map[5][5][2];
+    iqs915x_map_generate(&p,map);
+    uint16_t xx=250,yy=250;iqs915x_map_apply(&xx,&yy,6000,4000,map);assert(xx==187&&yy==187);
+    // All extrema combinations: quantized cell derivatives stay positive.
+    for(unsigned mask=0;mask<64;mask++) {
+        p.coefficient_permille=mask&1?900:-900;p.x_middle=mask&2?900:-900;p.x_lower=mask&4?900:-900;
+        p.y_upper=mask&8?900:-900;p.y_lower=mask&16?900:-900;p.y_center=mask&32?500:-500;
+        iqs915x_map_generate(&p,map);
+        for(unsigned j=0;j<5;j++)for(unsigned i=0;i<5;i++) {
+            assert(map[j][i][0]==-map[j][4-i][0]);assert(map[j][i][1]==map[j][4-i][1]);
+            assert(map[0][i][0]==map[4][i][0]);assert(map[0][i][1]==0&&map[4][i][1]==0);
+            if(i<4)assert(8192+map[j][i+1][0]-map[j][i][0]>0);
+            if(j<4)assert(8192+map[j+1][i][1]-map[j][i][1]>0);
+        }
+        for(unsigned res=5999;res<=6001;res++)for(unsigned y=0;y<=4000;y+=125) {
+            unsigned previous=0;
+            for(unsigned x=0;x<=res;x++) {uint16_t a=x,b=y;iqs915x_map_apply(&a,&b,res,4000,map);assert(a>=previous&&a<=res&&b<=4000);previous=a;}
+        }
     }
-    iqs915x_pitch_lut(0,lut);
-    for(unsigned x=0;x<=6000;x++)assert(iqs915x_pitch_axis(x,6000,6,lut)==x);
+    p=(struct iqs915x_processing_settings){.bottom_beta=256,.top_speed=1000};iqs915x_map_generate(&p,map);
+    for(unsigned x=0;x<65535;x++){uint16_t a=x,b=65534-x;iqs915x_map_apply(&a,&b,65534,65534,map);assert(a==x&&b==65534-x);}
+    xx=UINT16_MAX;yy=123;iqs915x_map_apply(&xx,&yy,6000,4000,map);assert(xx==UINT16_MAX&&yy==123);
+    xx=3;yy=3;iqs915x_map_apply(&xx,&yy,3,3,map);assert(xx==3&&yy==3);
     assert(iqs915x_isqrt(0)==0&&iqs915x_isqrt(25)==5&&iqs915x_isqrt(24)==4);
     assert(iqs915x_isqrt(2ULL*65535*65535)==92680);
     p.bottom_speed=100;p.top_speed=1000;p.bottom_beta=64;
@@ -37,7 +48,7 @@ int main(void) {
     p.bottom_beta=0;x=61001;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1030,&x,&y)&&x==61000);
     // Equal speeds at different sample intervals select the same beta;
     // the gain then compensates for elapsed time rather than pixel/cycle.
-    p=(struct iqs915x_processing_settings){0,64,100,1000};
+    p=(struct iqs915x_processing_settings){.bottom_beta=64,.bottom_speed=100,.top_speed=1000};
     for(unsigned dt=10;dt<=20;dt+=10) {
         struct iqs915x_iir_state state={0};x=1000;y=1000;iqs915x_dynamic_iir(&state,&p,0,&x,&y);
         x=1000+dt/2;y=1000;iqs915x_dynamic_iir(&state,&p,dt,&x,&y);

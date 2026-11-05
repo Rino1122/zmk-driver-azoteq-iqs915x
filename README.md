@@ -89,12 +89,21 @@ in the init-data (0x11E2 bit 3 clear). Retained warm-start settings are checked;
 an old enabled IIR forces a complete reinitialization. Jitter/area/MAV settings
 are preserved.
 
-The periodic correction restores the earlier 6 X / 4 Y block curve. Each block
-center and boundary stays fixed. A 17-point Q15 LUT samples
-`g(u)=u+a*u*(1-u)`, mirrored around each center. The signed coefficient is
-specified in permille (-900..900), factory 500 (a=0.5); 0 is exact bypass. The
-LUT is rebuilt only when settings change. No per-position calibration maps are
-loaded or applied.
+The periodic correction is a uniform 5x5 displacement tile, repeated over
+6 X / 4 Y keys. Six permille controls generate its Q15 nodes: X upper,
+middle, lower; Y upper, lower, centre shift. X is mirrored about the key
+centre; Y can be asymmetric. Normal edge displacement is zero and tangential
+edge displacement agrees across tiles. For normalized nodes (i/4,j/4), X
+row strengths are [middle,upper,middle,lower,middle], with displacement
+[0,-a/8000,0,a/8000,0]. Y rows are
+[0,(-2*upper+centre)/16000,centre/8000,(2*lower+centre)/16000,0],
+constant across X. Signed Q15 node quantization and final bilinear displacement
+round ties away from zero. Settings rebuild the 100-byte tile once; sampling
+uses integer multiply/divide with signed 64-bit intermediates (<2^62).
+All-zero controls are exact identity. Allowed strengths +/-900 and centre
++/-500 guarantee positive axis derivatives (at least 0.325 before quantization);
+Y has no X dependence, so the bilinear Jacobian cannot fold. These are bounded
+manual controls, not an automatically estimated per-position calibration.
 
 MCU dynamic IIR uses Bottom Beta (0..256), Bottom Speed and Top Speed, following
 the beta-vs-speed shape in Azoteq's datasheet section 7.8.1:
@@ -116,12 +125,14 @@ only while filter output needs convergence; polling stops at half-pixel residual
 or lift. There is no steady idle timer, fabricated timestamp, per-sample Flash
 access, or additional BLE stream. PTP keeps its normal fresh-sample policy.
 
-`iqs915x_processing_command()` exposes GET/SET of a 12-byte LE settings record:
-coefficient:i16, beta:u16, bottom_speed:u32, top_speed:u32. The two speeds obey
-0 <= bottom < top <= 1,000,000. Defaults: 500, 60, 5333, 233333 (the speed
-thresholds convert the old 80/3500-pixel-per-cycle values at 15ms). Updates are
-published at all-up or with no live output. Firmware owns persistence and
-split synchronization. See `include/iqs915x_processing.h` for the command format.
+`iqs915x_processing_command()` exposes GET/SET of a 22-byte LE settings record:
+X upper/middle/lower, Y upper/lower/centre: six i16, then beta:u16,
+bottom_speed:u32, top_speed:u32. Speeds obey 0 <= bottom < top <= 1,000,000.
+Defaults: five strengths 500, centre 0, beta 60, speeds 5333/233333.
+Driver wire version 2 returns 34 bytes. Old version-1 SET lengths are rejected.
+Updates publish at all-up or with no live output and reset filter histories.
+Firmware owns persistence and split synchronization; each MCU has its own
+filter histories even when both use common settings. See the public header.
 Old calibration map commands and their buffers are removed.
 
 For coordinate calibration, enable `CONFIG_INPUT_AZOTEQ_IQS915X_COORD_LOG=y`.
