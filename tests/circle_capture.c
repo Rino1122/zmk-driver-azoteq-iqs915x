@@ -37,6 +37,7 @@ struct iqs915x_data {
 struct iqs915x_stream_data {uint16_t abs_x,abs_y,finger2_x,finger2_y,finger3_x,finger3_y,finger4_x,finger4_y,trackpad_flags,info_flags;};
 static int power_error;
 static int iqs915x_set_mode(const struct device *dev,int mode){if(power_error)return power_error;((struct iqs915x_data*)dev->data)->requested_mode=mode;return 0;}
+static int iqs915x_restore_capture_mode(const struct device *dev,int mode){return iqs915x_set_mode(dev,mode);}
 #include "iqs915x_circle_capture.inc"
 static struct iqs915x_data d={.lifecycle=IQS915X_READY,.requested_mode=2,.swipe_resolution_x=6000,.swipe_resolution_y=4000};
 static const struct device dev={&d};static uint8_t reply[96];static unsigned length;

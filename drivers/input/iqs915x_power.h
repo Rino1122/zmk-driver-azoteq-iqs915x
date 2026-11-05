@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <iqs915x.h>
 
 #include <zephyr/device.h>
 #include <zephyr/pm/device.h>
@@ -19,3 +20,6 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action);
 #define IQS915X_PM_DEVICE_DEFINE(n)
 #define IQS915X_PM_DEVICE_GET(n) NULL
 #endif
+
+/* Restore capture intent without waking a device suspended by Zephyr PM. */
+int iqs915x_restore_capture_mode(const struct device *dev, enum iqs915x_mode mode);

@@ -114,6 +114,12 @@ int main(void) {
     assert(iqs915x_pm_action(&dev,OTHER)==-ENOTSUP);
     assert(!data.power_lock.locked && !data.settings_lock.locked);
     puts("PASS unsupported PM action releases locks without changing state");
+    reset(true);assert(iqs915x_pm_action(&dev,PM_DEVICE_ACTION_SUSPEND)==0);
+    gen=data.request_generation;
+    assert(!iqs915x_restore_capture_mode(&dev,IQS915X_POWER_SUSPEND));
+    assert(data.pm_suspended&&data.requested_mode==IQS915X_POWER_SUSPEND&&data.pm_saved_mode==IQS915X_POWER_SUSPEND&&!data.pm_saved_enabled&&data.request_generation==gen);
+    assert(!iqs915x_pm_action(&dev,PM_DEVICE_ACTION_RESUME));assert(!data.requested_enabled&&data.requested_mode==IQS915X_POWER_SUSPEND);
+    puts("PASS capture expiry during PM changes resume intent without waking the sensor");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='iqs915x-pm-test-') as tmp:

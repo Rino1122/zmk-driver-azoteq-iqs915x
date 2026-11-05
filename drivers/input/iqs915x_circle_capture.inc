@@ -16,7 +16,7 @@ static void circle_lease(struct k_work *work) {
     if(atomic_get(&d->circle_active)&&remaining>0){k_work_reschedule(&d->circle_work,K_MSEC(remaining));k_mutex_unlock(&d->processing_lock);return;}
     if(atomic_get(&d->circle_active))circle_restore(d);
     if(d->circle_restoring){
-        int rc=iqs915x_set_mode(d->dev,d->circle_saved_mode);
+        int rc=iqs915x_restore_capture_mode(d->dev,d->circle_saved_mode);
         if(rc==-EBUSY)k_work_reschedule(&d->circle_work,K_MSEC(100));
         else d->circle_restoring=false;
     }

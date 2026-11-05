@@ -188,3 +188,18 @@ bool iqs915x_get_enabled(const struct device *dev)
   struct iqs915x_data *data = dev->data;
   return atomic_get(&data->requested_enabled) != 0;
 }
+
+int iqs915x_restore_capture_mode(const struct device *dev, enum iqs915x_mode mode)
+{
+  struct iqs915x_data *data=dev->data;
+  if(k_mutex_lock(&data->power_lock,K_NO_WAIT)<0)return -EBUSY;
+  if(atomic_get(&data->pm_suspended)) {
+    /* Preserve PM's Suspend request. Resume must restore pre-capture intent. */
+    data->pm_saved_mode=mode;
+    data->pm_saved_enabled=mode==IQS915X_POWER_ACTIVE;
+    k_mutex_unlock(&data->power_lock);
+    return 0;
+  }
+  k_mutex_unlock(&data->power_lock);
+  return iqs915x_set_mode(dev,mode);
+}
