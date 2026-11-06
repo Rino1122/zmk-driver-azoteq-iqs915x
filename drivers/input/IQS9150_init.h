@@ -147,7 +147,7 @@
 /* Thresholds and Debounce Settings */
 /* Memory Map Position 0x11CC - 0x11D3 */
 #define TRACKPAD_TOUCH_SET_THRESHOLD             0x7D
-#define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x64
+#define TRACKPAD_TOUCH_CLEAR_THRESHOLD           0x32
 #define ALP_THRESHOLD                            0x14
 #define ALP_AUTOPROX_THRESHOLD                   0x7F
 #define ALP_SET_DEBOUNCE                         0x02
@@ -192,7 +192,7 @@
 #define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x3C
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
 #define STATIONARY_TOUCH_MOV_THRESHOLD           0x0F
-#define FINGER_SPLIT_FACTOR                      0x00
+#define FINGER_SPLIT_FACTOR                      0x06
 #define X_TRIM_VALUE                             0x00
 #define Y_TRIM_VALUE                             0x00
 #define JITTER_FILTER_DELTA                      0x0A
