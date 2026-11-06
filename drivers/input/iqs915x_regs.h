@@ -459,7 +459,7 @@ struct iqs915x_config
 };
 
 // ランタイムデータ（実行時に変化する状態）
-struct iqs915x_circle_sample { uint32_t sequence,time; uint16_t x,y,flags; };
+struct iqs915x_trace_sample { uint32_t sequence,time; uint16_t x[4],y[4],id[4],flags; uint8_t mask,confidence; };
 struct iqs915x_data
 {
     const struct device *dev;
@@ -484,13 +484,18 @@ struct iqs915x_data
     bool processing_dirty,processing_touch;
     uint32_t processing_generation;
     atomic_t processing_tail,processing_reset;
-    atomic_t circle_active;
-    struct k_work_delayable circle_work;
-    struct iqs915x_circle_sample circle_ring[128];
-    uint32_t circle_session,circle_sequence,circle_dropped;
-    int64_t circle_deadline;
-    enum iqs915x_mode circle_saved_mode;
-    bool circle_restoring;
+    atomic_t trace_active;
+    struct k_work_delayable trace_work;
+    struct iqs915x_trace_sample trace_ring[128];
+    uint32_t trace_session,trace_sequence,trace_dropped;
+    int64_t trace_deadline;
+    enum iqs915x_mode trace_saved_mode;
+    bool trace_restoring,trace_filtered;
+    uint8_t trace_mask;
+    uint16_t trace_ids[4];
+    uint32_t trace_last_ms;
+    struct iqs915x_iir_state trace_iir[4];
+    struct iqs915x_processing_settings trace_settings;
     struct k_mutex settings_lock;
     struct k_mutex contacts_lock;
     struct iqs915x_contacts_state contacts;

@@ -777,29 +777,28 @@ power generation or PM request cancels sampling; restore reconciles newest inten
 Host disconnect does not prolong a job: sensor-thread deadlines finish restoration
 without host participation. No persistent policy is changed.
 
-### Circle-calibration raw capture
+### Multi-contact trace monitor
 
-Processing command operations 2/3/4/5 are START/RENEW/STOP/PAGE. All use a
-9-byte request `{op:u8, session:u32LE, after_sequence:u32LE}`; the host chooses
-a nonzero session. Only PAGE uses after_sequence. A duplicate START for the
-active session renews without resetting data. A different session is busy.
-The 3500ms MCU lease closes output and restores the pre-capture requested
-power mode even if central/split communication disappears. Host firmware must
-also manage its own shorter lease and restore the latest activation policy.
+The circle-calibration acquisition has been replaced by a four-contact diagnostic
+monitor. START/RENEW/STOP/PAGE still use processing operations 2/3/4/5. START
+requires 10 bytes: op:u8, session:u32LE, after=0:u32LE, monitor_IIR:u8 (0/1).
+Other requests remain 9 bytes. Old 9-byte START is rejected. The 3500ms MCU
+lease and pre-session power restoration remain; PM restoration does not wake
+a suspended sensor. Firmware owns its shorter lease and normal-policy restoration.
 
-During capture, the existing validated stream branches into a 128-record raw
-ring before correction/IIR; neither is applied and normal output is suppressed.
-One real read is requested at 15ms while capture is active, including all-up.
-The contact subscriber is unchanged. No sensor IIR setting, processing parameter,
-or Flash value is modified. On exit filter state is reset. Normal capture timers
-stop; restore retries occur only while a power-lock conflict is outstanding.
+Wire v2 has a 20-byte header: version:u8=2, active:u8, session:u32,
+last_sequence:u32, overwritten:u32, maxX:u16, maxY:u16, count:u8 (0..2), IIR:u8.
+Each 36-byte frame has sequence:u32, time_ms:u32, flags:u16, mask:u8,
+confidence:u8, then four {x:u16,y:u16,id:u16}. Total reply is 20..92 bytes.
+All values are little endian. IDs change on physical-slot reuse. Low confidence
+is reported separately; read failure, inconsistent contact count and reset
+close tracks. Consumers break trails on sequence gaps. Ring size is 128 frames.
 
-Reply is 20..90 bytes: version=1:u8, active:u8, session:u32, last_sequence:u32,
-overwritten:u32, maxX:u16, maxY:u16, count:u8, reserved=0:u8, then up to 5 records
-`{sequence:u32,time_ms:u32,x:u16,y:u16,flags:u16}` (all little endian).
-Flags retain low 12 contact bits; bit13 marks bad tracking/read failure and bit15
-reset. Valid samples require exactly one finger, a valid coordinate pair and its
-confidence bit. All-up is recorded even if coordinate registers retain old XY.
-The overwrite counter is cumulative: consumers detect actual missing data by
-sequence gaps rather than treating every overwritten already-read record as loss.
-`tests/circle_capture.c` exercises the production ring/session/lease code.
+Positions are pre-map sensor coordinates. Optional dynamic IIR runs with a
+snapshot of applied settings and independent per-slot monitor histories.
+The normal settings, map, filter history and NVS are never modified by monitoring.
+Steady frames are decimated to 30ms, while contact/confidence/error boundaries
+are retained immediately. IIR consumes every acquired sample. There are no
+extra reads/timers/communication outside monitoring; the inactive raw branch
+returns after an atomic check. The contact subscriber is unchanged.
+See tests/trace_capture.c for production-code state/transport/IIR tests.

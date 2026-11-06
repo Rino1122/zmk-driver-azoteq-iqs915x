@@ -88,7 +88,7 @@ static uint32_t iqs915x_request_generation(const struct iqs915x_data *data)
 static bool iqs915x_output_is_enabled(const struct iqs915x_data *data)
 {
   return atomic_get(&data->output_enabled) != 0 && !atomic_get(&data->ati_error) &&
-         !atomic_get(&data->channel_running) && !atomic_get(&data->circle_active);
+         !atomic_get(&data->channel_running) && !atomic_get(&data->trace_active);
 }
 
 static bool iqs915x_work_session_is_current(const struct iqs915x_data *data,
@@ -184,7 +184,7 @@ static bool iqs915x_contact_probe_required(struct iqs915x_data *data)
  * No periodic reads for idle, quarantined, gated or legacy Mouse states. */
 static int64_t iqs915x_contact_refresh_deadline(struct iqs915x_data *data)
 {
-  if (atomic_get(&data->circle_active) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE) return data->comm_completed_ms + 15;
+  if (atomic_get(&data->trace_active) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE) return data->comm_completed_ms + 30;
   if (atomic_get(&data->processing_tail) && atomic_get(&data->actual_mode)==IQS915X_POWER_ACTIVE) return data->comm_completed_ms + 15;
   int64_t deadline = INT64_MAX;
   k_mutex_lock(&data->contacts_lock, K_FOREVER);
@@ -560,7 +560,7 @@ static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *dat
 }
 
 // ストリーミングデータを読み取る
-#include "iqs915x_circle_capture.inc"
+#include "iqs915x_trace.inc"
 #include "iqs915x_processing.inc"
 
 static int iqs915x_read_stream(const struct device *dev,
@@ -579,7 +579,7 @@ static int iqs915x_read_stream(const struct device *dev,
   ((struct iqs915x_data *)dev->data)->comm_completed_ms = k_uptime_get();
   if (ret < 0)
   {
-    circle_sample(dev->data,NULL);
+    trace_sample(dev->data,NULL);
     atomic_set(&((struct iqs915x_data *)dev->data)->processing_reset,1);
     atomic_clear(&((struct iqs915x_data *)dev->data)->processing_tail);
     return ret;
@@ -602,8 +602,8 @@ static int iqs915x_read_stream(const struct device *dev,
   data->finger4_y = (buf[43] << 8) | buf[42];
   iqs915x_log_stream_coordinates(data);
   iqs915x_validate_stream_coordinates(dev->data, data);
-  circle_sample(dev->data,data);
-  if(!atomic_get(&((struct iqs915x_data *)dev->data)->circle_active))iqs915x_processing_sample(dev, data);
+  trace_sample(dev->data,data);
+  if(!atomic_get(&((struct iqs915x_data *)dev->data)->trace_active))iqs915x_processing_sample(dev, data);
 
   return 0;
 }
@@ -3577,7 +3577,7 @@ static int iqs915x_init(const struct device *dev)
   }
 
   k_mutex_init(&data->processing_lock);
-  k_work_init_delayable(&data->circle_work,circle_lease);
+  k_work_init_delayable(&data->trace_work,trace_lease);
   data->processing=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
   data->processing_pending=data->processing;
   iqs915x_map_generate(&data->processing,data->processing_map);

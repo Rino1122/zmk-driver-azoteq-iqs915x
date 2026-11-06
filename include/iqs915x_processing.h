@@ -23,5 +23,6 @@ struct device;
  * lifecycle:u8, maxX:u16, maxY:u16, applied settings:22, generation:u32.
  * SET is atomic and becomes active at all-up or while no output is active.
  * No sensor I/O; callable from a non-sensor thread. */
+/* Diagnostic ops 2..5: see README Multi-contact trace monitor. */
 int iqs915x_processing_command(const struct device *dev,const uint8_t *q,unsigned n,
     uint8_t *out,unsigned *length);
