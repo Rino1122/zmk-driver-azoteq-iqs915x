@@ -34,28 +34,37 @@ int main(void) {
     assert(iqs915x_dynamic_beta(&p,550)==160&&iqs915x_dynamic_beta(&p,1000)==256);
     assert(iqs915x_dynamic_beta(&p,1000000)==256);
     struct iqs915x_iir_state s={0};uint16_t x=1000,y=2000;
-    assert(!iqs915x_dynamic_iir(&s,&p,100,&x,&y)&&x==1000&&y==2000);
+    assert(!iqs915x_dynamic_iir(&s,&p,100,65534,65534,&x,&y)&&x==1000&&y==2000);
     p.bottom_speed=100000;p.top_speed=200000;
-    x=1100;y=2000;assert(iqs915x_dynamic_iir(&s,&p,115,&x,&y));assert(x==1025&&y==2000);
-    x=1100;y=2000;for(unsigned t=130;t<2000;t+=15){x=1100;y=2000;if(!iqs915x_dynamic_iir(&s,&p,t,&x,&y))break;}
-    assert(x==1100&&y==2000);
+    x=1070;y=2000;assert(iqs915x_dynamic_iir(&s,&p,115,65534,65534,&x,&y));assert(x==1018&&y==2000);
+    x=1070;y=2000;for(unsigned t=130;t<2000;t+=15){x=1070;y=2000;if(!iqs915x_dynamic_iir(&s,&p,t,65534,65534,&x,&y))break;}
+    assert(x==1070&&y==2000);
     // Timestamps wrap correctly and a long gap resets without a stale tail.
-    s=(struct iqs915x_iir_state){0};x=5;y=10;iqs915x_dynamic_iir(&s,&p,UINT32_MAX-10,&x,&y);
-    x=105;y=10;iqs915x_dynamic_iir(&s,&p,4,&x,&y);assert(x==30);
-    x=60000;y=60000;assert(!iqs915x_dynamic_iir(&s,&p,1000,&x,&y)&&x==60000);
+    s=(struct iqs915x_iir_state){0};x=5;y=10;iqs915x_dynamic_iir(&s,&p,UINT32_MAX-10,65534,65534,&x,&y);
+    x=105;y=10;iqs915x_dynamic_iir(&s,&p,4,65534,65534,&x,&y);assert(x==30);
+    x=60000;y=60000;assert(!iqs915x_dynamic_iir(&s,&p,1000,65534,65534,&x,&y)&&x==60000);
     // Gain 256 is exact bypass; zero gain holds and never requests tail polling.
-    p.bottom_beta=256;x=61000;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1015,&x,&y)&&x==61000);
-    p.bottom_beta=0;x=61001;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1030,&x,&y)&&x==61000);
+    p.bottom_beta=256;x=61000;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1015,65534,65534,&x,&y)&&x==61000);
+    p.bottom_beta=0;x=61001;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1030,65534,65534,&x,&y)&&x==61000);
     // Equal speeds at different sample intervals select the same beta;
     // the gain then compensates for elapsed time rather than pixel/cycle.
     p=(struct iqs915x_processing_settings){.bottom_beta=64,.bottom_speed=100,.top_speed=1000};
     for(unsigned dt=10;dt<=20;dt+=10) {
-        struct iqs915x_iir_state state={0};x=1000;y=1000;iqs915x_dynamic_iir(&state,&p,0,&x,&y);
-        x=1000+dt/2;y=1000;iqs915x_dynamic_iir(&state,&p,dt,&x,&y);
+        struct iqs915x_iir_state state={0};x=1000;y=1000;iqs915x_dynamic_iir(&state,&p,0,65534,65534,&x,&y);
+        x=1000+dt/2;y=1000;iqs915x_dynamic_iir(&state,&p,dt,65534,65534,&x,&y);
         unsigned beta=iqs915x_dynamic_beta(&p,500);
         int64_t expected=1000LL*65536+iqs915x_div_round((int64_t)(dt/2)*65536*beta*dt,beta*dt+(256-beta)*15);
         assert(state.x_q16==expected);
     }
+    // A fast contact stops without replaying its discarded lag, even after idle.
+    p=(struct iqs915x_processing_settings){.bottom_beta=60,.bottom_speed=5333,.top_speed=233333};
+    s=(struct iqs915x_iir_state){0};x=1000;y=1000;iqs915x_dynamic_iir(&s,&p,0,6000,4000,&x,&y);
+    x=1200;y=1000;iqs915x_dynamic_iir(&s,&p,15,6000,4000,&x,&y);
+    for(unsigned t=30;t<=60;t+=15){x=1200;y=1000;iqs915x_dynamic_iir(&s,&p,t,6000,4000,&x,&y);}
+    assert(s.stopped&&!s.pending);uint16_t frozen=x;
+    x=1200;y=1000;assert(!iqs915x_dynamic_iir(&s,&p,1000,6000,4000,&x,&y)&&x==frozen);
+    x=1203;y=1000;iqs915x_dynamic_iir(&s,&p,2000,6000,4000,&x,&y);
+    assert(!s.stopped&&x>=frozen&&x<=frozen+3);
     p.top_speed=p.bottom_speed;assert(!iqs915x_processing_valid(&p));
     puts("Processing math: periodic correction, beta thresholds, convergence, timestamps and integer limits PASS");
 }

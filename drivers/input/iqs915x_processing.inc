@@ -33,7 +33,7 @@ static void iqs915x_processing_sample(const struct device *dev,struct iqs915x_st
             uint16_t previous_x=(d->processing_iir[i].x_q16+32768)/65536;
             uint16_t previous_y=(d->processing_iir[i].y_q16+32768)/65536;
             bool was_valid=d->processing_iir[i].valid;
-            tail|=iqs915x_dynamic_iir(&d->processing_iir[i],&d->processing,d->comm_completed_ms,xs[i],ys[i]);
+            tail|=iqs915x_dynamic_iir(&d->processing_iir[i],&d->processing,d->comm_completed_ms,d->swipe_resolution_x,d->swipe_resolution_y,xs[i],ys[i]);
             if(was_valid&&(*xs[i]!=previous_x||*ys[i]!=previous_y))s->trackpad_flags|=IQS915X_TP_MOVEMENT;
         } else d->processing_iir[i].valid=false;
     }

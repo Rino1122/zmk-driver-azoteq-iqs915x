@@ -62,6 +62,14 @@ int main(void){
  output_enabled=true;s=sample(1,1500,300);assert(s.abs_x==1500);
  s=sample(1,UINT16_MAX,300);assert(s.abs_x==UINT16_MAX&&!d.processing_tail&&!d.processing_iir[0].valid);
  p.top_speed=p.bottom_speed;assert(request(1,&p)==-ERANGE);assert(d.processing.top_speed==200000);
+ // Stop in the production sample path, then reset the discarded offset on lift.
+ sample(0,1000,1000);p=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
+ p.coefficient_permille=p.x_middle=p.x_lower=p.y_upper=p.y_lower=p.y_center=0;
+ assert(!request(1,&p));sample(1,1000,1000);sample(1,1200,1000);
+ sample(1,1200,1000);s=sample(1,1200,1000);uint16_t held=s.abs_x;
+ s=sample(1,1200,1000);assert(s.abs_x==held&&d.processing_iir[0].stopped&&!d.processing_tail);
+ s=sample(1,1200,1000);assert(s.abs_x==held&&!(s.trackpad_flags&IQS915X_TP_MOVEMENT));
+ sample(0,1200,1000);s=sample(1,1200,1000);assert(s.abs_x==1200&&!d.processing_iir[0].offset_x);
  uint8_t bad[9]={1};assert(iqs915x_processing_command(&dev,bad,9,out,&length)==-EINVAL);
  puts("Processing API: pending/all-up settings, per-slot filtering, bounded tail, output/reset quarantine and validation PASS");
 }

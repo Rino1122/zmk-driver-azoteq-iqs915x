@@ -48,7 +48,7 @@ static void trace_sample(struct iqs915x_data *d,const struct iqs915x_stream_data
             }
             next.id[i]=d->trace_ids[i];
             if(!(next.confidence&BIT(i))){d->trace_iir[i].valid=false;continue;}
-            if(d->trace_filtered)iqs915x_dynamic_iir(&d->trace_iir[i],&d->trace_settings,next.time,&next.x[i],&next.y[i]);
+            if(d->trace_filtered)iqs915x_dynamic_iir(&d->trace_iir[i],&d->trace_settings,next.time,d->swipe_resolution_x,d->swipe_resolution_y,&next.x[i],&next.y[i]);
         }
         bool boundary=next.mask!=d->trace_mask || (next.flags&0xa000);
         if(d->trace_sequence){const struct iqs915x_trace_sample *last=&d->trace_ring[(d->trace_sequence-1)%128];boundary|=last->confidence!=next.confidence || ((last->flags^next.flags)&0xa000);}
