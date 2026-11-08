@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <iqs915x_processing_math.h>
-static const struct iqs915x_processing_settings p={.bottom_beta=60,.bottom_speed=5333,.top_speed=233333};
+static const struct iqs915x_processing_settings p={.stop_enabled=1,.stop_fast_speed=5333,.stop_arm_ms=120,.stop_quiet_ms=30,.stop_radius=2,.stop_samples=3,.bottom_beta=60,.bottom_speed=5333,.top_speed=233333};
 static uint16_t feed(struct iqs915x_iir_state *s,uint32_t t,uint16_t x,uint16_t y) {
     iqs915x_dynamic_iir(s,&p,t,6000,4000,&x,&y);assert(x<=6000&&y<=4000);return x;
 }
@@ -36,5 +36,11 @@ int main(void) {
         struct iqs915x_processing_settings q=p;q.bottom_beta=beta;s=(struct iqs915x_iir_state){0};
         for(unsigned t=0;t<150;t+=15){uint16_t x=t?1200:1000,y=1000;iqs915x_dynamic_iir(&s,&q,t,6000,4000,&x,&y);assert(!s.stopped);}
     }
+    struct iqs915x_processing_settings q=p;q.stop_enabled=0;s=(struct iqs915x_iir_state){0};
+    for(unsigned t=0;t<=600;t+=15){uint16_t x=t?1200:1000,y=1000;iqs915x_dynamic_iir(&s,&q,t,6000,4000,&x,&y);assert(!s.stopped);}
+    q=p;q.stop_samples=1;assert(!iqs915x_processing_valid(&q));q=p;q.stop_radius=0;assert(!iqs915x_processing_valid(&q));
+    q=p;q.stop_quiet_ms=60;s=(struct iqs915x_iir_state){0};
+    for(unsigned t=0;t<=75;t+=15){uint16_t x=t?1200:1000,y=1000;iqs915x_dynamic_iir(&s,&q,t,6000,4000,&x,&y);assert(!s.stopped);}
+    {uint16_t x=1200,y=1000;iqs915x_dynamic_iir(&s,&q,90,6000,4000,&x,&y);assert(s.stopped);}
     puts("IIR stop: freeze, jitter, resume, repeated stops, slow travel, edges, wrap and bypass PASS");
 }

@@ -23,7 +23,7 @@ int main(void) {
             for(unsigned x=0;x<=res;x++) {uint16_t a=x,b=y;iqs915x_map_apply(&a,&b,res,4000,map);assert(a>=previous&&a<=res&&b<=4000);previous=a;}
         }
     }
-    p=(struct iqs915x_processing_settings){.bottom_beta=256,.top_speed=1000};iqs915x_map_generate(&p,map);
+    p=(struct iqs915x_processing_settings){.stop_enabled=1,.stop_fast_speed=5333,.stop_arm_ms=120,.stop_quiet_ms=30,.stop_radius=2,.stop_samples=3,.bottom_beta=256,.top_speed=1000};iqs915x_map_generate(&p,map);
     for(unsigned x=0;x<65535;x++){uint16_t a=x,b=65534-x;iqs915x_map_apply(&a,&b,65534,65534,map);assert(a==x&&b==65534-x);}
     xx=UINT16_MAX;yy=123;iqs915x_map_apply(&xx,&yy,6000,4000,map);assert(xx==UINT16_MAX&&yy==123);
     xx=3;yy=3;iqs915x_map_apply(&xx,&yy,3,3,map);assert(xx==3&&yy==3);
@@ -48,7 +48,7 @@ int main(void) {
     p.bottom_beta=0;x=61001;y=61000;assert(!iqs915x_dynamic_iir(&s,&p,1030,65534,65534,&x,&y)&&x==61000);
     // Equal speeds at different sample intervals select the same beta;
     // the gain then compensates for elapsed time rather than pixel/cycle.
-    p=(struct iqs915x_processing_settings){.bottom_beta=64,.bottom_speed=100,.top_speed=1000};
+    p=(struct iqs915x_processing_settings){.stop_enabled=1,.stop_fast_speed=5333,.stop_arm_ms=120,.stop_quiet_ms=30,.stop_radius=2,.stop_samples=3,.bottom_beta=64,.bottom_speed=100,.top_speed=1000};
     for(unsigned dt=10;dt<=20;dt+=10) {
         struct iqs915x_iir_state state={0};x=1000;y=1000;iqs915x_dynamic_iir(&state,&p,0,65534,65534,&x,&y);
         x=1000+dt/2;y=1000;iqs915x_dynamic_iir(&state,&p,dt,65534,65534,&x,&y);
@@ -57,7 +57,7 @@ int main(void) {
         assert(state.x_q16==expected);
     }
     // A fast contact stops without replaying its discarded lag, even after idle.
-    p=(struct iqs915x_processing_settings){.bottom_beta=60,.bottom_speed=5333,.top_speed=233333};
+    p=(struct iqs915x_processing_settings){.stop_enabled=1,.stop_fast_speed=5333,.stop_arm_ms=120,.stop_quiet_ms=30,.stop_radius=2,.stop_samples=3,.bottom_beta=60,.bottom_speed=5333,.top_speed=233333};
     s=(struct iqs915x_iir_state){0};x=1000;y=1000;iqs915x_dynamic_iir(&s,&p,0,6000,4000,&x,&y);
     x=1200;y=1000;iqs915x_dynamic_iir(&s,&p,15,6000,4000,&x,&y);
     for(unsigned t=30;t<=60;t+=15){x=1200;y=1000;iqs915x_dynamic_iir(&s,&p,t,6000,4000,&x,&y);}

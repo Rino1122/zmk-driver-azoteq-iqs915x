@@ -7,6 +7,8 @@ static void processing_encode(uint8_t *b,const struct iqs915x_processing_setting
     processing_put16(b,p->coefficient_permille);processing_put16(b+2,p->x_middle);processing_put16(b+4,p->x_lower);
     processing_put16(b+6,p->y_upper);processing_put16(b+8,p->y_lower);processing_put16(b+10,p->y_center);
     processing_put16(b+12,p->bottom_beta);processing_put32(b+14,p->bottom_speed);processing_put32(b+18,p->top_speed);
+    processing_put16(b+22,p->stop_enabled);processing_put32(b+24,p->stop_fast_speed);processing_put16(b+28,p->stop_arm_ms);
+    processing_put16(b+30,p->stop_quiet_ms);processing_put16(b+32,p->stop_radius);processing_put16(b+34,p->stop_samples);
 }
 static void processing_commit(struct iqs915x_data *d) {
     d->processing=d->processing_pending;d->processing_generation++;
@@ -43,14 +45,15 @@ static void iqs915x_processing_sample(const struct device *dev,struct iqs915x_st
 int iqs915x_processing_command(const struct device *dev,const uint8_t *q,unsigned n,uint8_t *out,unsigned *length) {
     if(!dev||!device_is_ready(dev))return -ENODEV;
     if(q&&n>=9&&q[0]>=2)return iqs915x_trace_command(dev,q,n,out,length);
-    if(!q||!out||!length||n<9||q[0]>1||processing_u32(q+1)||processing_u32(q+5)||n!=(q[0]?31U:9U))return -EINVAL;
+    if(!q||!out||!length||n<9||q[0]>1||processing_u32(q+1)||processing_u32(q+5)||n!=(q[0]?45U:9U))return -EINVAL;
     struct iqs915x_data *d=dev->data;
     struct iqs915x_processing_settings p;
     if(q[0]) {
         p=(struct iqs915x_processing_settings){.coefficient_permille=(int16_t)processing_u16(q+9),
             .x_middle=(int16_t)processing_u16(q+11),.x_lower=(int16_t)processing_u16(q+13),
             .y_upper=(int16_t)processing_u16(q+15),.y_lower=(int16_t)processing_u16(q+17),.y_center=(int16_t)processing_u16(q+19),
-            .bottom_beta=processing_u16(q+21),.bottom_speed=processing_u32(q+23),.top_speed=processing_u32(q+27)};
+            .bottom_beta=processing_u16(q+21),.bottom_speed=processing_u32(q+23),.top_speed=processing_u32(q+27),.stop_enabled=processing_u16(q+31),.stop_fast_speed=processing_u32(q+33),
+            .stop_arm_ms=processing_u16(q+37),.stop_quiet_ms=processing_u16(q+39),.stop_radius=processing_u16(q+41),.stop_samples=processing_u16(q+43)};
         if(!iqs915x_processing_valid(&p))return -ERANGE;
     }
     k_mutex_lock(&d->processing_lock,K_FOREVER);
@@ -58,8 +61,8 @@ int iqs915x_processing_command(const struct device *dev,const uint8_t *q,unsigne
         d->processing_pending=p;d->processing_dirty=true;
         if(!d->processing_touch||atomic_get(&d->actual_mode)!=IQS915X_POWER_ACTIVE)processing_commit(d);
     }
-    out[0]=2;out[1]=d->processing_dirty;out[2]=((const struct iqs915x_config *)dev->config)->channel_profile;
+    out[0]=3;out[1]=d->processing_dirty;out[2]=((const struct iqs915x_config *)dev->config)->channel_profile;
     out[3]=atomic_get(&d->lifecycle);processing_put16(out+4,d->swipe_resolution_x);processing_put16(out+6,d->swipe_resolution_y);
-    processing_encode(out+8,&d->processing);processing_put32(out+30,d->processing_generation);*length=34;
+    processing_encode(out+8,&d->processing);processing_put32(out+44,d->processing_generation);*length=48;
     k_mutex_unlock(&d->processing_lock);return 0;
 }

@@ -35,8 +35,8 @@ static struct iqs915x_data d;
 static const struct iqs915x_config cfg={2};static const struct device dev={&d,&cfg};
 static uint8_t out[96];static unsigned length;
 static int request(unsigned op,const struct iqs915x_processing_settings *p){
- uint8_t q[31]={op};if(op)processing_encode(q+9,p);
- return iqs915x_processing_command(&dev,q,op?31:9,out,&length);
+ uint8_t q[45]={op};if(op)processing_encode(q+9,p);
+ return iqs915x_processing_command(&dev,q,op?45:9,out,&length);
 }
 static struct iqs915x_stream_data sample(unsigned fingers,uint16_t x,uint16_t y){
  struct iqs915x_stream_data s={.abs_x=x,.abs_y=y,.finger2_x=UINT16_MAX,.finger2_y=UINT16_MAX,.finger3_x=UINT16_MAX,.finger3_y=UINT16_MAX,.finger4_x=UINT16_MAX,.finger4_y=UINT16_MAX,.trackpad_flags=fingers|(fingers?BIT(8):0)};
@@ -46,8 +46,8 @@ int main(void){
  d.processing=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
  d.processing_pending=d.processing;d.swipe_resolution_x=6000;d.swipe_resolution_y=4000;
  iqs915x_map_generate(&d.processing,d.processing_map);
- assert(!request(0,NULL)&&length==34&&out[0]==2&&!out[1]);
- struct iqs915x_processing_settings p={.bottom_beta=256,.bottom_speed=100,.top_speed=1000};assert(!request(1,&p));
+ assert(!request(0,NULL)&&length==48&&out[0]==3&&!out[1]);
+ struct iqs915x_processing_settings p={.stop_enabled=1,.stop_fast_speed=5333,.stop_arm_ms=120,.stop_quiet_ms=30,.stop_radius=2,.stop_samples=3,.bottom_beta=256,.bottom_speed=100,.top_speed=1000};assert(!request(1,&p));
  struct iqs915x_stream_data s=sample(1,750,300);assert(s.abs_x==750);
  p.coefficient_permille=500;assert(!request(1,&p)&&out[1]);assert(d.processing.coefficient_permille==0);
  sample(0,750,300);assert(!d.processing_dirty&&d.processing.coefficient_permille==500);

@@ -3,10 +3,6 @@
 #include <iqs915x_processing.h>
 #include <stddef.h>
 /* Fixed sensor-coordinate thresholds; independent of Harbour beta controls. */
-#define IQS915X_STOP_FAST_SPEED 5333U
-#define IQS915X_STOP_ARM_MS 120U
-#define IQS915X_STOP_QUIET_MS 30U
-#define IQS915X_STOP_RADIUS_SQUARED 4U
 struct iqs915x_iir_state {
     int64_t x_q16,y_q16;
     uint16_t previous_x,previous_y;
@@ -88,25 +84,25 @@ static inline bool iqs915x_dynamic_iir(struct iqs915x_iir_state *s,
     if(gap){s->fast=false;s->quiet=false;}
     bool held=s->stopped;
     s->previous_x=*x;s->previous_y=*y;s->previous_ms=now;
-    if(p->bottom_beta>0 && p->bottom_beta<256) {
+    if(p->stop_enabled && p->bottom_beta>0 && p->bottom_beta<256) {
         int64_t ax=(int32_t)*x-s->anchor_x,ay=(int32_t)*y-s->anchor_y;
-        bool near=ax*ax+ay*ay<=IQS915X_STOP_RADIUS_SQUARED;
+        bool near=ax*ax+ay*ay<=(int64_t)p->stop_radius*p->stop_radius;
         if(s->stopped) {
             if(near){*x=(s->x_q16+32768)/65536;*y=(s->y_q16+32768)/65536;s->pending=false;return false;}
             s->stopped=false;
         }
-        if(!gap && speed>=IQS915X_STOP_FAST_SPEED){s->fast=true;s->fast_ms=now;s->quiet=false;}
+        if(!gap && speed>=p->stop_fast_speed){s->fast=true;s->fast_ms=now;s->quiet=false;}
         else if(s->fast) {
             if(!s->quiet) {
-                if((uint32_t)(now-s->fast_ms)>IQS915X_STOP_ARM_MS)s->fast=false;
+                if((uint32_t)(now-s->fast_ms)>p->stop_arm_ms)s->fast=false;
                 else {s->quiet=true;s->quiet_ms=now;s->quiet_samples=1;s->anchor_x=*x;s->anchor_y=*y;}
             } else if(!near) {
                 s->quiet=false;
-                if((uint32_t)(now-s->fast_ms)<=IQS915X_STOP_ARM_MS){s->quiet=true;s->quiet_ms=now;s->quiet_samples=1;s->anchor_x=*x;s->anchor_y=*y;}
+                if((uint32_t)(now-s->fast_ms)<=p->stop_arm_ms){s->quiet=true;s->quiet_ms=now;s->quiet_samples=1;s->anchor_x=*x;s->anchor_y=*y;}
                 else s->fast=false;
             } else {
-                if(s->quiet_samples<3)s->quiet_samples++;
-                if(s->quiet_samples>=3 && (uint32_t)(now-s->quiet_ms)>=IQS915X_STOP_QUIET_MS) {
+                if(s->quiet_samples<p->stop_samples)s->quiet_samples++;
+                if(s->quiet_samples>=p->stop_samples && (uint32_t)(now-s->quiet_ms)>=p->stop_quiet_ms) {
                     uint16_t out_x=(s->x_q16+32768)/65536,out_y=(s->y_q16+32768)/65536;
                     s->x_q16=(int64_t)out_x*65536;s->y_q16=(int64_t)out_y*65536;
                     s->offset_x=(int64_t)*x*65536-s->x_q16;s->offset_y=(int64_t)*y*65536-s->y_q16;
