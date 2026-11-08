@@ -75,7 +75,7 @@ static int iqs915x_trace_command(const struct device *dev,const uint8_t *q,unsig
         if(after){rc=-EINVAL;goto done;}
         if(atomic_get(&d->trace_active)){if(session!=d->trace_session||d->trace_filtered!=(q[9]!=0)){rc=-EBUSY;goto done;}}
         else {
-            if(d->trace_restoring||atomic_get(&d->pm_suspended)||atomic_get(&d->channel_running)||atomic_get(&d->channel_pending)||atomic_get(&d->ati_error)||atomic_get(&d->lifecycle)!=IQS915X_READY){rc=-EBUSY;goto done;}
+            if(atomic_get(&d->sensor_request)||!d->sensor_verified||d->trace_restoring||atomic_get(&d->pm_suspended)||atomic_get(&d->channel_running)||atomic_get(&d->channel_pending)||atomic_get(&d->ati_error)||atomic_get(&d->lifecycle)!=IQS915X_READY){rc=-EBUSY;goto done;}
             d->trace_saved_mode=atomic_get(&d->requested_mode);
             rc=iqs915x_set_mode(dev,IQS915X_POWER_ACTIVE);if(rc)goto done;
             d->trace_session=session;d->trace_sequence=d->trace_dropped=0;

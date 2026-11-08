@@ -42,6 +42,7 @@ static void iqs915x_processing_sample(const struct device *dev,struct iqs915x_st
 }
 int iqs915x_processing_command(const struct device *dev,const uint8_t *q,unsigned n,uint8_t *out,unsigned *length) {
     if(!dev||!device_is_ready(dev))return -ENODEV;
+    if(q&&n>=9&&q[0]>=6)return iqs915x_sensor_command(dev,q,n,out,length);
     if(q&&n>=9&&q[0]>=2)return iqs915x_trace_command(dev,q,n,out,length);
     if(!q||!out||!length||n<9||q[0]>1||processing_u32(q+1)||processing_u32(q+5)||n!=(q[0]?31U:9U))return -EINVAL;
     struct iqs915x_data *d=dev->data;

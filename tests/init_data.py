@@ -27,13 +27,16 @@ harness = r'''
 DEFINITIONS
 #include "iqs915x_init_array.h"
 #include "iqs915x_sensor_config.h"
+#include "iqs915x_sensor_tuning.h"
 struct iqs915x_config {
   uint8_t channel_profile;
   const uint8_t *init_data;
   uint16_t init_data_len, report_rate_ms;
   bool flip_x, flip_y, switch_xy;
 };
-struct device { const struct iqs915x_config *config; };
+struct iqs915x_data {uint8_t sensor_initializing[12];uint16_t active_sampling_period_ms;};
+struct device { const struct iqs915x_config *config; struct iqs915x_data *data; };
+PATCH_SENSOR
 static uint8_t retained[88];
 static unsigned mask_reads;
 static int mask_read_error;
@@ -58,7 +61,8 @@ int main(void) {
     .flip_x = IQS915X_SENSOR_FLIP_X, .flip_y = IQS915X_SENSOR_FLIP_Y,
     .switch_xy = IQS915X_SENSOR_SWITCH_XY,
   };
-  struct device dev = { .config = &config };
+  struct iqs915x_data data={.sensor_initializing={6,60,0,0,0xd5,0x14,0,0,0x75,0x8f,3,0},.active_sampling_period_ms=15};
+  struct device dev = { .config = &config,.data=&data };
   uint8_t written[1174], verified[1174], original[1174];
   memcpy(original, iqs915x_init_data, sizeof(original));
   uint16_t addr = 0, chunk = 0;
@@ -144,6 +148,17 @@ int main(void) {
   /* A warm left profile must reject retained right-side bytes with same X resolution. */
   memcpy(retained,baseline+mask_offset,88);config.channel_profile=2;
   assert(iqs915x_check_channel_profile(&dev)==1);
+  /* Test actual chunk patching, without mutating compiled export bytes. */
+  data.sensor_initializing[0]=0;data.sensor_initializing[1]=17;data.sensor_initializing[2]=1;
+  data.sensor_initializing[4]=100;data.sensor_initializing[5]=data.sensor_initializing[6]=data.sensor_initializing[7]=0;
+  data.sensor_initializing[8]=200;data.sensor_initializing[9]=data.sensor_initializing[10]=data.sensor_initializing[11]=0;
+  assert(iqs915x_sensor_valid(data.sensor_initializing,15));
+  for(unsigned offset=0;offset<1174;offset+=chunk)assert(!iqs915x_prepare_init_chunk(&dev,offset,&addr,&chunk,written+offset,false));
+  assert(written[0x11F1-0x115C]==0 && written[0x11EE - 0x115C]==17);
+  assert(read16(written,0x11EA)==2 && read16(written,0x11EC)==3);
+  assert(written[IQS915X_TRACKPAD_SETTINGS-0x115C]&BIT(3));
+  assert(!(written[IQS915X_TRACKPAD_SETTINGS-0x115C]&BIT(4)));
+  assert(!memcmp(original,iqs915x_init_data,sizeof(original)));
   uint8_t wrong_geometry[1174];memcpy(wrong_geometry,iqs915x_init_data,sizeof(wrong_geometry));
   wrong_geometry[IQS915X_PROFILE_TOTAL_RXS-IQS915X_INIT_DATA_BASE_ADDR]=17;
   config.init_data=wrong_geometry;
@@ -152,11 +167,11 @@ int main(void) {
   puts("IQS915x init-data: 1174 export bytes, driver overrides and read-back preparation verified");
 }
 '''
-for marker, code in (("DEFINITIONS", definitions), ("POLICY", policy), ("PREPARE", prepare), ("CHECK_MASK", block(source,"static int iqs915x_check_channel_profile"))):
+for marker, code in (("PATCH_SENSOR", block((ROOT / "drivers/input/iqs915x_sensor_tuning.inc").read_text(), "static uint8_t sensor_patch_byte")), ("DEFINITIONS", definitions), ("POLICY", policy), ("PREPARE", prepare), ("CHECK_MASK", block(source,"static int iqs915x_check_channel_profile"))):
     harness = harness.replace(marker, code)
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     subprocess.run(["python3", str(ROOT / "scripts/generate_init_array.py"), str(ROOT / "drivers/input/IQS9150_init.h"), "-o", str(directory / "iqs915x_init_array.h")], check=True)
     (directory / "test.c").write_text(harness)
-    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "drivers/input"), "-I", str(directory), str(directory / "test.c"), "-o", str(directory / "test")], check=True)
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "drivers/input"), "-I", str(ROOT / "include"), "-I", str(directory), str(directory / "test.c"), "-o", str(directory / "test")], check=True)
     subprocess.run([str(directory / "test")], check=True)

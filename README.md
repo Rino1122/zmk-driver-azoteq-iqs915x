@@ -802,3 +802,24 @@ are retained immediately. IIR consumes every acquired sample. There are no
 extra reads/timers/communication outside monitoring; the inactive raw branch
 returns after an atomic check. The contact subscriber is unchanged.
 See tests/trace_capture.c for production-code state/transport/IIR tests.
+
+## IC sensor tuning (Harbour)
+
+Processing command 6 queries / 7 stages a 12-byte sensor profile (9-byte zero
+header; set has 12 additional bytes). Profile: split u8, bottom beta u8, dynamic
+IIR enabled u8, reserved zero, bottom/top speed LE32 pixel/s. Speed conversion is
+`(speed * active_period_ms + 500) / 1000` using uint64, nearest integer with
+half upward. Reject profiles with rounded bottom >= top or values above 65535
+pixel/cycle, including when IIR is disabled. Beta is 0..255 (IC register width).
+Defaults retain split 6, beta 60, 80/3500 pixel/cycle at 15ms, IC IIR disabled.
+
+A changed profile queues a sensor-thread software reset, ends the contact
+session, patches the existing init chunks, and verifies registers 0x11EA..0x11F1
+(relevant bytes), IIR enable/dynamic bits and Active sampling period before READY.
+Warm boot also compares those values; stale retained sensor settings force reset.
+The requested power/layer policy is restored by the existing initialization path.
+No I2C access occurs in RPC handlers and no recurring tuning timer is added.
+GET response 34 bytes: version=1, pending, lifecycle, verified, period LE16,
+desired[12], applied[12], bottom/top cycle LE16. Applied bytes are meaningful only
+when verified. Reinitialization is asynchronous, idempotent requests do not reset.
+Persistence and split synchronization belong to the central firmware, not this driver.

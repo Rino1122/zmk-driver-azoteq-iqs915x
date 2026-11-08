@@ -35,6 +35,7 @@
 #include "iqs915x_power.h"
 #include "iqs915x_init_array.h"
 #include "iqs915x_sensor_config.h"
+#include "IQS9150_init.h"
 
 LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
@@ -561,6 +562,7 @@ static void iqs915x_log_stream_coordinates(const struct iqs915x_stream_data *dat
 
 // ストリーミングデータを読み取る
 #include "iqs915x_trace.inc"
+#include "iqs915x_sensor_tuning.inc"
 #include "iqs915x_processing.inc"
 
 static int iqs915x_read_stream(const struct device *dev,
@@ -2207,7 +2209,8 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
       {
         uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS | BIT(3);
-        uint8_t set = 0;
+        clr |= BIT(4); /* Always dynamic when IC IIR is enabled. */
+        uint8_t set = ((struct iqs915x_data *)dev->data)->sensor_initializing[2] ? BIT(3) : 0;
         if (config->flip_x)
           set |= IQS915X_FLIP_X;
         if (config->flip_y)
@@ -2228,6 +2231,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
         buffer[i] &= ~clr;
       }
+      buffer[i]=sensor_patch_byte(dev,current_addr,buffer[i]);
       // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
       if (log_changes && buffer[i] != original)
       {
@@ -2333,7 +2337,10 @@ static int iqs915x_init_step_handler(const struct device *dev)
       uint8_t retained_trackpad=0;
       ret=iqs915x_read_block(dev,IQS915X_TRACKPAD_SETTINGS,&retained_trackpad,1);
       if(ret<0)return ret;
-      if(retained_trackpad&BIT(3)){data->init_step=INIT_SOFTWARE_RESET;break;}
+      if ((retained_trackpad & (BIT(3)|BIT(4))) != (data->sensor_initializing[2] ? BIT(3):0)) {data->init_step=INIT_SOFTWARE_RESET;break;}
+      ret=sensor_check_registers(dev);
+      if(ret<0)return ret;
+      if(ret){data->init_step=INIT_SOFTWARE_RESET;break;}
       ret = iqs915x_check_channel_profile(dev);
       if (ret < 0) return ret;
       if (ret > 0) { data->init_step = INIT_SOFTWARE_RESET; break; }
@@ -2679,6 +2686,12 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_INF("Init: communication policy confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
+      ret=sensor_check_registers(dev);
+      if(ret<0)return ret;
+      if(ret){iqs915x_restart_initialization(dev,"sensor tuning readback mismatch");break;}
+      k_mutex_lock(&data->processing_lock,K_FOREVER);
+      memcpy(data->sensor_applied,data->sensor_initializing,12);data->sensor_verified=true;
+      k_mutex_unlock(&data->processing_lock);
       data->init_step = INIT_COMPLETE;
       iqs915x_mark_initialized(data, true);
       data->work_state = WORK_READ_DATA;
@@ -2945,6 +2958,14 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
   {
     if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) {
       k_sem_take(&data->rdy_sem, K_FOREVER);
+      continue;
+    }
+    if (data->initialized && atomic_cas(&data->sensor_request,1,0)) {
+      k_mutex_lock(&data->processing_lock,K_FOREVER);
+      memcpy(data->sensor_initializing,data->sensor_desired,12);data->sensor_verified=false;
+      k_mutex_unlock(&data->processing_lock);
+      iqs915x_runtime_reset(data,"sensor tuning changed");
+      data->init_step=INIT_SOFTWARE_RESET;
       continue;
     }
     if (!data->initialized && (k_uptime_get() >= data->init_deadline || data->init_step == INIT_FAILED)) {
@@ -3580,6 +3601,9 @@ static int iqs915x_init(const struct device *dev)
   k_work_init_delayable(&data->trace_work,trace_lease);
   data->processing=(struct iqs915x_processing_settings)IQS915X_PROCESSING_DEFAULTS;
   data->processing_pending=data->processing;
+  const uint8_t sensor_defaults[12]={FINGER_SPLIT_FACTOR,XY_DYNAMIC_FILTER_BOTTOM_BETA,0,0,0xd5,0x14,0,0,0x75,0x8f,3,0};
+  memcpy(data->sensor_desired,sensor_defaults,12);
+  memcpy(data->sensor_initializing,sensor_defaults,12);
   iqs915x_map_generate(&data->processing,data->processing_map);
   k_mutex_init(&data->settings_lock);
   k_mutex_init(&data->power_lock);
