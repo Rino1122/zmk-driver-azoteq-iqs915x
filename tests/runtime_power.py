@@ -673,7 +673,7 @@ def main():
              'iqs915x_config_settings_without_event_mode',
              'iqs915x_init_wait_window', 'iqs915x_read_block', 'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
              'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
-    functions = []
+    functions = [block((ROOT/'drivers/input/iqs915x_sensor_tuning.inc').read_text(), 'static uint8_t sensor_patch_byte')]
     for name in names:
         matches = list(re.finditer(r'^static [^\n]*\b'+name+r'\(', SOURCE, re.M))
         m = matches[-1]

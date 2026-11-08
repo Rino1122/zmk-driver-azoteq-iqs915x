@@ -2960,7 +2960,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       k_sem_take(&data->rdy_sem, K_FOREVER);
       continue;
     }
-    if (data->initialized && atomic_cas(&data->sensor_request,1,0)) {
+    if (data->initialized && !atomic_get(&data->pm_suspended) && atomic_cas(&data->sensor_request,1,0)) {
       k_mutex_lock(&data->processing_lock,K_FOREVER);
       memcpy(data->sensor_initializing,data->sensor_desired,12);data->sensor_verified=false;
       k_mutex_unlock(&data->processing_lock);

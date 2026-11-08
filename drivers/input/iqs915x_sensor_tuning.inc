@@ -26,6 +26,7 @@ static int iqs915x_sensor_command(const struct device *dev,const uint8_t *q,unsi
  struct iqs915x_data *d=dev->data;int rc=0;
  k_mutex_lock(&d->processing_lock,K_FOREVER);
  if(q[0]==7) {
+  if(atomic_get(&d->lifecycle)>=4){rc=-ENODEV;goto done;}
   if(!iqs915x_sensor_valid(q+9,d->active_sampling_period_ms)){rc=-ERANGE;goto done;}
   if(memcmp(d->sensor_desired,q+9,12)) {
    if(atomic_get(&d->lifecycle)!=IQS915X_READY||atomic_get(&d->pm_suspended)||atomic_get(&d->trace_active)||atomic_get(&d->channel_running)||atomic_get(&d->channel_pending)){rc=-EBUSY;goto done;}

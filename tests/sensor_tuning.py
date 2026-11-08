@@ -38,6 +38,7 @@ int main(void){
  assert(d.sensor_applied[0]==6&&d.sensor_desired[0]==0); /* atomic staging */
  assert(!iqs915x_sensor_command(&dev,q,21,out,&n)&&wakes==1); /* retry */
  d.trace_active=1;q[9]=2;assert(iqs915x_sensor_command(&dev,q,21,out,&n)==-EBUSY);d.trace_active=0;
+ d.lifecycle=4;assert(iqs915x_sensor_command(&dev,q,21,out,&n)==-ENODEV);d.lifecycle=IQS915X_READY;
  q[12]=1;assert(iqs915x_sensor_command(&dev,q,21,out,&n)==-ERANGE);q[12]=0;
  q[1]=1;assert(iqs915x_sensor_command(&dev,q,21,out,&n)==-EINVAL);q[1]=0;
  assert(iqs915x_sensor_command(&dev,q,20,out,&n)==-EINVAL);
