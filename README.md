@@ -145,7 +145,7 @@ For scroll diagnostics, enable `CONFIG_LOG=y` and
 nonzero axis delta passed to scroll normalization produces a DEBUG line:
 
 ```text
-scroll_output,t=50000,source=manual,axis=wheel,delta=-20,wheel=-1,status=sent,rc=0,acc_before=0,acc_added=-10240,acc_after=-2240,denom=8000
+scroll_output,t=50000,source=manual,axis=wheel,delta=-60,wheel=-1,status=sent,rc=0,acc_before=0,acc_added=-10260,acc_after=-2260,denom=8000
 ```
 
 - `t`: uptime in milliseconds at logging time, after the submission attempt.
@@ -162,7 +162,7 @@ scroll_output,t=50000,source=manual,axis=wheel,delta=-20,wheel=-1,status=sent,rc
   delta, after adding it, and after submission. Successful submission retains
   only the remainder; failed or disabled submission keeps the accumulated value.
 - `denom`: resolution times scroll divisor. Accumulator values use coordinate
-  units multiplied by 512; a successful output consumes `wheel * denom`.
+  units multiplied by 171; a successful output consumes `wheel * denom`.
 
 At release, `scroll_inertia_release,t=...,window_ms=...,vx=...,vy=...,threshold=...,initial_velocity_percent=...,start=...`
 reports the estimated velocity in coordinate units per 10 ms, the elapsed
@@ -229,7 +229,9 @@ before the tap-distance threshold is retained and emitted once scrolling is
 recognized, so the output reflects the full gesture displacement. Raw deltas
 are normalized by the init-data X/Y resolutions before being reported as wheel
 events. `scroll-divisor` is an extra coarse divisor applied after that
-normalization.
+normalization. The fixed scale is 171 wheel units per full axis at divisor 1
+(approximately one third of the original 512); this applies to both manual
+scrolling and inertia. Fractional output is retained in the accumulator.
 
 Finger-count changes during contact are debounced for 20 ms; initial contact
 is accepted immediately. Touch boundaries, tap/drag recognition and scroll

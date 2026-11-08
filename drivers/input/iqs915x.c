@@ -1387,7 +1387,8 @@ static void iqs915x_start_tap_and_hold_drag(struct iqs915x_data *data,
 }
 
 
-#define IQS915X_SCROLL_UNITS_PER_AXIS 512
+/* Approximately one third of the original 512-unit scroll scale. */
+#define IQS915X_SCROLL_UNITS_PER_AXIS 171
 #define IQS915X_SCROLL_FALLBACK_RESOLUTION 4096
 #define IQS915X_SCROLL_CROSS_AXIS_DEADBAND_RATIO 4
 
