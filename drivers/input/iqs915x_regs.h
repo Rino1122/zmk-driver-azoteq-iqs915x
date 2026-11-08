@@ -29,7 +29,6 @@
 
 #include <iqs915x.h>
 #include <iqs915x_processing_math.h>
-#include <iqs915x_sensor_tuning.h>
 #include "iqs915x_scroll_motion.h"
 #include "iqs915x_contacts_internal.h"
 #include "iqs915x_scroll_inertia.h"
@@ -478,9 +477,6 @@ struct iqs915x_data
     struct k_work_delayable tap_and_hold_start_work;
 
     // Runtime pointer/inertia settings and state shared with system workqueue.
-    uint8_t sensor_desired[12], sensor_initializing[12], sensor_applied[12];
-    bool sensor_verified;
-    atomic_t sensor_request;
     struct k_mutex processing_lock;
     struct iqs915x_processing_settings processing,processing_pending;
     struct iqs915x_iir_state processing_iir[4];

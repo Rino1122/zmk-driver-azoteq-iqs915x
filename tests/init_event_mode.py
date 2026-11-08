@@ -70,10 +70,7 @@ def main():
 #include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
-#include <string.h>
-#define K_FOREVER 0
-#define k_mutex_lock(p,t) ((void)(p),(void)(t))
-#define k_mutex_unlock(p) ((void)(p))
+#define TRACKPAD_SETTINGS_0_0 0x28
 #define GPIO_OUTPUT_INACTIVE 0
 #define BIT(n) (1U << (n))
 #define K_MSEC(n) (n)
@@ -88,7 +85,6 @@ def main():
 DEFINITIONS
 ENUM
 struct iqs915x_data {
-  uint8_t sensor_initializing[12],sensor_applied[12];bool sensor_verified;int processing_lock;
   enum iqs915x_init_step init_step;
   bool initialized, active_pending, lp2_pending, enabled;
   int wait_count, work_state, last_info_flags;
@@ -105,7 +101,7 @@ struct iqs915x_data {
 struct reset_gpio { int port; };
 struct iqs915x_config { int rdy_gpio; struct reset_gpio reset_gpio; };
 struct device { struct iqs915x_data *data; const struct iqs915x_config *config; };
-static int sensor_check_registers(const struct device *dev){(void)dev;return 0;}
+static int iqs915x_check_fixed_sensor_config(const struct device *dev){(void)dev;return 0;}
 static int64_t now;
 static int64_t k_uptime_get(void) { return now; }
 static int busy_waits, busy_edges, read_error_code;
@@ -215,7 +211,7 @@ INITIALIZATION
 static struct iqs915x_data setup(bool enabled) {
   busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
-  ic_cfg = ic_info = 0; retained_trackpad_settings=0;
+  ic_cfg = ic_info = 0; retained_trackpad_settings=8;
   reati_ready=reset_during_reati=false; reati_requests=stream_reads=0;
   return (struct iqs915x_data){.ati_deadline=5000,
     .init_step = INIT_SET_EVENT_MODE,
@@ -387,7 +383,7 @@ int main(void) {
   assert(!configure_reset(&dev) && reset_configurations==1);
   dev.config=&config;
   assert(!configure_reset(&dev) && reset_configurations==1);
-  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;retained_trackpad_settings=8;
+  data=setup(false);data.init_step=INIT_CHECK_SHOW_RESET;retained_trackpad_settings=0;
   run(&dev,1);assert(data.init_step==INIT_SOFTWARE_RESET && !data.initialized);
   puts("IQS915x init: Event verification, warm startup without RDY, forced Re-ATI and reset routing passed");
 }

@@ -28,7 +28,6 @@ struct device {void *data;};
 static bool device_is_ready(const struct device *d){return d!=NULL;}
 struct iqs915x_trace_sample {uint32_t sequence,time;uint16_t x[4],y[4],id[4],flags;uint8_t mask,confidence;};
 struct iqs915x_data {
- bool sensor_verified;int sensor_request;
  const struct device *dev;int processing_lock,trace_active,output_enabled,processing_reset,processing_tail;
  struct k_work_delayable trace_work;int64_t trace_deadline;
  int trace_saved_mode,requested_mode,pm_suspended,channel_running,channel_pending,ati_error,lifecycle;
@@ -43,11 +42,11 @@ static int power_error;
 static int iqs915x_set_mode(const struct device *dev,int mode){if(power_error)return power_error;((struct iqs915x_data*)dev->data)->requested_mode=mode;return 0;}
 static int iqs915x_restore_capture_mode(const struct device *dev,int mode){return iqs915x_set_mode(dev,mode);}
 #include "iqs915x_trace.inc"
-static struct iqs915x_data d={.sensor_verified=true,.lifecycle=IQS915X_READY,.requested_mode=2,.swipe_resolution_x=6000,.swipe_resolution_y=4000};
+static struct iqs915x_data d={.lifecycle=IQS915X_READY,.requested_mode=2,.swipe_resolution_x=6000,.swipe_resolution_y=4000};
 static const struct device dev={&d};static uint8_t reply[96];static unsigned length;
 static int command(unsigned op,unsigned session,unsigned after){uint8_t q[10]={op};trace_put32(q+1,session);trace_put32(q+5,after);return iqs915x_trace_command(&dev,q,op==2?10:9,reply,&length);}
 int main(void){
- d.dev=&dev;d.sensor_request=1;assert(command(2,42,0)==-EBUSY);d.sensor_request=0;
+ d.dev=&dev;
  assert(!command(2,42,0)&&reply[1]&&d.trace_saved_mode==2&&d.requested_mode==0);
  assert(command(2,43,0)==-EBUSY);assert(command(5,43,0)==-ESTALE);
  struct iqs915x_stream_data s={.abs_x=123,.abs_y=456,.finger2_x=UINT16_MAX,.finger2_y=UINT16_MAX,.finger3_x=UINT16_MAX,.finger3_y=UINT16_MAX,.finger4_x=UINT16_MAX,.finger4_y=UINT16_MAX,.trackpad_flags=1|BIT(8)};

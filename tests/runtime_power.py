@@ -68,6 +68,7 @@ HARNESS = r'''
 #include <stdio.h>
 #include "iqs915x_internal.h"
 #include "iqs915x_sensor_config.h"
+#include "IQS9150_init.h"
 DEFINITIONS
 #define IQS915X_POWER_TRANSITION_WAIT_MS 2000
 enum pm_device_action { PM_DEVICE_ACTION_SUSPEND, PM_DEVICE_ACTION_RESUME };
@@ -673,7 +674,7 @@ def main():
              'iqs915x_config_settings_without_event_mode',
              'iqs915x_init_wait_window', 'iqs915x_read_block', 'iqs915x_write_reg16', 'iqs915x_read_reg16', 'iqs915x_validate_stream_coordinates',
              'iqs915x_read_stream', 'iqs915x_channel_profile_valid', 'iqs915x_prepare_init_chunk']
-    functions = [block((ROOT/'drivers/input/iqs915x_sensor_tuning.inc').read_text(), 'static uint8_t sensor_patch_byte')]
+    functions = []
     for name in names:
         matches = list(re.finditer(r'^static [^\n]*\b'+name+r'\(', SOURCE, re.M))
         m = matches[-1]

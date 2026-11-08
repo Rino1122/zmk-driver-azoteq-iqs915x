@@ -84,10 +84,10 @@ This driver is designed for the IQS9150/IQS9151 series trackpad controllers. It 
 
 The driver uses IQS9150 absolute finger coordinates. Processing now runs in
 this order on each MCU: validated sensor coordinates -> periodic key-pitch
-correction -> dynamic IIR -> contact/Mouse output. The IC's XY IIR is disabled
-in the init-data (0x11E2 bit 3 clear). Retained warm-start settings are checked;
-an old enabled IIR forces a complete reinitialization. Jitter/area/MAV settings
-are preserved.
+correction -> MCU dynamic IIR -> contact/Mouse output. The IC's dynamic XY IIR
+is enabled in init-data (0x11E2 bit3 set, bit4 clear), upstream of MCU processing.
+Retained warm-start settings are checked against the compiled configuration;
+mismatches force reinitialization. Jitter/area/MAV settings are preserved.
 
 The periodic correction is a uniform 5x5 displacement tile, repeated over
 6 X / 4 Y keys. Six permille controls generate its Q15 nodes: X upper,
@@ -805,23 +805,11 @@ extra reads/timers/communication outside monitoring; the inactive raw branch
 returns after an atomic check. The contact subscriber is unchanged.
 See tests/trace_capture.c for production-code state/transport/IIR tests.
 
-## IC sensor tuning (Harbour)
+## Fixed IC filtering and finger split
 
-Processing command 6 queries / 7 stages a 12-byte sensor profile (9-byte zero
-header; set has 12 additional bytes). Profile: split u8, bottom beta u8, dynamic
-IIR enabled u8, reserved zero, bottom/top speed LE32 pixel/s. Speed conversion is
-`(speed * active_period_ms + 500) / 1000` using uint64, nearest integer with
-half upward. Reject profiles with rounded bottom >= top or values above 65535
-pixel/cycle, including when IIR is disabled. Beta is 0..255 (IC register width).
-Defaults retain split 6, beta 60, 80/3500 pixel/cycle at 15ms, IC IIR disabled.
-
-A changed profile queues a sensor-thread software reset, ends the contact
-session, patches the existing init chunks, and verifies registers 0x11EA..0x11F1
-(relevant bytes), IIR enable/dynamic bits and Active sampling period before READY.
-Warm boot also compares those values; stale retained sensor settings force reset.
-The requested power/layer policy is restored by the existing initialization path.
-No I2C access occurs in RPC handlers and no recurring tuning timer is added.
-GET response 34 bytes: version=1, pending, lifecycle, verified, period LE16,
-desired[12], applied[12], bottom/top cycle LE16. Applied bytes are meaningful only
-when verified. Reinitialization is asynchronous, idempotent requests do not reset.
-Persistence and split synchronization belong to the central firmware, not this driver.
+IC runtime initialization overrides are retired. The compiled init-data uses
+Finger Split Factor5, dynamic IIR enabled, Bottom Beta100, and bottom/top
+15,000/16,500 pixel/cycle. At the fixed Active period15ms these correspond to
+1,000,000/1,100,000 pixel/s. MCU processing/IIR and raw trace APIs remain.
+Warm initialization verifies these registers against compiled init-data and
+resets/reloads retained settings when different. No late saved-profile reset.

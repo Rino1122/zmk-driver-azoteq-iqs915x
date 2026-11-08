@@ -177,7 +177,7 @@
 
 /* Trackpad Settings */
 /* Memory Map Position 0x11E2 - 0x11F5 */
-#define TRACKPAD_SETTINGS_0_0                    0x20
+#define TRACKPAD_SETTINGS_0_0                    0x28
 #define TRACKPAD_SETTINGS_0_1                    0x12
 #define TRACKPAD_SETTINGS_1_0                    0x0C
 #define TRACKPAD_SETTINGS_1_1                    0x04
@@ -185,14 +185,16 @@
 #define X_RESOLUTION_1                           0x17
 #define Y_RESOLUTION_0                           0xA0
 #define Y_RESOLUTION_1                           0x0F
-#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0x50
-#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_1         0x00
-#define XY_DYNAMIC_FILTER_TOP_SPEED_0            0xAC
-#define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x0D
-#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x3C
+/* Active period 15ms: 1,000,000px/s -> 15,000px/cycle (0x3A98);
+ * 1,100,000px/s -> 16,500px/cycle (0x4074). */
+#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0x98
+#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_1         0x3A
+#define XY_DYNAMIC_FILTER_TOP_SPEED_0            0x74
+#define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x40
+#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x64
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
 #define STATIONARY_TOUCH_MOV_THRESHOLD           0x0F
-#define FINGER_SPLIT_FACTOR                      0x06
+#define FINGER_SPLIT_FACTOR                      0x05
 #define X_TRIM_VALUE                             0x00
 #define Y_TRIM_VALUE                             0x00
 #define JITTER_FILTER_DELTA                      0x0A
