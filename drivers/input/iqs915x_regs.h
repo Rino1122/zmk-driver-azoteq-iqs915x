@@ -463,6 +463,11 @@ struct iqs915x_trace_sample { uint32_t sequence,time; uint16_t x[4],y[4],id[4],f
 struct iqs915x_data
 {
     const struct device *dev;
+    iqs915x_status_callback_t status_callbacks[2];
+    void *status_users[2];
+    struct iqs915x_status published_status;
+    bool status_valid;
+    uint8_t status_initial;
     struct gpio_callback rdy_cb;
 
     // 専用スレッド用

@@ -23,3 +23,5 @@ int iqs915x_pm_action(const struct device *dev, enum pm_device_action action);
 
 /* Restore capture intent without waking a device suspended by Zephyr PM. */
 int iqs915x_restore_capture_mode(const struct device *dev, enum iqs915x_mode mode);
+
+void iqs915x_publish_status(const struct device *dev);

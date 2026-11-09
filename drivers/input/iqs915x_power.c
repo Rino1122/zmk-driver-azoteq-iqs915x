@@ -138,6 +138,7 @@ int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode)
     /* Record user intent for the local error LED; never retry a latched IC. */
     atomic_set(&data->requested_mode, mode);
     atomic_set(&data->requested_enabled, mode == IQS915X_POWER_ACTIVE);
+    k_sem_give(&data->rdy_sem);
     return 0;
   }
   if (k_mutex_lock(&data->power_lock, K_NO_WAIT) < 0) return -EBUSY;
@@ -202,4 +203,53 @@ int iqs915x_restore_capture_mode(const struct device *dev, enum iqs915x_mode mod
   }
   k_mutex_unlock(&data->power_lock);
   return iqs915x_set_mode(dev,mode);
+}
+
+int iqs915x_subscribe_status(const struct device *dev, iqs915x_status_callback_t callback,
+                            void *user_data)
+{
+  if (!dev || !device_is_ready(dev) || !callback) return -EINVAL;
+  struct iqs915x_data *data = dev->data;
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  int slot = -1;
+  for (int i = 0; i < 2; i++) {
+    if (data->status_callbacks[i] == callback && data->status_users[i] == user_data) {
+      k_mutex_unlock(&data->settings_lock); return 0;
+    }
+    if (!data->status_callbacks[i]) slot = i;
+  }
+  if (slot >= 0) {
+    data->status_callbacks[slot] = callback;
+    data->status_users[slot] = user_data;
+    data->status_initial |= 1u << slot;
+  }
+  k_mutex_unlock(&data->settings_lock);
+  if (slot < 0) return -ENOMEM;
+  k_sem_give(&data->rdy_sem);
+  return 0;
+}
+
+void iqs915x_publish_status(const struct device *dev)
+{
+  struct iqs915x_data *data = dev->data;
+  struct iqs915x_status next;
+  if (iqs915x_get_status(dev, &next)) return;
+  iqs915x_status_callback_t callbacks[2] = {0};
+  void *users[2];
+  k_mutex_lock(&data->settings_lock, K_FOREVER);
+  const struct iqs915x_status *old = &data->published_status;
+  bool changed = !data->status_valid || old->lifecycle != next.lifecycle ||
+    old->requested_mode != next.requested_mode || old->actual_mode != next.actual_mode ||
+    old->transitioning != next.transitioning || old->ati_sequence != next.ati_sequence ||
+    old->ati_error != next.ati_error || old->last_error != next.last_error ||
+    old->generation != next.generation;
+  data->published_status = next;
+  data->status_valid = true;
+  for (unsigned i = 0; i < 2; i++) {
+    if (changed || (data->status_initial & (1u << i))) callbacks[i] = data->status_callbacks[i];
+    users[i] = data->status_users[i];
+  }
+  data->status_initial = 0;
+  k_mutex_unlock(&data->settings_lock);
+  for (unsigned i = 0; i < 2; i++) if (callbacks[i]) callbacks[i](dev, users[i]);
 }

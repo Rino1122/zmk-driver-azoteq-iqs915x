@@ -83,6 +83,14 @@ int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode);
 /** Cached MCU state only: never initiates I2C or wakes a suspended sensor. */
 int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status);
 
+/** Lifetime subscribers, invoked on the sensor thread outside driver locks.
+ * Callback must only queue work: do not block or call driver mutating APIs.
+ * Registration schedules an initial notification; no hardware I/O is added.
+ * Two independent consumers are supported; repeating a registration is harmless. */
+typedef void (*iqs915x_status_callback_t)(const struct device *dev, void *user_data);
+int iqs915x_subscribe_status(const struct device *dev, iqs915x_status_callback_t callback,
+                            void *user_data);
+
 /** Runtime pointer acceleration controls. */
 struct iqs915x_pointer_settings {
   bool enabled;

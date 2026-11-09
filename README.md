@@ -813,3 +813,14 @@ Finger Split Factor5, dynamic IIR enabled, Bottom Beta100, and bottom/top
 1,000,000/1,100,000 pixel/s. MCU processing/IIR and raw trace APIs remain.
 Warm initialization verifies these registers against compiled init-data and
 resets/reloads retained settings when different. No late saved-profile reset.
+
+### Cached status notifications
+
+`iqs915x_subscribe_status()` registers up to two lifetime consumers. Each receives
+an initial notification and notifications when lifecycle, power mode, transition,
+calibration health or request generation changes. Callbacks run on the sensor
+thread outside driver locks and must only schedule work. Read the latest state
+with `iqs915x_get_status()` from that work; notifications coalesce intermediate
+states. Coordinate updates alone do not notify, and registration/status reads
+never add sensor I/O or wake an IC in Suspend. Terminal devices remain latched
+until MCU restart.

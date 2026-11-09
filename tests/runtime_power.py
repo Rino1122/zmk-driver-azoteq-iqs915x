@@ -206,7 +206,25 @@ static void until_idle(void) {
   assert(d.initialized && d.work_state==WORK_READ_DATA);
 }
 static void diagnostic_wake(void){atomic_set(&d.channel_pending,1);k_sem_give(&d.rdy_sem);}
+static unsigned status_notifications;
+static void status_changed(const struct device *dev, void *user) {
+  struct iqs915x_status status;
+  assert(!iqs915x_get_status(dev,&status));
+  status_notifications++;
+}
 int main(void) {
+  setup(false);
+  int io_before=txns;
+  assert(!iqs915x_subscribe_status(&dev,status_changed,NULL));
+  iqs915x_publish_status(&dev);assert(status_notifications==1);
+  for(unsigned i=0;i<500;i++)iqs915x_publish_status(&dev);
+  assert(status_notifications==1 && txns==io_before);
+  d.actual_mode=IQS915X_POWER_SUSPEND;iqs915x_publish_status(&dev);assert(status_notifications==2);
+  d.ati_error=1;iqs915x_publish_status(&dev);assert(status_notifications==3);
+  d.lifecycle=IQS915X_FAULT;iqs915x_publish_status(&dev);assert(status_notifications==4);
+  assert(!iqs915x_subscribe_status(&dev,status_changed,NULL));
+  iqs915x_publish_status(&dev);assert(status_notifications==4);
+
   /* Diagnostic ATI works from LP2 without modifying user intent and restores it. */
   setup(false);d.lifecycle=IQS915X_READY;simulate_ati=true;
   uint32_t job;
@@ -697,7 +715,7 @@ def main():
     for marker in ['static void iqs915x_set_pm_suspended(', 'static int iqs915x_request_enabled(',
                    'static int iqs915x_pm_action_locked(', 'int iqs915x_pm_action(',
                    'int iqs915x_set_mode(', 'int iqs915x_set_enabled(',
-                   'int iqs915x_get_status(', 'bool iqs915x_get_enabled(']:
+                   'int iqs915x_get_status(', 'bool iqs915x_get_enabled(', 'int iqs915x_subscribe_status(', 'void iqs915x_publish_status(']:
         functions.append(block(power, marker))
     a = SOURCE.index('    iqs915x_apply_pending_power_request(data);', SOURCE.index('static void iqs915x_thread_main('))
     b = SOURCE.index('    // =========================================================\n    // ドラッグ解除チェック', a)

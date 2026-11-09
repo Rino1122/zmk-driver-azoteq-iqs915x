@@ -2952,6 +2952,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
 
   while (true)
   {
+    iqs915x_publish_status(dev);
     if (atomic_get(&data->lifecycle) >= IQS915X_ABSENT) {
       k_sem_take(&data->rdy_sem, K_FOREVER);
       continue;
