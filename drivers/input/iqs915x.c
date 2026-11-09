@@ -3032,6 +3032,8 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
       continue;
     }
     iqs915x_apply_pending_power_request(data);
+    /* Publish completion before entering the indefinite Suspend wait. */
+    iqs915x_publish_status(dev);
 
     if (data->ic_suspended) {
       if (!atomic_get(&data->pm_suspended) && gpio_pin_get_dt(&((const struct iqs915x_config *)data->dev->config)->rdy_gpio) > 0) {
