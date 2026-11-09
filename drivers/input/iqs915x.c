@@ -2087,7 +2087,7 @@ static bool iqs915x_channel_profile_valid(const struct iqs915x_config *config)
   if (config->channel_profile == IQS915X_CHANNEL_PROFILE_EXPORT) return true;
   unsigned rx=IQS915X_PROFILE_TOTAL_RXS-IQS915X_INIT_DATA_BASE_ADDR;
   unsigned tx=IQS915X_PROFILE_TOTAL_TXS-IQS915X_INIT_DATA_BASE_ADDR;
-  return config->channel_profile <= IQS915X_CHANNEL_PROFILE_BRETAGNE_LEFT &&
+  return config->channel_profile <= IQS915X_CHANNEL_PROFILE_LANDSFALL_LEFT &&
          config->init_data && config->init_data_len > tx &&
          config->init_data[rx]==18 && config->init_data[tx]==12;
 }

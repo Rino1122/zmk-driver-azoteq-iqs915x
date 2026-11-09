@@ -501,7 +501,7 @@ allows the IC's automatic reseed. Device PM uses Suspend and restores the previo
 requested mode.
 
 Startup can fall back to Force Comms for quiet retained states. Three failed probe transactions latch
-ABSENT; the using firmware must configure a finite I2C transfer timeout (Bretagne:
+ABSENT; the using firmware must configure a finite I2C transfer timeout (LandsFall:
 1000 ms). Initialization has a 15-second deadline and otherwise latches FAULT.
 Terminal states disable RDY and stop all retries until this MCU boots again;
 reading status never re-probes the sensor. A known sensor's SHOW_RESET starts
@@ -627,7 +627,7 @@ this does not run or enable the driver's legacy gesture state machine.
 ### Per-device channel-disable profiles
 
 `channel-profile` defaults to `export`, preserving all Azoteq export mask bytes.
-`bretagne-right` and `bretagne-left` require the exported 18 Rx x 12 Tx geometry.
+`landsfall-right` and `landsfall-left` require the exported 18 Rx x 12 Tx geometry.
 Right disables Rx0..5 in Tx9..11; left disables Rx12..17 in Tx9..11. Each profile
 contains exactly 18 disabled channels. Profile bytes are owned by
 `iqs915x_sensor_config.h`, applied by the same init-chunk preparation function
