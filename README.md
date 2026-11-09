@@ -824,3 +824,9 @@ with `iqs915x_get_status()` from that work; notifications coalesce intermediate
 states. Coordinate updates alone do not notify, and registration/status reads
 never add sensor I/O or wake an IC in Suspend. Terminal devices remain latched
 until MCU restart.
+
+## Retired calibration interface
+
+The obsolete `coordinate-correction` devicetree property and log-derived LUT
+generator have been removed. Current processing settings and four-contact
+monitoring remain the supported calibration interfaces.

@@ -195,16 +195,6 @@ properties:
       Denominator of the dominant-axis lock ratio for 3/4-finger swipes.
       Default 3/2 means the dominant axis must be about 1.5x the other axis.
 
-  coordinate-correction:
-    type: boolean
-    deprecated: true
-    description: |
-      Enable driver-side absolute coordinate correction using per-axis block-local
-      LUTs with g(u) = u + 0.5*u*(1-u), where u is normalized distance from a
-      key center to a gap. Uses 6 X blocks and 4 Y blocks, scaled to the X/Y
-      resolutions in init-data. Centers and boundaries stay fixed; intermediate
-      positions move toward gaps. If unset, raw IQS9150 coordinates are used.
-
   disabled-by-default:
     type: boolean
     description: |
