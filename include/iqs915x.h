@@ -67,7 +67,7 @@ enum iqs915x_mode { IQS915X_POWER_ACTIVE, IQS915X_POWER_LP2, IQS915X_POWER_SUSPE
 struct iqs915x_status {
   enum iqs915x_lifecycle lifecycle;
   enum iqs915x_mode requested_mode;
-  enum iqs915x_mode actual_mode;
+  enum iqs915x_mode actual_mode; /* Applied driver policy. Active permits automatic IC modes. */
   bool transitioning;
   uint32_t ati_sequence; /* Incremented once per fresh TP Re-ATI notification. */
   bool ati_error; /* Cached TP calibration health; independent of power/lifecycle. */
@@ -78,7 +78,9 @@ struct iqs915x_status {
  * IC's data-retaining Suspend bit, not LP2. Terminal devices record the
  * requested mode for UI indication only and never perform hardware I/O. It closes output immediately.
  * Waking from Suspend triggers the IC's automatic reseed. Device PM uses
- * Suspend and restores the previous requested mode on resume. */
+ * Suspend and restores the previous requested mode on resume.
+ * Active selects Active in Manual Control, then restores automatic IC mode
+ * switching. LP2 enables Manual Control and holds the IC in LP2. */
 int iqs915x_set_mode(const struct device *dev, enum iqs915x_mode mode);
 /** Cached MCU state only: never initiates I2C or wakes a suspended sensor. */
 int iqs915x_get_status(const struct device *dev, struct iqs915x_status *status);
@@ -144,7 +146,8 @@ struct iqs915x_settings_limits {
   struct iqs915x_setting_range inertia_initial_velocity_percent;
 };
 
-/** Convenience request: true selects Active, false selects LP2.
+/** Convenience request: true enters Active then enables automatic IC mode
+ * switching, false holds the IC in LP2 using Manual Control.
  * Use set_mode(SUSPEND) for an unselected sensor. Returns -ENODEV after a
  * latched absence/fault and -EBUSY during Device PM. Requests are asynchronous;
  * get_status distinguishes acceptance from actual completion. Active/LP2

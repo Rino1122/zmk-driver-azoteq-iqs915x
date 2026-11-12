@@ -388,21 +388,23 @@ The driver applies these communication and ATI settings while pre-patching init-
   `IQS9150_init.h`. Positive delta recovery is intended for snap domes; for a trackpad
   that does not use it, supply a sufficiently high threshold in the header.
 
-Both Active and LP2 use Event Mode, including disabled-by-default startup.
+Both the enabled policy and fixed LP2 use Event Mode.
 Init-data transfer and TP Re-ATI completion still run in Streaming Mode; the
 final initialization steps explicitly enable and verify Event Mode regardless
 of the requested output state. ALP, TP Touch, Gesture, Switch and Snap events
-are explicitly disabled in both modes. TP Event is enabled only in Active;
-LP2 disables it because ALP sensing
-does not refresh trackpad coordinates. Re-ATI Event remains enabled in LP2.
+are explicitly disabled in both policies. TP Event is enabled while the trackpad
+is enabled. Fixed LP2 disables it because ALP sensing does not refresh trackpad
+coordinates. Re-ATI Event remains enabled in fixed LP2.
 
-Enable/disable and Device PM transitions go directly to the power-mode write.
-Every control step uses clock-stretch Force Comms without waiting for an event
-or RDY: mode write, mode read-back, Event policy write, and Event policy read-back.
-Each step performs one I2C transaction and ends its communication window with
-STOP. Disable/PM suspend completes only after both LP2 and Event Mode are
-confirmed. The output gate stays closed until both Active and Event Mode are
-confirmed on enable, with the existing two-frame pointer baseline guard afterward.
+On enable, the driver selects and confirms Active under Manual Control, then
+clears Manual Control and verifies the Event Mode configuration before opening
+the output gate. The IC then switches modes using its configured timeouts.
+Idle-touch and Idle samples can feed input. LP1 and LP2 samples update IC status
+without reporting potentially stale trackpad coordinates. The two-frame pointer
+baseline guard applies after enable. On disable, the driver confirms Manual
+Control before selecting and verifying fixed LP2. Device PM uses IC Suspend.
+Each control step uses clock-stretch Force Comms and performs one I2C
+transaction ending its communication window with STOP.
 A pointer frame checks the output gate and request generation once before
 submission. If disable arrives after X has been queued, the frame still sends
 Y with sync, so an orphaned X cannot accumulate into a later report. Subsequent
@@ -411,12 +413,12 @@ The driver initiates control I2C immediately; clock stretching can still delay
 each transaction until the IC is ready. Actual transition latency needs hardware
 validation.
 
-Normal Active/LP2 reads wait for event RDY. With no event, the driver waits
+Normal enabled and fixed-LP2 reads wait for event RDY. With no event, the driver waits
 without periodic Force Comms polling. API and timer wakes do not count as RDY
 samples. The three-sampling-period watchdog applies only when Streaming is
 expected, not during normal Event Mode operation.
 
-In LP2, the driver reads only fresh `INFO_FLAGS`; coordinates and `NUM_FINGERS`
+In fixed LP2, the driver reads only fresh `INFO_FLAGS`; coordinates and `NUM_FINGERS`
 are not assumed to update. It remains in LP2 until an enable or PM request
 changes its state. There is no periodic coordinate probe, reseed timer, or
 stationary-finger detection in either LP2 or Active.
@@ -480,12 +482,11 @@ Run `python3 tests/runtime_session_reset.py` for the production request/reset pa
 ### Device PM failure recovery
 
 Suspend must run before the parent I2C controller is suspended, and resume
-must run after the controller is available. Suspend waits for LP2 and Event
-Mode confirmation. If it fails, Zephyr keeps the device ACTIVE: the driver
-restores the previous enable request asynchronously with a new generation
-to supersede late LP2 work. This restores intent, not proof of hardware recovery
-on a broken bus. Runtime enable requests return `-EBUSY` during a PM transition
-or while suspended, and must be retried by the caller if still needed.
+must run after the controller is available. Suspend completes when the IC
+Suspend write succeeds. If it fails, Zephyr keeps the device ACTIVE and the
+driver restores the previous mode request asynchronously with a new generation.
+Runtime enable requests return `-EBUSY` during a PM transition or while
+suspended and must be retried by the caller if still needed.
 
 Run `python3 tests/pm_recovery.py` for PM rollback and request exclusion.
 

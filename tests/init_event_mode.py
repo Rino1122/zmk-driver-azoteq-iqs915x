@@ -91,7 +91,7 @@ struct iqs915x_data {
   int init_restart_count, init_chunk_retry_count, pointer_resume_guard_frames;
   uint16_t init_pending_cfg, confirmed_config_settings;
   uint32_t applied_generation, transition_generation;
-  int requested_enabled, output_enabled, rdy_sem;
+  int requested_enabled, output_enabled, mode_transitioning, rdy_sem;
   int actual_mode, probe_failures, lifecycle, ati_error, ati_sequence;
   uint32_t init_rdy_accesses, init_force_accesses, init_window_timeouts;
   int64_t ati_deadline;
@@ -124,7 +124,6 @@ static void iqs915x_mark_initialized(struct iqs915x_data *data, bool value) {
 static unsigned timeout_captures;
 static void iqs915x_ati_timeout_capture(struct iqs915x_data *d){assert(d->init_step==INIT_WAIT_REATI);timeout_captures++;}
 static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
-static void iqs915x_reset_absolute_tracking(struct iqs915x_data *data) { (void)data; }
 static void iqs915x_restart_initialization(const struct device *dev, const char *reason) {
   (void)reason; if(dev->data->init_step==INIT_WAIT_REATI)assert(timeout_captures);
   dev->data->init_step = INIT_FAILED;
@@ -266,11 +265,11 @@ int main(void) {
   assert(!data.streaming_expected && (ic_cfg & IQS915X_EVENT_MODE));
   assert(!(ic_cfg & IQS915X_ALP_EVENT));
   assert(writes == 1 && reads == 1 && waits == 0 && rdy_checks == 0 && sleeps == 0);
-  /* An enabled startup opens the normal output gate instead. */
+  /* An enabled startup queues the Active transition with output still closed. */
   data = setup(true);
   run(&dev, 12);
-  assert(data.initialized && data.enabled && data.output_enabled && !data.lp2_pending);
-  assert(data.pointer_resume_guard_frames == IQS915X_POINTER_RESUME_GUARD_FRAMES);
+  assert(data.initialized && data.active_pending && !data.lp2_pending);
+  assert(data.mode_transitioning && !data.enabled && !data.output_enabled);
   /* Read-back mismatch must force the rewrite too, without an RDY. */
   data = setup(false);
   rejects = 1;
@@ -328,7 +327,7 @@ int main(void) {
     run(&dev,12);
     assert(data.initialized && reati_requests==0 && stream_reads==0);
     assert(!data.init_data_offset && !data.streaming_expected);
-    assert(data.output_enabled==enabled && data.lp2_pending==!enabled);
+    assert(!data.output_enabled && data.active_pending==enabled && data.lp2_pending==!enabled);
     assert(ic_cfg & IQS915X_EVENT_MODE);
   }
   /* An Occurred notification with ATI Error completes configuration, leaving

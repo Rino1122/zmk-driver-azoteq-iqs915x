@@ -330,6 +330,8 @@ enum iqs915x_work_state
     WORK_CONFIRM_POWER,
     WORK_SET_EVENT_MODE,
     WORK_CONFIRM_EVENT_MODE,
+    WORK_SET_MANUAL_CONTROL,
+    WORK_CONFIRM_MANUAL_CONTROL,
 };
 
 enum iqs915x_two_finger_mode

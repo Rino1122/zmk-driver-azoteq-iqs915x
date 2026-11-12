@@ -921,7 +921,8 @@ static void iqs915x_configure_swipe_thresholds(const struct iqs915x_config *conf
 /* ============================================================
  * Power mode control
  *
- * Manual Control有効時は、ホストがSystem ControlのMode Selectで
+ * ホストはManual Controlを有効にしてSystem ControlのMode Selectを指定する。
+ * TP有効時はActive確認後にManual Controlを解除する。
  * Active/LP2ともEvent Modeを使う。イベントがなければRDYが来ないため、
  * 有効化・無効化とも全ての制御段階をForce Commsで進める。
  * ============================================================ */
@@ -1076,9 +1077,8 @@ static void iqs915x_begin_mode(struct iqs915x_data *data, uint16_t mode, bool ou
   data->transition_generation = iqs915x_request_generation(data);
   data->power_retry_count = 0;
   data->power_force_comms = true;
-  /* Both modes share the Event policy. Switch power directly, then verify
-   * both the charging mode and communication policy before completing. */
-  data->work_state = WORK_SET_POWER;
+  data->work_state = (data->confirmed_config_settings & IQS915X_MANUAL_CONTROL) ?
+                     WORK_SET_POWER : WORK_SET_MANUAL_CONTROL;
 }
 
 static void iqs915x_restore_mode(struct iqs915x_data *data)
@@ -1189,11 +1189,32 @@ static void iqs915x_mode_step(struct iqs915x_data *data)
   const struct device *dev = data->dev;
   uint16_t cfg = iqs915x_config_settings_for_mode(data->confirmed_config_settings,
                                                 data->power_target_mode);
+  if (data->relatch_target_enabled) { cfg &= ~IQS915X_MANUAL_CONTROL; }
   uint16_t value = 0;
   int ret = 0;
   switch (data->work_state)
   {
+  case WORK_SET_MANUAL_CONTROL:
+    ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg | IQS915X_MANUAL_CONTROL);
+    if (!ret) { data->work_state = WORK_CONFIRM_MANUAL_CONTROL; }
+    break;
+  case WORK_CONFIRM_MANUAL_CONTROL:
+    ret = iqs915x_read_reg16(dev, IQS915X_CONFIG_SETTINGS, &value);
+    if (!ret && value != (cfg | IQS915X_MANUAL_CONTROL))
+    {
+      data->work_state = WORK_SET_MANUAL_CONTROL;
+      ret = -EIO;
+    }
+    else if (!ret)
+    {
+      data->confirmed_config_settings = value;
+      data->work_state = WORK_SET_POWER;
+    }
+    break;
   case WORK_SET_EVENT_MODE:
+    /* A failed or superseded write may already have released manual control. */
+    if (!(cfg & IQS915X_MANUAL_CONTROL))
+      data->confirmed_config_settings &= ~IQS915X_MANUAL_CONTROL;
     ret = iqs915x_write_reg16(dev, IQS915X_CONFIG_SETTINGS, cfg);
     if (!ret)
     {
@@ -1273,13 +1294,17 @@ static bool iqs915x_runtime_sample(struct iqs915x_data *data,
   uint16_t info = stream->info_flags;
   if (!iqs915x_runtime_info(data, info)) { return false; }
   if (atomic_get(&data->pm_suspended)) { return false; }
-  if ((info & IQS915X_CHARGING_MODE_MASK) != data->confirmed_mode)
+  uint16_t mode = info & IQS915X_CHARGING_MODE_MASK;
+  if (mode > IQS915X_MODE_LP2 ||
+      ((data->confirmed_config_settings & IQS915X_MANUAL_CONTROL) &&
+       mode != data->confirmed_mode))
   {
     iqs915x_comm_failure(data, -EIO);
     return false;
   }
   data->power_retry_count = 0;
-  return data->confirmed_mode == IQS915X_MODE_ACTIVE &&
+  /* LP1/LP2 can leave the last TP coordinates in the stream during ALP sensing. */
+  return mode < IQS915X_MODE_LP1 && data->confirmed_mode == IQS915X_MODE_ACTIVE &&
          !(info & IQS915X_REATI_OCCURRED);
 }
 
@@ -2703,24 +2728,12 @@ static int iqs915x_init_step_handler(const struct device *dev)
       data->comm_fallback_active = false;
       data->applied_generation = iqs915x_request_generation(data);
       data->transition_generation = data->applied_generation;
-      data->active_pending = false;
-      if (atomic_get(&data->requested_enabled) != 0)
-      {
-        iqs915x_reset_absolute_tracking(data);
-        data->is_touching = false;
-        data->pointer_resume_guard_frames =
-            IQS915X_POINTER_RESUME_GUARD_FRAMES;
-        data->lp2_pending = false;
-        data->enabled = true;
-        atomic_set(&data->output_enabled, 1);
-      }
-      else
-      {
-        data->pointer_resume_guard_frames = 0;
-        data->lp2_pending = true;
-        data->enabled = false;
-        atomic_clear(&data->output_enabled);
-      }
+      data->active_pending = atomic_get(&data->requested_enabled) != 0;
+      data->lp2_pending = !data->active_pending;
+      atomic_set(&data->mode_transitioning, 1);
+      data->pointer_resume_guard_frames = 0;
+      data->enabled = false;
+      atomic_clear(&data->output_enabled);
       LOG_INF("IQS915x initialization complete");
       LOG_INF("Init comms: rdy=%u force=%u no_window=%u",
               data->init_rdy_accesses, data->init_force_accesses, data->init_window_timeouts);
