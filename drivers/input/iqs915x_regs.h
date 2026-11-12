@@ -323,6 +323,7 @@ enum iqs915x_init_step
     INIT_COMPLETE,            // 初期化完了
     INIT_FAILED,              // 初期化失敗（上限超過）
     INIT_TRACE_STREAMING,     // diagnostic readback before initial Re-ATI (enum values retained)
+    INIT_VERIFY_FIXED_CONFIG, // TP Re-ATI要求前の固定設定の照合
 };
 
 // 通常動作時のワークハンドラステート

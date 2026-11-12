@@ -13,6 +13,7 @@ code = r"""
 #include <string.h>
 #include <stdio.h>
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define LOG_WRN(...) fprintf(stderr, __VA_ARGS__)
 DEFINITIONS
 struct iqs915x_config {const uint8_t *init_data;};
 struct device {const struct iqs915x_config *config;};
@@ -40,7 +41,7 @@ int main(void)
   memcpy(retained, profile, sizeof(profile));
   struct iqs915x_config config = {profile};
   struct device dev = {&config};
-  assert(iqs915x_check_fixed_sensor_config(&dev) == 0);
+  assert(iqs915x_check_fixed_sensor_config(&dev, "before Re-ATI") == 0);
   const uint16_t addresses[] = {
     0x11EA, 0x11EC, 0x11EE, 0x11F1, IQS915X_TRACKPAD_SETTINGS,
     IQS915X_ACTIVE_MODE_REPORT_RATE, IQS915X_LP2_MODE_REPORT_RATE,
@@ -50,11 +51,11 @@ int main(void)
   for (unsigned i = 0; i < ARRAY_SIZE(addresses); i++) {
     unsigned offset = addresses[i] - IQS915X_INIT_DATA_BASE_ADDR;
     retained[offset] ^= 1;
-    assert(iqs915x_check_fixed_sensor_config(&dev) == 1);
+    assert(iqs915x_check_fixed_sensor_config(&dev, "before Re-ATI") == 1);
     retained[offset] ^= 1;
   }
   error = -5;
-  assert(iqs915x_check_fixed_sensor_config(&dev) == -5);
+  assert(iqs915x_check_fixed_sensor_config(&dev, "before Re-ATI") == -5);
   puts("Fixed init config: retained settings compared against export values");
 }
 """.replace("DEFINITIONS", definitions)
@@ -64,4 +65,8 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
                     "-I", str(root / "drivers/input"), str(path / "test.c"),
                     "-o", str(path / "test")], check=True)
-    subprocess.run([str(path / "test")], check=True)
+    result = subprocess.run([str(path / "test")], check=True, capture_output=True, text=True)
+    assert "before Re-ATI): filter reg=0x11ea expected=0x8e observed=0x8f" in result.stderr
+    assert "before Re-ATI): reg=0x11e2 expected=0x8786 observed=0x8787" in result.stderr
+    assert "before Re-ATI): Re-ATI retry time reg=0x11b6 expected=0x5a observed=0x5b" in result.stderr
+    print(result.stdout, end="")

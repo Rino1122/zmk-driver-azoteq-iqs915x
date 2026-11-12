@@ -101,7 +101,11 @@ struct iqs915x_data {
 struct reset_gpio { int port; };
 struct iqs915x_config { int rdy_gpio; struct reset_gpio reset_gpio; };
 struct device { struct iqs915x_data *data; const struct iqs915x_config *config; };
-static int iqs915x_check_fixed_sensor_config(const struct device *dev){(void)dev;return 0;}
+static int fixed_config_result;
+static int iqs915x_check_fixed_sensor_config(const struct device *dev, const char *phase) {
+  (void)dev; (void)phase;
+  return fixed_config_result;
+}
 static int64_t now;
 static int64_t k_uptime_get(void) { return now; }
 static int busy_waits, busy_edges, read_error_code;
@@ -126,6 +130,10 @@ static void iqs915x_ati_timeout_capture(struct iqs915x_data *d){assert(d->init_s
 static void iqs915x_mismatch_capture(struct iqs915x_data *d,uint16_t e,uint16_t o) {(void)d;(void)e;(void)o;}
 static void iqs915x_restart_initialization(const struct device *dev, const char *reason) {
   (void)reason; if(dev->data->init_step==INIT_WAIT_REATI)assert(timeout_captures);
+  if (dev->data->init_step == INIT_VERIFY_FIXED_CONFIG) {
+    dev->data->init_step = INIT_SOFTWARE_RESET;
+    return;
+  }
   dev->data->init_step = INIT_FAILED;
 }
 static int gpio_pin_get_dt(const int *gpio) { (void)gpio; rdy_checks++; return reati_ready; }
@@ -208,6 +216,7 @@ INITIALIZATION
   }
 }
 static struct iqs915x_data setup(bool enabled) {
+  fixed_config_result = 0;
   busy_waits = busy_edges = 0; read_error_code=-5;
   writes = reads = sleeps = waits = rdy_checks = rejects = write_errors = read_errors = 0;
   ic_cfg = ic_info = 0; retained_trackpad_settings=8;
@@ -235,6 +244,7 @@ int main(void) {
     run(&dev,1);assert(data.init_step==INIT_SET_STREAMING);
     run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && !reati_requests);
     assert(!(ic_cfg & IQS915X_EVENT_MODE));
+    run(&dev,1);assert(data.init_step==INIT_VERIFY_FIXED_CONFIG && !reati_requests);
     run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
     run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
     run(&dev,12);assert(data.initialized);
@@ -245,18 +255,31 @@ int main(void) {
   assert(data.init_step==INIT_TRACE_STREAMING && writes==1 && !reati_requests);
   read_errors=1;run(&dev,1);
   assert(data.init_step==INIT_TRACE_STREAMING && reads==1 && !reati_requests);
+  run(&dev,1);assert(data.init_step==INIT_VERIFY_FIXED_CONFIG && !reati_requests);
+  fixed_config_result = -EAGAIN;
+  run(&dev,1);assert(data.init_step==INIT_VERIFY_FIXED_CONFIG && !reati_requests);
+  fixed_config_result = 0;
   run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
   run(&dev,1);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
   data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0xEEEE;
   run(&dev,1);assert(data.init_step==INIT_TRACE_STREAMING && reads==1 && !writes && !reati_requests);
   assert(!data.wait_count && busy_waits==1);
-  ic_cfg=data.init_pending_cfg;run(&dev,1);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
+  ic_cfg=data.init_pending_cfg;run(&dev,2);assert(data.init_step==INIT_REQUEST_REATI && !reati_requests);
   run(&dev,1);assert(reati_requests==1);
   data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0x061e;
   run(&dev,1);assert(data.init_step==INIT_SET_STREAMING && data.wait_count==1 && !reati_requests);
-  run(&dev,3);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
+  run(&dev,4);assert(data.init_step==INIT_WAIT_REATI && reati_requests==1);
   data=setup(true);data.init_step=INIT_TRACE_STREAMING;ic_cfg=0x061e;rejects=10;
   run(&dev,10);assert(data.init_step==INIT_FAILED && !reati_requests);
+  data = setup(true);
+  data.init_step = INIT_SET_STREAMING;
+  fixed_config_result = 1;
+  run(&dev,3);
+  assert(data.init_step == INIT_SOFTWARE_RESET && !reati_requests && !data.initialized);
+  data = setup(true);
+  fixed_config_result = 1;
+  run(&dev,2);
+  assert(data.init_step == INIT_FAILED && !data.initialized);
   data=setup(false);
   /* No split central, no finger event, no RDY: initialization still completes. */
   run(&dev, 12);

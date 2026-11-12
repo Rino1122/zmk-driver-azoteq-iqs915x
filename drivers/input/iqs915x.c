@@ -2312,7 +2312,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
       ret=iqs915x_read_block(dev,IQS915X_TRACKPAD_SETTINGS,&retained_trackpad,1);
       if(ret<0)return ret;
       if((retained_trackpad&(BIT(3)|BIT(4)))!=(TRACKPAD_SETTINGS_0_0&(BIT(3)|BIT(4)))){data->init_step=INIT_SOFTWARE_RESET;break;}
-      ret=iqs915x_check_fixed_sensor_config(dev);
+      ret=iqs915x_check_fixed_sensor_config(dev, "retained settings");
       if(ret<0)return ret;
       if(ret){data->init_step=INIT_SOFTWARE_RESET;break;}
       ret = iqs915x_check_channel_profile(dev);
@@ -2583,9 +2583,22 @@ static int iqs915x_init_step_handler(const struct device *dev)
       else data->init_step=INIT_SET_STREAMING;
       break;
     }
-    data->init_step=INIT_REQUEST_REATI;
+    data->init_step = INIT_VERIFY_FIXED_CONFIG;
     break;
   }
+
+  case INIT_VERIFY_FIXED_CONFIG:
+    // Each read uses its own RDY window via the startup I2C helpers.
+    ret = iqs915x_check_fixed_sensor_config(dev, "before Re-ATI");
+    if (ret < 0)
+      return ret;
+    if (ret > 0)
+    {
+      iqs915x_restart_initialization(dev, "fixed sensor config mismatch before Re-ATI");
+      break;
+    }
+    data->init_step = INIT_REQUEST_REATI;
+    break;
 
   case INIT_REQUEST_REATI:
   {
@@ -2660,7 +2673,7 @@ static int iqs915x_init_step_handler(const struct device *dev)
     {
       LOG_INF("Init: communication policy confirmed (CONFIG_SETTINGS=0x%04x)",
               cfg);
-      ret=iqs915x_check_fixed_sensor_config(dev);
+      ret=iqs915x_check_fixed_sensor_config(dev, "after Event Mode setup");
       if(ret<0)return ret;
       if(ret){iqs915x_restart_initialization(dev,"fixed sensor config mismatch");break;}
       data->init_step = INIT_COMPLETE;
@@ -2934,6 +2947,7 @@ static void iqs915x_thread_main(void *p1, void *p2, void *p3)
           data->init_step == INIT_PREPARE_STREAMING ||
           data->init_step == INIT_SET_STREAMING ||
           data->init_step == INIT_TRACE_STREAMING ||
+          data->init_step == INIT_VERIFY_FIXED_CONFIG ||
           data->init_step == INIT_REQUEST_REATI ||
           data->init_step == INIT_PREPARE_EVENT_MODE ||
           data->init_step == INIT_SET_EVENT_MODE ||
