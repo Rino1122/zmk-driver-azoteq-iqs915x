@@ -5,22 +5,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Applied before init-data transfer; the Azoteq export remains unmodified. */
-#define IQS915X_ACTIVE_SAMPLING_PERIOD_MS 15U
-#define IQS915X_LP2_SAMPLING_PERIOD_MS 500U
-#define IQS915X_REATI_RETRY_SECONDS 1U
-#define IQS915X_SENSOR_FLIP_X false
-#define IQS915X_SENSOR_FLIP_Y false
-#define IQS915X_SENSOR_SWITCH_XY false
-
 /* Profile indices match channel-profile in the common DTS binding.
  * Bit positions are logical Rx columns, rows are logical Tx (not XY-flipped).
  * LandsFall has 18 Rx columns x 12 Tx rows; its missing corner is 6 x 3. */
 #define IQS915X_CHANNEL_PROFILE_EXPORT 0U
 #define IQS915X_CHANNEL_PROFILE_LANDSFALL_RIGHT 1U
 #define IQS915X_CHANNEL_PROFILE_LANDSFALL_LEFT 2U
-#define IQS915X_CHANNEL_DISABLE_BASE 0x1246U
-#define IQS915X_CHANNEL_DISABLE_BYTES 88U
 #define IQS915X_PROFILE_TOTAL_RXS 0x11E3U
 #define IQS915X_PROFILE_TOTAL_TXS 0x11E4U
 static inline uint8_t iqs915x_channel_disable_byte(uint8_t profile, unsigned index,

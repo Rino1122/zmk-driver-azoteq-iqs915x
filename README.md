@@ -339,18 +339,15 @@ there is no manually copied array or DTS conversion. Header or generator changes
 regenerate the array before compilation. Invalid byte counts, section addresses,
 duplicate definitions and out-of-range values fail the build.
 
-`drivers/input/iqs915x_sensor_config.h` owns initialization overrides: Active sampling
-period 15 ms, LP2 sampling period 500 ms, Re-ATI retry 1 second and axis
-orientation. Firmware DTS supplies only the I2C/GPIO wiring and input behavior
-settings, such as tap, scroll, acceleration and enable state. The former
-`profile`, `report-rate-ms`, `switch-xy`, `flip-x` and `flip-y` properties have
-been removed; migrate firmware overlays by removing them and the profile node.
+The Azoteq export supplies sensor timings, axis orientation, gesture enable
+bits, and the channel-disable mask. The driver patches System Control and Config Settings during transfer, and
+applies the selected channel mask when DTS requests a LandsFall profile. Firmware DTS supplies the I2C/GPIO wiring and
+input behavior settings, such as tap, scroll, acceleration and enable state.
 
 ### Updating initialization settings
 
 1. Replace `drivers/input/IQS9150_init.h` with the **Azoteq GUI** export.
-2. Adjust driver overrides/calibration in `iqs915x_sensor_config.h` as needed.
-3. Build the firmware with the updated driver revision. No conversion or copying
+2. Build the firmware with the updated driver revision. No conversion or copying
    into firmware DTS is required.
 
 ### Priority
@@ -380,9 +377,10 @@ The driver applies these communication and ATI settings while pre-patching init-
 
 - ALP Setup, including ALP Enable (bit 31), retains the Azoteq header values.
   An ALP-enabled export therefore uses ALP sensing in LP2.
-- LP2 sampling period is fixed at 500 ms; LP1/LP2 Auto-Prox is disabled.
+- Sampling periods and Auto-Prox come from the export. The current export uses
+  16 ms in Active and 5000 ms with Auto-Prox enabled in LP2.
 - Automatic TP Re-ATI and its event are enabled. ALP Re-ATI/events and
-  `TP_TOUCH_EVENT` are disabled. Re-ATI retry time is fixed at 1 second.
+  `TP_TOUCH_EVENT` are disabled. The Re-ATI retry interval comes from the export.
 - ATI target, reference drift limit, and both negative and positive delta
   Re-ATI thresholds retain the Azoteq header values. Tune these values in
   `IQS9150_init.h`. Positive delta recovery is intended for snap domes; for a trackpad
@@ -598,8 +596,7 @@ from tracking loss, reset, re-ATI, I2C failure, or an explicit output-mode reque
 survives power changes. Re-requesting CONTACTS explicitly renews its session and
 requires all-up, even when CONTACTS is already selected. Use a power request for
 ordinary activation, and an output request for transport/session recovery. Mouse
-output and its existing state machine are unchanged. Active sampling remains
-15 ms; this policy does not change report rates.
+output and its existing state machine are unchanged. Active sampling follows the export.
 
 The one-shot fresh Active snapshot also covers an explicit Contacts-to-Mouse
 output switch while its all-up gate is pending. Ordinary Mouse power transitions
@@ -609,7 +606,7 @@ lift; an idle snapshot permits the first new touch without discarding it.
 ### Stationary contact refresh in raw-contact mode
 
 Raw-contact output refreshes held, accepted contacts with a real sensor read at
-its configured Active sampling period (currently 15 ms). Event-mode RDY updates
+its configured Active sampling period (currently 16 ms). Event-mode RDY updates
 still trigger reads earlier; a deadline initiates a fresh I2C transaction when
 stationary coordinates do not generate an event. Cached coordinates are never
 retimestamped as new measurements. Each read remains one transaction/window.
@@ -808,12 +805,9 @@ See tests/trace_capture.c for production-code state/transport/IIR tests.
 
 ## Fixed IC filtering and finger split
 
-IC runtime initialization overrides are retired. The compiled init-data uses
-Finger Split Factor5, dynamic IIR enabled, Bottom Beta100, and bottom/top
-15,000/16,500 pixel/cycle. At the fixed Active period15ms these correspond to
-1,000,000/1,100,000 pixel/s. MCU processing/IIR and raw trace APIs remain.
-Warm initialization verifies these registers against compiled init-data and
-resets/reloads retained settings when different. No late saved-profile reset.
+The IC's XY filter settings and finger split factor come from the export.
+Warm initialization verifies the retained settings against compiled init-data
+and reloads init-data when they differ.
 
 ### Cached status notifications
 

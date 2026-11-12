@@ -10,24 +10,24 @@
 
 /* ALP ATI Compensation */
 /* Memory Map Position 0x115C - 0x1175 */
-#define ALP_COMPENSATION_RX0_0                   0xFF
-#define ALP_COMPENSATION_RX0_1                   0x03
-#define ALP_COMPENSATION_RX1_0                   0xFF
-#define ALP_COMPENSATION_RX1_1                   0x03
-#define ALP_COMPENSATION_RX2_0                   0x09
-#define ALP_COMPENSATION_RX2_1                   0x47
-#define ALP_COMPENSATION_RX3_0                   0xFF
-#define ALP_COMPENSATION_RX3_1                   0x03
-#define ALP_COMPENSATION_RX4_0                   0xFF
-#define ALP_COMPENSATION_RX4_1                   0x03
-#define ALP_COMPENSATION_RX5_0                   0xFF
-#define ALP_COMPENSATION_RX5_1                   0x03
-#define ALP_COMPENSATION_RX6_0                   0xFF
-#define ALP_COMPENSATION_RX6_1                   0x03
-#define ALP_COMPENSATION_RX7_0                   0xFF
-#define ALP_COMPENSATION_RX7_1                   0x03
-#define ALP_COMPENSATION_RX8_0                   0xFF
-#define ALP_COMPENSATION_RX8_1                   0x03
+#define ALP_COMPENSATION_RX0_0                   0xEA
+#define ALP_COMPENSATION_RX0_1                   0x2A
+#define ALP_COMPENSATION_RX1_0                   0xE1
+#define ALP_COMPENSATION_RX1_1                   0x2A
+#define ALP_COMPENSATION_RX2_0                   0x21
+#define ALP_COMPENSATION_RX2_1                   0x2F
+#define ALP_COMPENSATION_RX3_0                   0xF6
+#define ALP_COMPENSATION_RX3_1                   0x2A
+#define ALP_COMPENSATION_RX4_0                   0x1E
+#define ALP_COMPENSATION_RX4_1                   0x2F
+#define ALP_COMPENSATION_RX5_0                   0x09
+#define ALP_COMPENSATION_RX5_1                   0x2F
+#define ALP_COMPENSATION_RX6_0                   0x15
+#define ALP_COMPENSATION_RX6_1                   0x2F
+#define ALP_COMPENSATION_RX7_0                   0xF9
+#define ALP_COMPENSATION_RX7_1                   0x2E
+#define ALP_COMPENSATION_RX8_0                   0x0C
+#define ALP_COMPENSATION_RX8_1                   0x2F
 #define ALP_COMPENSATION_RX9_0                   0xFF
 #define ALP_COMPENSATION_RX9_1                   0x03
 #define ALP_COMPENSATION_RX10_0                  0xFF
@@ -51,24 +51,24 @@
 /* Memory Map Position 0x117A - 0x1195 */
 #define TP_ATI_MULTDIV_L                         0x21
 #define TP_ATI_MULTDIV_H                         0x4D
-#define ALP_ATI_COARSE_RX0_L                     0x3B
-#define ALP_ATI_COARSE_RX0_H                     0x7E
-#define ALP_ATI_COARSE_RX1_L                     0x3B
-#define ALP_ATI_COARSE_RX1_H                     0x7E
-#define ALP_ATI_COARSE_RX2_L                     0x21
-#define ALP_ATI_COARSE_RX2_H                     0x4F
-#define ALP_ATI_COARSE_RX3_L                     0x3B
-#define ALP_ATI_COARSE_RX3_H                     0x7E
-#define ALP_ATI_COARSE_RX4_L                     0x3B
-#define ALP_ATI_COARSE_RX4_H                     0x7E
-#define ALP_ATI_COARSE_RX5_L                     0x3B
-#define ALP_ATI_COARSE_RX5_H                     0x7E
-#define ALP_ATI_COARSE_RX6_L                     0x3B
-#define ALP_ATI_COARSE_RX6_H                     0x7E
-#define ALP_ATI_COARSE_RX7_L                     0x3B
-#define ALP_ATI_COARSE_RX7_H                     0x7E
-#define ALP_ATI_COARSE_RX8_L                     0x3B
-#define ALP_ATI_COARSE_RX8_H                     0x7E
+#define ALP_ATI_COARSE_RX0_L                     0x84
+#define ALP_ATI_COARSE_RX0_H                     0x56
+#define ALP_ATI_COARSE_RX1_L                     0x84
+#define ALP_ATI_COARSE_RX1_H                     0x56
+#define ALP_ATI_COARSE_RX2_L                     0x84
+#define ALP_ATI_COARSE_RX2_H                     0x5C
+#define ALP_ATI_COARSE_RX3_L                     0x84
+#define ALP_ATI_COARSE_RX3_H                     0x5E
+#define ALP_ATI_COARSE_RX4_L                     0x84
+#define ALP_ATI_COARSE_RX4_H                     0x5E
+#define ALP_ATI_COARSE_RX5_L                     0x84
+#define ALP_ATI_COARSE_RX5_H                     0x64
+#define ALP_ATI_COARSE_RX6_L                     0x84
+#define ALP_ATI_COARSE_RX6_H                     0x60
+#define ALP_ATI_COARSE_RX7_L                     0x84
+#define ALP_ATI_COARSE_RX7_H                     0x5E
+#define ALP_ATI_COARSE_RX8_L                     0x84
+#define ALP_ATI_COARSE_RX8_H                     0x64
 #define ALP_ATI_COARSE_RX9_L                     0x3B
 #define ALP_ATI_COARSE_RX9_H                     0x7E
 #define ALP_ATI_COARSE_RX10_L                    0x3B
@@ -84,7 +84,7 @@
 #define TP_ATI_TARGET_1                          0x02
 #define ALP_ATI_TARGET_0                         0x2C
 #define ALP_ATI_TARGET_1                         0x01
-#define ALP_BASE_TARGET_0                        0x80
+#define ALP_BASE_TARGET_0                        0x64
 #define ALP_BASE_TARGET_1                        0x00
 #define TP_NEG_DELTA_REATI_0                     0xFA
 #define TP_NEG_DELTA_REATI_1                     0x00
@@ -97,25 +97,25 @@
 /* Memory Map Position 0x11A2 - 0x11BB */
 #define ACTIVE_MODE_SAMPLING_PERIOD_0            0x10
 #define ACTIVE_MODE_SAMPLING_PERIOD_1            0x00
-#define IDLE_TOUCH_MODE_SAMPLING_PERIOD_0        0x32
+#define IDLE_TOUCH_MODE_SAMPLING_PERIOD_0        0x50
 #define IDLE_TOUCH_MODE_SAMPLING_PERIOD_1        0x00
-#define IDLE_MODE_SAMPLING_PERIOD_0              0x32
+#define IDLE_MODE_SAMPLING_PERIOD_0              0x64
 #define IDLE_MODE_SAMPLING_PERIOD_1              0x00
 #define LP1_MODE_SAMPLING_PERIOD_0               0x64
 #define LP1_MODE_SAMPLING_PERIOD_1               0x00
-#define LP2_MODE_SAMPLING_PERIOD_0               0xE8
-#define LP2_MODE_SAMPLING_PERIOD_1               0x03
-#define STATIONARY_TOUCH_TIMEOUT_0               0x0A
+#define LP2_MODE_SAMPLING_PERIOD_0               0x88
+#define LP2_MODE_SAMPLING_PERIOD_1               0x13
+#define STATIONARY_TOUCH_TIMEOUT_0               0x01
 #define STATIONARY_TOUCH_TIMEOUT_1               0x00
-#define IDLE_TOUCH_MODE_TIMEOUT_0                0x3C
+#define IDLE_TOUCH_MODE_TIMEOUT_0                0x00
 #define IDLE_TOUCH_MODE_TIMEOUT_1                0x00
-#define IDLE_MODE_TIMEOUT_0                      0x05
+#define IDLE_MODE_TIMEOUT_0                      0x03
 #define IDLE_MODE_TIMEOUT_1                      0x00
-#define LP1_MODE_TIMEOUT_0                       0x02
+#define LP1_MODE_TIMEOUT_0                       0x00
 #define LP1_MODE_TIMEOUT_1                       0x00
-#define ACTIVE_MODE_TIMEOUT_0                    0xDC
-#define ACTIVE_MODE_TIMEOUT_1                    0x05
-#define REATI_RETRY_TIME                         0x0A
+#define ACTIVE_MODE_TIMEOUT_0                    0x2C
+#define ACTIVE_MODE_TIMEOUT_1                    0x01
+#define REATI_RETRY_TIME                         0x01
 #define REF_UPDATE_TIME                          0x08
 #define I2C_TIMEOUT_0                            0x64
 #define I2C_TIMEOUT_1                            0x00
@@ -126,23 +126,23 @@
 /* Memory Map Position 0x11BC - 0x11C1 */
 #define SYSTEM_CONTROL_0                         0x00
 #define SYSTEM_CONTROL_1                         0x00
-#define CONFIG_SETTINGS_0                        0x86
+#define CONFIG_SETTINGS_0                        0x96
 #define CONFIG_SETTINGS_1                        0x0E
-#define OTHER_SETTINGS_0                         0xAC
+#define OTHER_SETTINGS_0                         0x2C
 #define OTHER_SETTINGS_1                         0x00
 
 /* ALP Settings */
 /* Memory Map Position 0x11C2 - 0x11CB */
-#define ALP_SETUP_0                              0x04
-#define ALP_SETUP_1                              0x00
-#define ALP_SETUP_2                              0x00
+#define ALP_SETUP_0                              0xFF
+#define ALP_SETUP_1                              0xE1
+#define ALP_SETUP_2                              0x3F
 #define ALP_SETUP_3                              0xA0
 #define ALP_TX_ENABLE_0                          0x00
-#define ALP_TX_ENABLE_1                          0x00
-#define ALP_TX_ENABLE_2                          0x00
-#define ALP_TX_ENABLE_3                          0x00
-#define ALP_TX_ENABLE_4                          0x80
-#define ALP_TX_ENABLE_5                          0x00
+#define ALP_TX_ENABLE_1                          0x0E
+#define ALP_TX_ENABLE_2                          0xC0
+#define ALP_TX_ENABLE_3                          0x80
+#define ALP_TX_ENABLE_4                          0xA0
+#define ALP_TX_ENABLE_5                          0x0F
 
 /* Thresholds and Debounce Settings */
 /* Memory Map Position 0x11CC - 0x11D3 */
@@ -185,16 +185,14 @@
 #define X_RESOLUTION_1                           0x17
 #define Y_RESOLUTION_0                           0xA0
 #define Y_RESOLUTION_1                           0x0F
-/* Active period 15ms: 1,000,000px/s -> 15,000px/cycle (0x3A98);
- * 1,100,000px/s -> 16,500px/cycle (0x4074). */
-#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0x98
-#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_1         0x3A
-#define XY_DYNAMIC_FILTER_TOP_SPEED_0            0x74
-#define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x40
-#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x64
+#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_0         0x50
+#define XY_DYNAMIC_FILTER_BOTTOM_SPEED_1         0x00
+#define XY_DYNAMIC_FILTER_TOP_SPEED_0            0xAC
+#define XY_DYNAMIC_FILTER_TOP_SPEED_1            0x0D
+#define XY_DYNAMIC_FILTER_BOTTOM_BETA            0x3C
 #define XY_DYNAMIC_FILTER_STATIC_FILTER_BETA     0x80
-#define STATIONARY_TOUCH_MOV_THRESHOLD           0x0F
-#define FINGER_SPLIT_FACTOR                      0x05
+#define STATIONARY_TOUCH_MOV_THRESHOLD           0x32
+#define FINGER_SPLIT_FACTOR                      0x06
 #define X_TRIM_VALUE                             0x00
 #define Y_TRIM_VALUE                             0x00
 #define JITTER_FILTER_DELTA                      0x0A
@@ -202,9 +200,9 @@
 
 /* Gesture Settings */
 /* Memory Map Position 0x11F6 - 0x1217 */
-#define GESTURE_ENABLE_0                         0x17
+#define GESTURE_ENABLE_0                         0x00
 #define GESTURE_ENABLE_1                         0x00
-#define GESTURE_ENABLE_2F_0                      0xF7
+#define GESTURE_ENABLE_2F_0                      0x00
 #define GESTURE_ENABLE_2F_1                      0x00
 #define TAP_TOUCH_TIME_0                         0x96
 #define TAP_TOUCH_TIME_1                         0x00

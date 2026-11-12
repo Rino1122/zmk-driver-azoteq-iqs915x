@@ -85,7 +85,7 @@ static bool txn_write[1024];
 static int64_t txn_time[1024];
 static int txns;
 static uint16_t coords[8];
-static uint16_t period(void) { return ic_mode==IQS915X_MODE_LP2 ? 500 : 10; }
+static uint16_t period(void) { return ic_mode==IQS915X_MODE_LP2 ? IQS915X_LP2_SAMPLING_PERIOD_MS : 10; }
 static int64_t k_uptime_get(void) { return now; }
 static bool periodic_rdy(void) {
   /* Model a final Active TP event persisting while ALP scans in LP2. */
@@ -183,7 +183,7 @@ static struct iqs915x_config config;
 static struct device dev;
 static struct iqs915x_data d;
 static void setup(bool output) {
-  now=0; next_rdy=output?INT64_MAX:500; txns=0;
+  now=0; next_rdy=output?INT64_MAX:IQS915X_LP2_SAMPLING_PERIOD_MS; txns=0;
   no_rdy=touch=event_rdy=stale_tp=false; input_resets=input_frames=reads=writes=0;
   sem_waits=force_stretch_ms=forced_transactions=0;
   reject_cfg=reject_mode=io_errors=info_extra=fingers=0;
@@ -466,8 +466,8 @@ int main(void) {
   }
   /* A stopped stream waits precisely 3T from the previous STOP, repeatedly. */
   setup(false); d.streaming_expected=true; ic_cfg&=~IQS915X_EVENT_MODE;
-  no_rdy=true; run(&d,1); assert(now==1500 && reads==1 && d.comm_fallback_active);
-  run(&d,1); assert(now==3000 && reads==2);
+  no_rdy=true; run(&d,1); assert(now==3*IQS915X_LP2_SAMPLING_PERIOD_MS && reads==1 && d.comm_fallback_active);
+  run(&d,1); assert(now==6*IQS915X_LP2_SAMPLING_PERIOD_MS && reads==2);
   no_rdy=false; run(&d,1); assert(!d.comm_fallback_active);
   /* Actual Active period, spurious wakes, and a transition use the right 3T. */
   setup(false); d.streaming_expected=true; no_rdy=true; d.confirmed_mode=IQS915X_MODE_ACTIVE;
@@ -477,7 +477,7 @@ int main(void) {
   d.work_state=WORK_SET_POWER; d.power_target_mode=IQS915X_MODE_LP2;
   now=120; d.comm_completed_ms=111;
   k_sem_give(&d.rdy_sem);
-  assert(iqs915x_wait_window(&d,false,INT64_MAX) && now==1611);
+  assert(iqs915x_wait_window(&d,false,INT64_MAX) && now==111+3*IQS915X_LP2_SAMPLING_PERIOD_MS);
   /* Enable with no RDY at all, both untouched and already touched. The first
    * transaction switches to Active; the only delay is mocked clock stretching.
    * No output is permitted before the final Event Mode read-back. */
@@ -526,7 +526,7 @@ int main(void) {
   assert(txn_reg[4]==IQS915X_CONFIG_SETTINGS && txn_write[4]);
   assert(txn_reg[5]==IQS915X_CONFIG_SETTINGS && !txn_write[5]);
   /* Disable with a held finger and a stale TP event: LP2 must remain quiet
-   * after the forced control sequence rather than generating 500 ms RDY. */
+   * after the forced control sequence rather than generating RDY at the LP2 sampling period. */
   setup(true); touch=stale_tp=true; fingers=1; coords[0]=coords[1]=100;
   d.requested_enabled=0; d.request_generation++; run(&d,6);
   assert(ic_mode==IQS915X_MODE_LP2 && !d.output_enabled && !input_frames);
@@ -672,7 +672,6 @@ int main(void) {
   uint8_t profile[IQS915X_INIT_DATA_TOTAL_SIZE];
   memset(profile, 0xff, sizeof(profile));
   config.init_data=profile; config.init_data_len=sizeof(profile);
-  config.report_rate_ms=20;
   /* Distinct tuning bytes prevent an accidental hard-coded override passing. */
   for (uint16_t reg=0x119C;reg<=0x11A0;reg++) profile[reg-IQS915X_INIT_DATA_BASE_ADDR]=reg & 0xff;
   profile[0x1196-IQS915X_INIT_DATA_BASE_ADDR]=0x34; /* ATI target */
@@ -685,7 +684,7 @@ int main(void) {
   }
   #define INDEX(reg) ((reg)-IQS915X_INIT_DATA_BASE_ADDR)
   assert(!(patched[INDEX(IQS915X_SYSTEM_CONTROL)] & 0xf8));
-  assert(patched[INDEX(IQS915X_REATI_RETRY_TIME)]==1);
+
   for (int i=0;i<4;i++) assert(patched[INDEX(IQS915X_ALP_SETUP+i)]==profile[INDEX(IQS915X_ALP_SETUP+i)]);
   /* Passing ALP Enable through also preserves an export that disables it. */
   profile[INDEX(IQS915X_ALP_SETUP+3)] &= ~BIT(7);
@@ -695,12 +694,11 @@ int main(void) {
     offset+=count;
   }
   for (int i=0;i<4;i++) assert(patched[INDEX(IQS915X_ALP_SETUP+i)]==profile[INDEX(IQS915X_ALP_SETUP+i)]);
-  assert(!(patched[INDEX(IQS915X_OTHER_SETTINGS)] & (BIT(4)|BIT(5))));
-  assert((patched[INDEX(IQS915X_LP2_MODE_REPORT_RATE)] |
-         patched[INDEX(IQS915X_LP2_MODE_REPORT_RATE+1)]<<8)==500);
-  assert(patched[INDEX(IQS915X_ACTIVE_MODE_REPORT_RATE)]==20);
-  for (uint16_t reg=0x119C;reg<=0x11A0;reg++) assert(patched[INDEX(reg)]==profile[INDEX(reg)]);
-  assert(patched[INDEX(0x1196)]==0x34 && patched[INDEX(0x1197)]==0x12);
+  for (unsigned i=0;i<sizeof(profile);i++) {
+    if (i!=INDEX(IQS915X_SYSTEM_CONTROL) &&
+        i!=INDEX(IQS915X_CONFIG_SETTINGS) && i!=INDEX(IQS915X_CONFIG_SETTINGS)+1)
+      assert(patched[i]==profile[i]);
+  }
   uint16_t patched_cfg=patched[INDEX(IQS915X_CONFIG_SETTINGS)] |
                        patched[INDEX(IQS915X_CONFIG_SETTINGS+1)]<<8;
   assert(patched_cfg & IQS915X_TP_REATI_ENABLE);

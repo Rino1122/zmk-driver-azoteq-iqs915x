@@ -30,8 +30,7 @@ DEFINITIONS
 struct iqs915x_config {
   uint8_t channel_profile;
   const uint8_t *init_data;
-  uint16_t init_data_len, report_rate_ms;
-  bool flip_x, flip_y, switch_xy;
+  uint16_t init_data_len;
 };
 struct device { const struct iqs915x_config *config; };
 static uint8_t retained[88];
@@ -54,9 +53,6 @@ static uint16_t read16(const uint8_t *bytes, int address) {
 int main(void) {
   struct iqs915x_config config = {
     .init_data = iqs915x_init_data, .init_data_len = sizeof(iqs915x_init_data),
-    .report_rate_ms = IQS915X_ACTIVE_SAMPLING_PERIOD_MS,
-    .flip_x = IQS915X_SENSOR_FLIP_X, .flip_y = IQS915X_SENSOR_FLIP_Y,
-    .switch_xy = IQS915X_SENSOR_SWITCH_XY,
   };
   struct device dev = { .config = &config };
   uint8_t written[1174], verified[1174], original[1174];
@@ -81,41 +77,16 @@ int main(void) {
     switch (address) {
       case IQS915X_SYSTEM_CONTROL:
       case IQS915X_CONFIG_SETTINGS: case IQS915X_CONFIG_SETTINGS + 1:
-      case IQS915X_LP2_MODE_REPORT_RATE: case IQS915X_LP2_MODE_REPORT_RATE + 1:
-      case IQS915X_OTHER_SETTINGS:
-      case IQS915X_REATI_RETRY_TIME:
-      case IQS915X_ACTIVE_MODE_REPORT_RATE: case IQS915X_ACTIVE_MODE_REPORT_RATE + 1:
-      case IQS915X_TRACKPAD_SETTINGS:
-      case IQS915X_SINGLE_FINGER_GESTURES_ENABLE: case IQS915X_TWO_FINGER_GESTURES_ENABLE:
         break;
       default: assert(written[offset] == original[offset]);
     }
   }
-  assert(read16(written, IQS915X_ACTIVE_MODE_REPORT_RATE) == 15);
-  assert(read16(written, IQS915X_LP2_MODE_REPORT_RATE) == 500);
-  assert(written[IQS915X_REATI_RETRY_TIME - 0x115C] == 1);
-  /* Export tuning differs from the retired firmware DTS and must survive. */
-  assert(read16(written, 0x1196) == 700);
-  assert(read16(written, 0x119C) == 250);
-  assert(read16(written, 0x119E) == 4096);
-  assert(written[0x11A0 - 0x115C] == 100);
   assert(!(written[IQS915X_SYSTEM_CONTROL - 0x115C] & 0xF8));
   uint16_t cfg = read16(written, IQS915X_CONFIG_SETTINGS);
   assert((cfg & (IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT | IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT)) ==
          (IQS915X_MANUAL_CONTROL | IQS915X_TP_EVENT | IQS915X_TP_REATI_ENABLE | IQS915X_REATI_EVENT));
   assert(!(cfg & (IQS915X_FORCE_COMMS_METHOD | IQS915X_TERMINATE_COMMS | IQS915X_EVENT_MODE |
                  IQS915X_GESTURE_EVENT | IQS915X_TP_TOUCH_EVENT | IQS915X_ALP_REATI_ENABLE | IQS915X_ALP_EVENT)));
-  assert(read16(written, IQS915X_ALP_SETUP) == read16(original, IQS915X_ALP_SETUP));
-  assert(read16(written, IQS915X_ALP_SETUP + 2) == read16(original, IQS915X_ALP_SETUP + 2));
-  assert(!(written[IQS915X_OTHER_SETTINGS - 0x115C] & (BIT(5) | BIT(4))));
-  assert(!(written[IQS915X_TRACKPAD_SETTINGS - 0x115C] & (IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS)));
-  assert(!(written[IQS915X_SINGLE_FINGER_GESTURES_ENABLE - 0x115C] & (IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD)));
-  assert(!(written[IQS915X_TWO_FINGER_GESTURES_ENABLE - 0x115C] & (IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL)));
-  assert(written[IQS915X_TRACKPAD_SETTINGS - 0x115C] & BIT(3));
-  assert(read16(written,0x11EA)==15000 && read16(written,0x11EC)==16500);
-  assert(written[0x11EE - 0x115C]==100 && written[0x11F1 - 0x115C]==5);
-  assert(original[IQS915X_TRACKPAD_SETTINGS - 0x115C] & BIT(3));
-
   uint8_t baseline[1174];memcpy(baseline,written,sizeof(baseline));
   unsigned mask_offset=IQS915X_CHANNEL_DISABLE_BASE-IQS915X_INIT_DATA_BASE_ADDR;
   for(unsigned selected=0;selected<=2;selected++) {

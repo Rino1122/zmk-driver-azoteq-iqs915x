@@ -266,6 +266,9 @@
  * ============================================================ */
 
 // メイン領域: 0x115C〜0x15EB（ALP補償〜仮想ホイール）
+#define IQS915X_CHANNEL_DISABLE_BASE 0x1246U
+#define IQS915X_CHANNEL_DISABLE_BYTES 88U
+
 #define IQS915X_INIT_DATA_BASE_ADDR 0x115C
 #define IQS915X_INIT_DATA_MAIN_SIZE 1168 // 0x15EB - 0x115C + 1 = 0x0490
 
@@ -447,14 +450,10 @@ struct iqs915x_config
     uint16_t swipe_direction_lock_denominator;
 
     // タイミング設定
-    uint16_t report_rate_ms; // ドライバ設定のActive Modeサンプリング周期(ms)
+    uint16_t report_rate_ms; // ヘッダーのActive Modeサンプリング周期(ms)
 
     // 座標補正
 
-    // 軸設定
-    bool switch_xy;
-    bool flip_x;
-    bool flip_y;
 
     // Power mode制御
     bool disabled_by_default; // 起動時にトラックパッドを無効（初期化完了後にIC固有Suspend）状態で開始

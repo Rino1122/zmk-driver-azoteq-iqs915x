@@ -41,6 +41,9 @@ LOG_MODULE_REGISTER(iqs915x, CONFIG_INPUT_AZOTEQ_IQS915X_LOG_LEVEL);
 
 #define GESTURE_POINTER_SUPPRESS_TAIL_TICKS 1
 
+#define IQS915X_ACTIVE_SAMPLING_PERIOD_MS (ACTIVE_MODE_SAMPLING_PERIOD_0 | (ACTIVE_MODE_SAMPLING_PERIOD_1 << 8))
+#define IQS915X_LP2_SAMPLING_PERIOD_MS (LP2_MODE_SAMPLING_PERIOD_0 | (LP2_MODE_SAMPLING_PERIOD_1 << 8))
+
 static const uint8_t iqs915x_device_api = 0;
 
 #define IQS915X_DEFAULT_SWIPE_THRESHOLD_FALLBACK 32
@@ -1024,7 +1027,8 @@ static bool iqs915x_runtime_info(struct iqs915x_data *data, uint16_t info)
   {
     if (error)
     {
-      LOG_WRN("reati error=1 flags=0x%04x retry_s=1 t=%lld", info,
+      LOG_WRN("reati error=1 flags=0x%04x retry_s=%u t=%lld", info,
+              (unsigned int)REATI_RETRY_TIME,
               (long long)k_uptime_get());
     }
     else
@@ -1127,7 +1131,7 @@ static int64_t iqs915x_ati_assist(struct iqs915x_data *data)
   int64_t now = k_uptime_get();
   if (!data->ati_assist_state) {
     data->ati_assist_state = 1;
-    data->ati_assist_due = now + 2000; /* retry_s=1 plus 1 s margin */
+    data->ati_assist_due = now + (REATI_RETRY_TIME + 1) * 1000;
   }
   if (data->ati_assist_state == 3) return INT64_MAX;
   if (now < data->ati_assist_due) return data->ati_assist_due;
@@ -2152,7 +2156,7 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
 {
   const struct iqs915x_config *config = dev->config;
 
-  if (!iqs915x_channel_profile_valid(config) || !config->init_data || config->init_data_len == 0 ||
+  if (!iqs915x_channel_profile_valid(config) || !config->init_data ||
       offset >= config->init_data_len)
   {
     return -EINVAL;
@@ -2170,7 +2174,6 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
       uint16_t current_addr = *addr + i;
       uint8_t original = buffer[i];
 
-      // === 強制パッチ: ドライバの固定設定と必須ビット修正 ===
       if (current_addr >= IQS915X_CHANNEL_DISABLE_BASE &&
           current_addr < IQS915X_CHANNEL_DISABLE_BASE+IQS915X_CHANNEL_DISABLE_BYTES)
       {
@@ -2202,59 +2205,6 @@ static int iqs915x_prepare_init_chunk(const struct device *dev,
         // GESTURE_EVENT/TP_TOUCH_EVENT/ALP_EVENTは無効にする。
         cfg = iqs915x_config_settings_without_event_mode(cfg);
         buffer[i] = (cfg >> 8) & 0xFF;
-      }
-      else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE)
-      {
-        // LP2のセンシング周期はALP Enable設定にかかわらず500 msにする。
-        buffer[i] = IQS915X_LP2_SAMPLING_PERIOD_MS & 0xFF;
-      }
-      else if (current_addr == IQS915X_LP2_MODE_REPORT_RATE + 1)
-      {
-        buffer[i] = (IQS915X_LP2_SAMPLING_PERIOD_MS >> 8) & 0xFF;
-      }
-      else if (current_addr == IQS915X_OTHER_SETTINGS)
-      {
-        // Auto-Prox can skip communication cycles; every streaming scan is needed.
-        buffer[i] &= ~(BIT(5) | BIT(4));
-      }
-      else if (current_addr == IQS915X_REATI_RETRY_TIME)
-      {
-        buffer[i] = IQS915X_REATI_RETRY_SECONDS;
-      }
-      // === ドライバ設定を事前適用（Re-ATI完了時点で最終値が有効になるよう） ===
-      else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE &&
-               config->report_rate_ms > 0)
-      {
-        buffer[i] = config->report_rate_ms & 0xFF;
-      }
-      else if (current_addr == IQS915X_ACTIVE_MODE_REPORT_RATE + 1 &&
-               config->report_rate_ms > 0)
-      {
-        buffer[i] = (config->report_rate_ms >> 8) & 0xFF;
-      }
-      else if (current_addr == IQS915X_TRACKPAD_SETTINGS)
-      {
-        uint8_t clr = IQS915X_FLIP_X | IQS915X_FLIP_Y | IQS915X_SWITCH_XY_AXIS | BIT(3) | BIT(4);
-        uint8_t set = TRACKPAD_SETTINGS_0_0 & (BIT(3)|BIT(4));
-        if (config->flip_x)
-          set |= IQS915X_FLIP_X;
-        if (config->flip_y)
-          set |= IQS915X_FLIP_Y;
-        if (config->switch_xy)
-          set |= IQS915X_SWITCH_XY_AXIS;
-        buffer[i] = (buffer[i] & ~clr) | set;
-      }
-      else if (current_addr == IQS915X_SINGLE_FINGER_GESTURES_ENABLE)
-      {
-        // tap/holdはドライバ側で指本数・位置・時間から判定する。
-        uint8_t clr = (uint8_t)(IQS915X_SINGLE_TAP | IQS915X_PRESS_AND_HOLD);
-        buffer[i] &= ~clr;
-      }
-      else if (current_addr == IQS915X_TWO_FINGER_GESTURES_ENABLE)
-      {
-        // two-finger tap/scrollはabsolute座標からドライバ側で判定する。
-        uint8_t clr = (uint8_t)(IQS915X_TWO_FINGER_TAP | IQS915X_SCROLL);
-        buffer[i] &= ~clr;
       }
       // init-dataのバイト値がドライバにより変更された場合はWRNを出力する
       if (log_changes && buffer[i] != original)
@@ -3671,15 +3621,13 @@ static int iqs915x_init(const struct device *dev)
   iqs915x_reset_runtime_gesture_state(data);
   iqs915x_configure_swipe_thresholds(config, data);
   iqs915x_configure_tap_profile(config, data);
-  uint16_t profile_period = 0;
-  iqs915x_get_init_data_reg16(config, IQS915X_ACTIVE_MODE_REPORT_RATE, &profile_period);
-  data->active_sampling_period_ms = config->report_rate_ms ? config->report_rate_ms : profile_period;
-  if (!data->active_sampling_period_ms) { return -EINVAL; }
+  data->active_sampling_period_ms = config->report_rate_ms;
   data->confirmed_mode = IQS915X_MODE_ACTIVE;
   data->power_target_mode = IQS915X_MODE_ACTIVE;
   data->streaming_expected = true;
   data->comm_completed_ms = k_uptime_get();
-  LOG_INF("ATI policy reseed=0 host_ati=init auto_reati=1 retry_s=1 lp2_ms=500 active_ms=%u",
+  LOG_INF("ATI policy reseed=0 host_ati=init auto_reati=1 retry_s=%u lp2_ms=%u active_ms=%u",
+          (unsigned int)REATI_RETRY_TIME, (unsigned int)IQS915X_LP2_SAMPLING_PERIOD_MS,
           data->active_sampling_period_ms);
   data->tap_and_hold_release_pending = false;
   data->single_tap_pending = false;
@@ -3817,9 +3765,6 @@ BUILD_ASSERT(IQS915X_ACTIVE_SAMPLING_PERIOD_MS > 0 && IQS915X_ACTIVE_SAMPLING_PE
       .swipe_direction_lock_denominator = DT_INST_PROP_OR(n, swipe_direction_lock_denominator, 2),                                                                                                 \
       .report_rate_ms = IQS915X_ACTIVE_SAMPLING_PERIOD_MS,                                                                                                                                     \
       .tap_and_hold_release_timeout_ms = DT_INST_PROP_OR(n, tap_and_hold_release_timeout_ms, 500),                                                                                                  \
-      .switch_xy = IQS915X_SENSOR_SWITCH_XY,                                                                                                                                                     \
-      .flip_x = IQS915X_SENSOR_FLIP_X,                                                                                                                                                           \
-      .flip_y = IQS915X_SENSOR_FLIP_Y,                                                                                                                                                           \
       .disabled_by_default = DT_INST_PROP(n, disabled_by_default),                                                                                                                                 \
   };                                                                                                                                                                                               \
   IQS915X_PM_DEVICE_DEFINE(n);                                                                                                                                                                    \
